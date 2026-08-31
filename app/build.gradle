@@ -30,6 +30,31 @@ android {
         }
     }
 
+    // Per-CPU builds plus one that runs everywhere.
+    //
+    // Native code is what makes this APK large: eleven .so files per architecture, and a
+    // device only ever uses one architecture's copy. Splitting gives a phone the half it can
+    // actually run and drops roughly 40 MB off the download.
+    //
+    // `universalApk` is the global build. It carries every architecture, so it is the one to
+    // hand someone whose device is unknown, and the one to publish when there is only room for
+    // a single file. Note what a split can and cannot fix: it changes the SIZE of the download,
+    // never whether a device accepts it. A phone that refuses the universal APK will refuse
+    // its own architecture's split too, because the refusal is about something else.
+    //
+    // There is deliberately no split "per phone model" or "per Android version" -- Android has
+    // no such axis. A model is only ever a CPU architecture plus an API level, and both are
+    // already handled: every architecture we build for is here, and one minSdk of 24 covers
+    // Android 7 through the current release from a single file.
+    splits {
+        abi {
+            enable true
+            reset()
+            include 'arm64-v8a', 'armeabi-v7a'
+            universalApk true
+        }
+    }
+
     buildTypes {
         release {
             // R8: shrink unused library code (keeps all app code + native core).
@@ -58,6 +83,27 @@ android {
 
     composeOptions {
         kotlinCompilerExtensionVersion '1.5.10'
+    }
+}
+
+// Distinct versionCode per split.
+//
+// Every APK of one release would otherwise carry the same versionCode, and a store (or the
+// app's own updater) cannot then tell an arm64 build from an armeabi one -- it would treat
+// whichever it saw first as "already installed". The universal build keeps the base code so
+// it stays the canonical release number; the others are offset above it, in increasing order
+// of preference, so a device offered several picks the most specific one it can run.
+//
+// The offsets are large enough that they can never collide with the next release's base.
+android.applicationVariants.all { variant ->
+    def base = variant.versionCode
+    variant.outputs.each { output ->
+        def abi = output.getFilter(com.android.build.OutputFile.ABI)
+        def offset = ['armeabi-v7a': 1000000, 'arm64-v8a': 2000000][abi]
+        if (offset != null) {
+            output.versionCodeOverride = base + offset
+        }
+        output.outputFileName = "mlmvpn-${variant.versionName}-${abi ?: 'universal'}-${variant.buildType.name}.apk"
     }
 }
 
