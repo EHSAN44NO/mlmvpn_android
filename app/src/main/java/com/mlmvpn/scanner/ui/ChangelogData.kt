@@ -53,6 +53,16 @@ fun changelogVersions(isFa: Boolean): List<ChangelogVersion> =
                             Icons.Default.VpnKey
                         ),
                         ChangelogItem(
+                            "گیت‌وی: فهرست آفلاین، بدون انتظار",
+                            "صفحهٔ گیت‌وی دیگر خودش سراغ اینترنت نمی‌رود و فوراً با فهرست آفلاین باز می‌شود: آخرین فهرستی که گرفته‌اید، یا فهرست تازهٔ همراه برنامه در نصب اول. سن فهرست کنار آن نوشته شده و هر وقت خواستید، «به‌روزرسانی فهرست» فهرست تازه می‌گیرد، مثل نسخهٔ ویندوز.\n\nخود به‌روزرسانی هم سریع‌تر شد، روی گوشی از ۵۶ به ۱۷ ثانیه: مسیری که نامش به صفحهٔ فیلتر می‌رسد فوراً کنار گذاشته می‌شود و نام‌یابی امن از نشانی عددی انجام می‌شود.",
+                            Icons.Default.CloudOff
+                        ),
+                        ChangelogItem(
+                            "گیت‌هاب تانل: راه‌اندازی قدم‌به‌قدم",
+                            "راه‌اندازی سه قدم پشت سر هم است و دکمهٔ بزرگ همیشه قدم بعدی را انجام می‌دهد: ۱) کلادفلر (اگر در بخش ابری حسابی وصل نکرده‌اید، اول وصلش کنید؛ اگر کرده‌اید، ورکر روی همان نصب می‌شود)، ۲) گیت‌هاب، ۳) اتصال. کشور خروجی، قانون‌ها و حساب‌ها بعد از پایان راه‌اندازی نشان داده می‌شوند.",
+                            Icons.Default.Checklist
+                        ),
+                        ChangelogItem(
                             "وقتی اتصال شکست می‌خورد، دلیلش دیده می‌شود",
                             "صفحهٔ هر روش تونل بعد از شکست دوباره «آماده» می‌نوشت و دلیل را پنهان می‌کرد. حالا «اتصال برقرار نشد» و دلیلش همان‌جا می‌ماند.\n\nدر «وارپ» اگر ساخت حساب وارپ روی اینترنت شما فیلتر باشد، دکمهٔ «ساخت هویت از راه ورکر و اتصال» همان‌جا نشان داده می‌شود. روی گوشی سنجیده شد که فیلتر نام سرور حساب وارپ را حتی تکه‌تکه هم می‌شناسد، پس اگر ورکر ساخته شده باشد، حالا زودتر از مسیر پوشیده امتحان می‌شود. کلادفلر گاهی ساخت حساب از راه ورکر را چند دقیقه محدود می‌کند (خطای ۱۰۱۵). در این حالت یک بار دیگر امتحان می‌شود و پیام خطا هم همین را می‌گوید.\n\nروی گوشی سنجیده شد: حساب از راه ورکر ساخته شد، اتصال ۳۸ ثانیه بعد از لمس برقرار شد، کلادفلر «warp=on» جواب داد و سرعت دریافت ۴۰ مگابیت بود، بدون نشتی.",
                             Icons.Default.Info
@@ -1524,6 +1534,16 @@ fun changelogVersions(isFa: Boolean): List<ChangelogVersion> =
                             "New engine: OpenVPN with TunnelBear servers",
                             "TunnelBear's servers with your own account, direct, with no other tunnel under them. A round button, a live card with speed and usage, a server page with flags and country names, and an account page, with no pop-ups. It shows \"connected\" only after real data has crossed the tunnel.\n\nEach TunnelBear country name stands for about 20 servers, and some of them do not answer from Iran. The delay test now measures several servers of each country together, and the connection goes to the ones that answered. If one goes silent after the start, the next attempt goes to the next server. Measured on a phone: connected in 4 s, about 11 Mbit/s down.",
                             Icons.Default.VpnKey
+                        ),
+                        ChangelogItem(
+                            "Gateway: an offline list, no waiting",
+                            "The gateway screen no longer goes online on its own and opens at once from the offline list: the last one you fetched, or the fresh list shipped with the app on a first install. Its age is shown beside it, and \"Update list\" fetches a new one whenever you want, as on Windows.\n\nThe update itself is faster, 56 to 17 s on a phone: a route whose name leads to the filter's block page is dropped at once, and the secure lookup goes to a numeric address.",
+                            Icons.Default.CloudOff
+                        ),
+                        ChangelogItem(
+                            "GitHub Tunnel: step-by-step setup",
+                            "Setup is three steps in a row and the big button always does the next one: 1) Cloudflare (connect an account first if the Cloud tab has none; otherwise the Worker is installed on it), 2) GitHub, 3) connect. Exit country, rules and accounts appear once setup is done.",
+                            Icons.Default.Checklist
                         ),
                         ChangelogItem(
                             "A failed connection now says why",

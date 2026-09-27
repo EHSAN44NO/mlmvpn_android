@@ -114,6 +114,7 @@ import com.mlmvpn.scanner.ui.settings.SettingsToggle
 import com.mlmvpn.scanner.ui.tunnel.CountryLabel
 import com.mlmvpn.scanner.ui.tunnel.RegionPickerScreen
 import com.mlmvpn.scanner.utils.S
+import com.mlmvpn.scanner.store.tr
 
 /**
  * «گیت‌هاب تانل» on the phone: the same system as the Windows window — a cloud server on the user's
@@ -149,6 +150,18 @@ fun GithubTunnelScreen(onBack: () -> Unit, onOpenScanner: () -> Unit, onOpenClou
     val hasAccounts = st.accounts.isNotEmpty()
     val brokerOk = st.broker.deployed && st.broker.version >= st.brokerRequired
     val ex = st.exit
+
+    // Setup is three steps, in this order, one at a time: Cloudflare (connect an account if the
+    // Cloud tab has none, then install the relay Worker on it), GitHub, then connect. The Worker
+    // comes first because nothing GitHub builds can be reached without it, and a user who signed
+    // in to GitHub first was then sent to the bottom of the page for the part that mattered.
+    var pickedCf by remember { mutableStateOf<String?>(null) }
+    val cf = cloudAccounts.firstOrNull { it.id == (pickedCf ?: st.broker.cloudAccountId) } ?: cloudAccounts.firstOrNull()
+    val setupStep = when { !brokerOk -> 1; !hasAccounts -> 2; else -> 3 }
+    val setupDone = setupStep == 3
+    val stepOneAction: () -> Unit = {
+        if (cf == null) onOpenCloud() else if (!st.brokerBusy) GtEngine.deployBroker(cf)
+    }
 
     // Pages of this screen, not modals: «country» (the exit), and a rule's editor with its own two
     // pickers — «rule» › «rule_country» / «rule_apps». The draft lives here, so it survives the
@@ -232,15 +245,24 @@ fun GithubTunnelScreen(onBack: () -> Unit, onOpenScanner: () -> Unit, onOpenClou
             line = stringResource(R.string.gt_line_linking)
             dialAction = { GtEngine.disconnect() }
         }
+        !brokerOk -> {
+            headline = tr("قدم ۱ از ۳: کلادفلر", "Step 1 of 3: Cloudflare")
+            line = when {
+                st.brokerBusy -> tr("در حال نصب ورکر روی حساب کلادفلر شما…", "Installing the Worker on your Cloudflare account…")
+                cf == null -> tr(
+                    "اول حساب کلادفلر خودتان را وصل کنید. یک ورکر کوچک روی همین حساب، تونل را از ایران به سرور ابری می‌رساند.",
+                    "First connect your own Cloudflare account. A small Worker on it carries the tunnel from Iran to the cloud server.")
+                st.broker.deployed -> tr("ورکر نسخهٔ تازه‌تری لازم دارد. دکمه آن را به‌روز می‌کند.", "The Worker needs a newer version. The button updates it.")
+                else -> tr(
+                    "حساب کلادفلر وصل است. دکمه، ورکر تونل را روی همین حساب نصب می‌کند.",
+                    "Your Cloudflare account is connected. The button installs the tunnel Worker on it.")
+            }
+            dialAction = if (st.brokerBusy) null else stepOneAction
+        }
         !hasAccounts -> {
-            headline = stringResource(R.string.gt_head_no_account)
+            headline = tr("قدم ۲ از ۳: گیت‌هاب", "Step 2 of 3: GitHub")
             line = stringResource(R.string.gt_line_no_account)
             dialAction = { GtEngine.signIn(adding = false) }
-        }
-        !brokerOk -> {
-            headline = stringResource(R.string.gt_head_no_broker)
-            line = stringResource(R.string.gt_line_no_broker)
-            dialAction = null
         }
         live -> {
             headline = stringResource(R.string.gt_head_ready)
@@ -262,12 +284,15 @@ fun GithubTunnelScreen(onBack: () -> Unit, onOpenScanner: () -> Unit, onOpenClou
         ) {
             Dial(
                 on = connected,
-                working = building || linking,
+                working = building || linking || (!brokerOk && st.brokerBusy),
                 failed = !connected && (st.link.phase == "failed" || st.run?.step == "FAILED"),
                 enabled = dialAction != null,
                 label = when {
                     connected -> stringResource(R.string.disconnect)
                     building || linking -> stringResource(R.string.gt_dial_working)
+                    !brokerOk && st.brokerBusy -> stringResource(R.string.gt_dial_working)
+                    !brokerOk && cf == null -> tr("کلادفلر", "Cloudflare")
+                    !brokerOk -> tr("نصب ورکر", "Install")
                     !hasAccounts -> stringResource(R.string.gt_dial_signin)
                     live -> stringResource(R.string.connect)
                     else -> stringResource(R.string.gt_dial_start)
@@ -306,36 +331,59 @@ fun GithubTunnelScreen(onBack: () -> Unit, onOpenScanner: () -> Unit, onOpenClou
         st.signIn?.let { SignInCard(it, context) }
 
         // ── what is still missing ───────────────────────────────────────────────────────
-        if (!hasAccounts || !brokerOk || !live) {
+        if (!setupDone || (!live && !connected && !building)) {
             SettingsSectionHeader(stringResource(R.string.gt_sec_setup))
             SettingsGroup {
-                SettingsRow(
-                    title = stringResource(R.string.gt_step_account),
-                    icon = Icons.Default.AccountCircle, tint = Ios.Gray,
-                    value = if (hasAccounts) "@" + st.accounts.first().login else stringResource(R.string.gt_step_do_signin),
-                    showChevron = !hasAccounts,
-                    onClick = if (!hasAccounts) ({ GtEngine.signIn(adding = false) }) else null,
-                )
-                Separator()
-                SettingsRow(
-                    title = stringResource(R.string.gt_step_broker),
-                    icon = Icons.Default.Cloud, tint = Ios.Indigo,
+                SetupStep(
+                    number = 1, current = setupStep,
+                    title = if (cf == null && !brokerOk) tr("وصل کردن کلادفلر", "Connect Cloudflare") else tr("نصب ورکر روی کلادفلر", "Install the Worker on Cloudflare"),
                     value = when {
+                        brokerOk -> cf?.let { it.name.ifBlank { it.email } } ?: stringResource(R.string.gt_ready)
                         st.brokerBusy -> stringResource(R.string.gt_working)
-                        brokerOk -> stringResource(R.string.gt_ready)
+                        cf == null -> tr("بخش ابری", "Cloud tab")
                         st.broker.deployed -> stringResource(R.string.gt_needs_update)
-                        else -> stringResource(R.string.gt_step_do_below)
+                        else -> tr("نصب", "Install")
                     },
-                    showChevron = false,
+                    busy = st.brokerBusy,
+                    onClick = if (setupStep == 1) stepOneAction else null,
                 )
                 Separator()
-                SettingsRow(
-                    title = stringResource(R.string.gt_step_session),
-                    icon = Icons.Default.Schedule, tint = Ios.Green,
-                    value = if (live) stringResource(R.string.gt_ready) else if (building) stringResource(R.string.gt_working) else stringResource(R.string.gt_step_do_dial),
-                    showChevron = false,
+                SetupStep(
+                    number = 2, current = setupStep,
+                    title = tr("وصل کردن گیت‌هاب", "Connect GitHub"),
+                    value = if (hasAccounts) "@" + st.accounts.first().login else stringResource(R.string.gt_step_do_signin),
+                    busy = st.signIn?.waiting == true,
+                    onClick = if (setupStep == 2) ({ GtEngine.signIn(adding = false) }) else null,
+                )
+                Separator()
+                SetupStep(
+                    number = 3, current = setupStep,
+                    title = tr("اتصال", "Connect"),
+                    value = when {
+                        live -> stringResource(R.string.gt_ready)
+                        building -> stringResource(R.string.gt_working)
+                        setupDone -> tr("با دکمهٔ بالا", "With the button above")
+                        else -> ""
+                    },
+                    busy = building,
+                    onClick = if (setupDone && !building) ({ withVpnConsent { if (live) GtEngine.connect() else GtEngine.createSession(connectAfter = true) } }) else null,
                 )
             }
+            // Step one, when there is more than one Cloudflare account: which one gets the Worker.
+            if (setupStep == 1 && cloudAccounts.size > 1) {
+                SettingsGroup(modifier = Modifier.padding(top = 12.dp)) {
+                    SettingsRow(
+                        title = stringResource(R.string.gt_broker_account),
+                        icon = Icons.Default.Cloud, tint = Ios.CloudflareOrange,
+                        value = cf?.let { it.name.ifBlank { it.email } } ?: "—",
+                        onClick = {
+                            val i = cloudAccounts.indexOfFirst { it.id == cf?.id }
+                            pickedCf = cloudAccounts[(i + 1) % cloudAccounts.size].id
+                        },
+                    )
+                }
+            }
+            if (setupStep == 1 && st.brokerError.isNotBlank()) Notice(st.brokerError, Ios.Red)
             SettingsFooter(stringResource(R.string.gt_setup_footer))
         }
 
@@ -410,6 +458,8 @@ fun GithubTunnelScreen(onBack: () -> Unit, onOpenScanner: () -> Unit, onOpenClou
             SettingsFooter(stringResource(R.string.gt_link_footer))
         }
 
+        // Exit, rules and accounts mean nothing until the three setup steps are done.
+        if (setupDone) {
         // ── the exit country ────────────────────────────────────────────────────────────
         SettingsSectionHeader(stringResource(R.string.gt_sec_exit))
         SettingsGroup {
@@ -551,10 +601,12 @@ fun GithubTunnelScreen(onBack: () -> Unit, onOpenScanner: () -> Unit, onOpenClou
         }
         SettingsFooter(stringResource(R.string.gt_accounts_footer))
 
+        }
+
         // ── the relay Worker ────────────────────────────────────────────────────────────
+        // Installed in setup step one; here afterwards for its address, updates and a custom domain.
+        if (st.broker.deployed) {
         SettingsSectionHeader(stringResource(R.string.gt_sec_broker))
-        var pickedCf by remember { mutableStateOf<String?>(null) }
-        val cf = cloudAccounts.firstOrNull { it.id == (pickedCf ?: st.broker.cloudAccountId) } ?: cloudAccounts.firstOrNull()
         SettingsGroup {
             if (cloudAccounts.isEmpty()) {
                 SettingsActionRow(stringResource(R.string.gt_broker_need_cf), Icons.Default.Cloud, Ios.CloudflareOrange, onClick = onOpenCloud)
@@ -587,8 +639,9 @@ fun GithubTunnelScreen(onBack: () -> Unit, onOpenScanner: () -> Unit, onOpenClou
                 )
             }
         }
-        if (st.brokerError.isNotBlank()) Notice(st.brokerError, Ios.Red)
+        if (setupStep != 1 && st.brokerError.isNotBlank()) Notice(st.brokerError, Ios.Red)
         SettingsFooter(stringResource(R.string.gt_broker_footer))
+        }
 
         var customUrl by remember(st.broker.customUrl) { mutableStateOf(st.broker.customUrl) }
         if (st.broker.deployed) {
@@ -729,6 +782,40 @@ private fun SignInCard(s: com.mlmvpn.scanner.engines.github.GtSignIn, context: C
         SettingsActionRow(stringResource(R.string.cancel_2), Icons.Default.StopCircle, Ios.SecondaryLabel, onClick = { GtEngine.cancelSignIn() })
     }
     SettingsFooter(stringResource(if (s.adding) R.string.gt_signin_add_footer else R.string.gt_signin_footer))
+}
+
+/** One setup step: done (check), the current one (its number, tappable), or still ahead (dimmed). */
+@Composable
+private fun SetupStep(number: Int, current: Int, title: String, value: String, busy: Boolean, onClick: (() -> Unit)?) {
+    val done = number < current
+    val active = number == current
+    Row(
+        Modifier.fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(26.dp).clip(CircleShape).background(
+                when { done -> Ios.Green; active -> Ios.Blue; else -> Color.White.copy(alpha = 0.12f) }
+            ),
+            contentAlignment = Alignment.Center,
+        ) {
+            when {
+                done -> Icon(Icons.Default.CheckCircle, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                active && busy -> CircularProgressIndicator(Modifier.size(14.dp), color = Color.White, strokeWidth = 2.dp)
+                else -> Text(com.mlmvpn.scanner.ui.faCount(number), color = if (active) Color.White else Ios.SecondaryLabel,
+                    fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Text(title, color = if (done || active) Ios.Label else Ios.SecondaryLabel, fontSize = 15.sp,
+            fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal, modifier = Modifier.weight(1f))
+        if (value.isNotBlank()) {
+            Spacer(Modifier.width(8.dp))
+            Text(value, color = if (active) Ios.Blue else Ios.SecondaryLabel, fontSize = 14.sp, maxLines = 1)
+        }
+    }
 }
 
 @Composable

@@ -66,6 +66,7 @@ class VpnGateRepository private constructor(private val appCtx: Context) {
             }
         }
         private const val ASSET_PATH = "vpngate/default_servers.csv"
+        private const val ASSET_STAMP = "vpngate/default_servers.fetched"
         private const val CACHE_DIR = "vpngate"
         private const val CACHE_FILE = "servers.csv"
 
@@ -103,35 +104,6 @@ class VpnGateRepository private constructor(private val appCtx: Context) {
             .getOrDefault(0L)
     )
     val fetchedAtFlow: StateFlow<Long> = _fetchedAt.asStateFlow()
-
-    /**
-     * How long a cached list is used without asking the network.
-     *
-     * VPN Gate rotates its public window constantly, so a week-old list is mostly servers that no
-     * longer exist -- past that the app refreshes on its own rather than presenting a catalogue of
-     * dead hosts as if it were current. Inside the week, entering the screen costs nothing and the
-     * refresh button is there for whoever wants a newer one.
-     */
-    private val cacheMaxAgeMs = 7L * 24 * 60 * 60 * 1000
-
-    /**
-     * How long after a fetch ATTEMPT the app stops trying again on its own.
-     *
-     * Separate from [cacheMaxAgeMs], which is about how old a good list may be. This one exists
-     * because on a network where VPN Gate is blocked the fetch does not fail fast -- it fails
-     * after both the direct and the proxied attempt time out. With no cache to fall back on, that
-     * whole wait was paid again on every cold start, only to land on the same bundled list. The
-     * attempt is recorded whatever its outcome, so a blocked network costs the wait once.
-     */
-    private val attemptCooldownMs = 6L * 60 * 60 * 1000
-
-    private val prefs by lazy {
-        appCtx.getSharedPreferences("vpngate_repo", Context.MODE_PRIVATE)
-    }
-
-    private var lastAttemptAt: Long
-        get() = prefs.getLong("last_attempt", 0L)
-        set(value) { prefs.edit().putLong("last_attempt", value).apply() }
 
     /**
      * Whether any connected Cloudflare account has the relay deployed.
@@ -174,56 +146,18 @@ class VpnGateRepository private constructor(private val appCtx: Context) {
         if (!force && _servers.value.isNotEmpty()) return@withContext
         if (_loading.value) return@withContext
 
-        // ---- the cache is the first choice, not the fallback -----------------------------
+        // ---- offline first, and the network only when the user asks ------------------------
         //
-        // This used to go to the network on every entry to the screen and fall back to disk only
-        // when that failed, so opening the tab meant a wait and a fetch even though a perfectly
-        // good list was already sitting there. The cache is read first now; the network is asked
-        // only when the user asks (force) or when what is on disk is too old to be worth showing.
-        if (!force) {
-            val f = cacheFile
-            val age = if (f.exists()) System.currentTimeMillis() - f.lastModified() else Long.MAX_VALUE
-            if (f.exists() && age < cacheMaxAgeMs) {
-                try {
-                    val parsed = VpnGateCsvParser.parse(f.readText())
-                    if (parsed.isNotEmpty()) {
-                        _fetchedAt.value = f.lastModified()
-                        publish(parsed, Source.CACHE)
-                        return@withContext
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "cache read failed, falling through to the network", e)
-                }
-            }
-
-            // A cache that is past cacheMaxAgeMs but still real: serve it without a network
-            // round trip if a fetch was already tried recently, so a blocked operator costs the
-            // wait once rather than on every cold start.
-            //
-            // Deliberately NOT reached when there is no cache. The cooldown exists to avoid
-            // repeating a request that just failed, but with nothing on disk the only thing left
-            // to show is the bundled asset -- and skipping the fetch there meant the app served
-            // a stale built-in list, reported its age as "unknown", and never tried again for six
-            // hours. That is the exact case where the fetch matters most.
-            if (f.exists() &&
-                System.currentTimeMillis() - lastAttemptAt < attemptCooldownMs
-            ) {
-                try {
-                    val parsed = VpnGateCsvParser.parse(f.readText())
-                    if (parsed.isNotEmpty()) {
-                        _fetchedAt.value = f.lastModified()
-                        publish(parsed, Source.CACHE)
-                        return@withContext
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "stale cache read failed", e)
-                }
-            }
-        }
+        // As on Windows: the offline copy -- the last good fetch, else the list shipped in the
+        // APK -- opens the screen at once, whatever its age. The screen shows that age and turns
+        // it orange past three days; the refresh button is the one way to a new list. This used
+        // to fetch on its own whenever the copy on disk was over a week old or missing, and on a
+        // filtered line that cost up to 20 + 45 s per route before anything appeared. The
+        // network is still the fallback when neither offline copy can be read.
+        if (!force && publishOffline()) return@withContext
 
         _loading.value = true
         _error.value = null
-        lastAttemptAt = System.currentTimeMillis()
         try {
             var liveError: String? = null
 
@@ -236,6 +170,9 @@ class VpnGateRepository private constructor(private val appCtx: Context) {
             val routes = fetchRoutes(userRelays)
             for ((label, url) in routes) {
                 try {
+                    // The operator's resolver answers with its block page (10.10.34.36), and a
+                    // connect there costs its whole 20 s timeout before the routes that work.
+                    if (label == "direct" && resolvesToPrivate(url)) throw java.io.IOException("DNS points at a private address (filtered)")
                     val csv = if (label == "resolved") fetchViaResolvedIp() else fetch(url)
                     val parsed = VpnGateCsvParser.parse(csv)
                     if (parsed.isNotEmpty()) {
@@ -289,6 +226,46 @@ class VpnGateRepository private constructor(private val appCtx: Context) {
             _loading.value = false
         }
     }
+
+    /**
+     * The last good fetch, else the shipped list. False only when neither parses, which leaves
+     * the network as the one source left.
+     */
+    private suspend fun publishOffline(): Boolean {
+        try {
+            val f = cacheFile
+            if (f.exists()) {
+                val parsed = VpnGateCsvParser.parse(f.readText())
+                if (parsed.isNotEmpty()) {
+                    _fetchedAt.value = f.lastModified()
+                    publish(parsed, Source.CACHE)
+                    return true
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "cache read failed", e)
+        }
+        try {
+            val csv = appCtx.assets.open(ASSET_PATH).bufferedReader().use { it.readText() }
+            val parsed = VpnGateCsvParser.parse(csv)
+            if (parsed.isNotEmpty()) {
+                _fetchedAt.value = bundledAt()
+                publish(parsed, Source.BUNDLED)
+                return true
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "bundled asset read failed", e)
+        }
+        return false
+    }
+
+    /**
+     * When the shipped list was fetched, from `scripts/update-vpngate-seed.js`'s stamp; 0 (shown
+     * as «نامعلوم») for a build without one.
+     */
+    private fun bundledAt(): Long = runCatching {
+        appCtx.assets.open(ASSET_STAMP).bufferedReader().use { it.readText().trim().toLong() }
+    }.getOrDefault(0L)
 
     /** Decodes column 15 into the .ovpn profile text for [server]. */
     fun ovpnTextFor(server: VpnGateServer): String =
@@ -356,8 +333,24 @@ class VpnGateRepository private constructor(private val appCtx: Context) {
      * intercepted the request might, and connecting to the block page would look like a fetch that
      * merely returned the wrong body.
      */
+    /**
+     * True when the system resolver's IPv4 answer for [url]'s host is private or loopback. Only
+     * IPv4 is judged: beside the block page the resolver may also return an AAAA record, and
+     * OkHttp still tries the private IPv4 and waits out its timeout.
+     */
+    private fun resolvesToPrivate(url: String): Boolean = runCatching {
+        val host = java.net.URI(url).host ?: return false
+        val all = java.net.InetAddress.getAllByName(host)
+        Log.d(TAG, "system DNS: $host -> ${all.joinToString { it.hostAddress.orEmpty() }}")
+        all.filterIsInstance<java.net.Inet4Address>().any { it.isSiteLocalAddress || it.isLoopbackAddress || it.isAnyLocalAddress }
+    }.onFailure { Log.d(TAG, "system DNS check failed: ${it.message}") }.getOrDefault(false)
+
     private fun resolveOverHttps(host: String): List<String> {
         val endpoints = listOf(
+            // By address first. Measured on the phone 2026-09-27: both names below resolve to the
+            // filter's block page (10.10.34.36) and cost 20 s each; 1.1.1.1 and 1.0.0.1 get no
+            // reply; 8.8.8.8 with no SNI answers (its certificate carries the address).
+            "https://8.8.8.8/resolve?name=$host&type=A",
             "https://cloudflare-dns.com/dns-query?name=$host&type=A",
             "https://dns.google/resolve?name=$host&type=A",
         )

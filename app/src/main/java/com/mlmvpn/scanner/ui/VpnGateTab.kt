@@ -569,8 +569,15 @@ fun VpnGateTab(
                             S(R.string.not_reachable_right_now_either_try_another) +
                             S(R.string.for_now) + faCount(servers.size) + S(R.string.available_servers_are_shown)
 
-                    source == VpnGateRepository.Source.BUNDLED ->
+                    // The shipped list is stamped now (scripts/update-vpngate-seed.js): only a stale
+                    // or unstamped one is "old, update once".
+                    source == VpnGateRepository.Source.BUNDLED && (fetchedAt <= 0L || isListStale(fetchedAt)) ->
                         faCount(servers.size) + S(R.string.servers_from_the_list_bundled_with_the)
+
+                    source == VpnGateRepository.Source.BUNDLED ->
+                        faCount(servers.size) + com.mlmvpn.scanner.store.tr(
+                            " سرور از فهرست آفلاین همراه برنامه. هر وقت خواستید، با «به‌روزرسانی فهرست» فهرست تازه بگیرید.",
+                            " servers from the offline list shipped with the app. Tap \"Update list\" whenever you want a fresh one.")
 
                     isListStale(fetchedAt) ->
                         faCount(servers.size) + S(R.string.servers_but_taken) + listAge(fetchedAt) + S(R.string.ago_vpn_gate_rotates_its_servers_constantly)
