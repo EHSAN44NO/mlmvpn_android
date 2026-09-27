@@ -235,6 +235,22 @@ internal class SharedBridge(internal val scope: CoroutineScope, internal val han
             internalEthernetMTU = TCP_TUNNEL_SAFE_MTU
         }
 
+        // The user's MTU wins over both branches above, when they have set one.
+        //
+        // Every other transport in this app takes its interface MTU straight from Settings >
+        // Advanced, and this one derived its own from the outer datagram size instead -- so the
+        // one field the user can reach did nothing at all on VPN Gate. The derivations stay as
+        // the DEFAULTS, because they are correct: 1350 leaves exactly enough room for
+        // Ethernet-in-SoftEther-in-TLS-in-TCP, and the UDP branch subtracts a real header stack.
+        // An explicit setting means the user is tuning the size of the packets that actually
+        // leave this phone, which is what this value is.
+        //
+        // maxInternalFrameSize is recomputed from it below rather than beside it: it is a buffer
+        // bound, and a buffer sized for a different MTU than the interface is a truncated frame.
+        com.mlmvpn.scanner.utils.NetworkSettings.methodMtu(
+            service, com.mlmvpn.scanner.utils.NetworkSettings.Method.GATEWAY
+        ).takeIf { it > 0 }?.let { internalEthernetMTU = it }
+
         maxInternalFrameSize = internalEthernetMTU + ETHERNET_HEADER_SIZE
 
         isLogEnabled = getBooleanPrefValue(MvcPreference.LOG_DO_SAVE_LOG, prefs)

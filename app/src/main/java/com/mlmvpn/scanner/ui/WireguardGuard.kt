@@ -1,5 +1,7 @@
 package com.mlmvpn.scanner.ui
 
+import com.mlmvpn.scanner.ui.theme.*
+import com.mlmvpn.scanner.ui.home.frostedGlass
 import android.content.Context
 import android.content.Intent
 import androidx.compose.foundation.background
@@ -26,6 +28,8 @@ import com.mlmvpn.scanner.ui.theme.Primary
 import com.mlmvpn.scanner.ui.theme.SurfaceDark
 import com.mlmvpn.scanner.ui.theme.TextMuted
 import com.mlmvpn.scanner.ui.theme.TextPrimary
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
 
 /**
  * The Xray-based engines (node connect, scanner, emergency) and the WireGuard trial
@@ -50,7 +54,7 @@ fun stopActiveVpn(context: Context) {
  */
 @Composable
 fun WireguardConflictDialog(
-    message: String = "اتصال وایرگارد (تست بازی) هم‌اکنون فعال است. برای ادامه باید ابتدا وایرگارد غیرفعال شود.\n\nمی‌خواهید وایرگارد غیرفعال شود؟",
+    message: String = S(R.string.the_wireguard_connection_game_trial_is_active),
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -58,8 +62,7 @@ fun WireguardConflictDialog(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(SurfaceDark, RoundedCornerShape(20.dp))
-                .border(1.dp, BorderDark, RoundedCornerShape(20.dp))
+                .frostedGlass(CardShape)
                 .padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -72,7 +75,7 @@ fun WireguardConflictDialog(
                 Icon(Icons.Filled.Warning, contentDescription = null, tint = Color(0xFFFFA000), modifier = Modifier.size(28.dp))
             }
             Spacer(Modifier.height(14.dp))
-            Text("وایرگارد فعال است", color = TextPrimary, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            Text(S(R.string.wireguard_is_active), color = TextPrimary, fontSize = 17.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(10.dp))
             Text(message, color = TextMuted, fontSize = 13.sp, lineHeight = 20.sp)
             Spacer(Modifier.height(22.dp))
@@ -80,21 +83,21 @@ fun WireguardConflictDialog(
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .background(Color.Transparent, RoundedCornerShape(12.dp))
-                        .border(1.dp, BorderDark, RoundedCornerShape(12.dp))
+                        .background(Color.Transparent, ControlShape)
+                        .border(1.dp, BorderDark, ControlShape)
                         .clickable { onDismiss() }
                         .padding(vertical = 12.dp),
                     contentAlignment = Alignment.Center
-                ) { Text("انصراف", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium) }
+                ) { Text(S(R.string.cancel_3), color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium) }
 
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .background(Primary, RoundedCornerShape(12.dp))
+                        .background(Primary, ControlShape)
                         .clickable { onConfirm() }
                         .padding(vertical = 12.dp),
                     contentAlignment = Alignment.Center
-                ) { Text("بله، غیرفعال کن", color = BgDark, fontSize = 14.sp, fontWeight = FontWeight.Bold) }
+                ) { Text(S(R.string.yes_turn_it_off), color = BgDark, fontSize = 14.sp, fontWeight = FontWeight.Bold) }
             }
         }
     }
@@ -110,9 +113,9 @@ fun WireguardConflictDialog(
  * its .so, so the only reliable way to switch families is a fresh process (see stopAllEnginesAndRestart).
  */
 fun activeEngineLabelFa(): String? = when {
-    com.mlmvpn.scanner.engines.rstaspoof.RstaSpoofManager.isRunningFlow.value -> "موتور ضد فیلتر SNI"
-    MyVpnService.isRunning && MyVpnService.connectedNodeId == "game_uae_trial" -> "وایرگارد (تست بازی)"
-    MyVpnService.isRunning -> "موتور VPN فعلی"
+    com.mlmvpn.scanner.engines.rstaspoof.RstaSpoofManager.isRunningFlow.value -> S(R.string.sni_anti_filter_engine)
+    MyVpnService.isRunning && MyVpnService.connectedNodeId == "game_uae_trial" -> S(R.string.wireguard_game_trial)
+    MyVpnService.isRunning -> S(R.string.the_current_vpn_engine)
     else -> null
 }
 
@@ -175,8 +178,7 @@ fun EngineConflictDialog(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(SurfaceDark, RoundedCornerShape(20.dp))
-                .border(1.dp, BorderDark, RoundedCornerShape(20.dp))
+                .frostedGlass(CardShape)
                 .padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -189,10 +191,10 @@ fun EngineConflictDialog(
                 Icon(Icons.Filled.Warning, contentDescription = null, tint = Color(0xFFFFA000), modifier = Modifier.size(28.dp))
             }
             Spacer(Modifier.height(14.dp))
-            Text("$engineName روشن است", color = TextPrimary, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            Text(S(R.string.enginename_is_on, engineName), color = TextPrimary, fontSize = 17.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(10.dp))
             Text(
-                "برای شروعِ تست، ابتدا «$engineName» باید غیرفعال شود. با تأیید، این موتور خاموش می‌شود و برنامه یک‌بار تازه‌سازی می‌شود؛ سپس روی «شروع» بزنید.",
+                S(R.string.to_start_the_test_enginename_has_to, engineName),
                 color = TextMuted, fontSize = 13.sp, lineHeight = 20.sp
             )
             Spacer(Modifier.height(22.dp))
@@ -200,21 +202,21 @@ fun EngineConflictDialog(
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .background(Color.Transparent, RoundedCornerShape(12.dp))
-                        .border(1.dp, BorderDark, RoundedCornerShape(12.dp))
+                        .background(Color.Transparent, ControlShape)
+                        .border(1.dp, BorderDark, ControlShape)
                         .clickable { onDismiss() }
                         .padding(vertical = 12.dp),
                     contentAlignment = Alignment.Center
-                ) { Text("انصراف", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium) }
+                ) { Text(S(R.string.cancel_3), color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium) }
 
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .background(Primary, RoundedCornerShape(12.dp))
+                        .background(Primary, ControlShape)
                         .clickable { onConfirm() }
                         .padding(vertical = 12.dp),
                     contentAlignment = Alignment.Center
-                ) { Text("تأیید و تازه‌سازی", color = BgDark, fontSize = 14.sp, fontWeight = FontWeight.Bold) }
+                ) { Text(S(R.string.confirm_and_refresh), color = BgDark, fontSize = 14.sp, fontWeight = FontWeight.Bold) }
             }
         }
     }

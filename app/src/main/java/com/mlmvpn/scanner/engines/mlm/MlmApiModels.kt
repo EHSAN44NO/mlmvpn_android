@@ -21,6 +21,8 @@ data class MlmUser(
     val tls: String?,
     val port: String?,
     @SerializedName("used_gb") val usedGb: Float?,
+    /** The exact byte counter, on an engine that has one (build 6+). Preferred over [usedGb]. */
+    @SerializedName("used_bytes") val usedBytes: Long? = null,
     @SerializedName("is_active") val isActive: Int?,
     @SerializedName("last_active") val lastActive: Long?,
     @SerializedName("is_online") val isOnline: Int?, // Enriched by worker

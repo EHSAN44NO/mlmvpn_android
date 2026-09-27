@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    V2Ray nodes. The v2rayN mark.
+
+    The glyph and its blue are the source artwork, unaltered. Only its seating changed: it sits
+    on the same squircle every other home-screen tile uses, because the source SVG's own rounded
+    square is a different shape from this grid's, and one tile with the wrong corner radius reads
+    as a rendering fault rather than as a brand.
+
+    See HomeApp.imageRes: a tile with artwork gets no coloured background drawn behind it.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="1024"
+    android:viewportHeight="1024">
+    <!-- v2rayN's own blue, taken from the source file. -->
+    <path
+        android:pathData="M651.264 51.2c92.16 0 138.24 0 188.416 15.36 54.272 19.456 97.28 62.464 116.736 116.736C972.8 233.472 972.8 280.576 972.8 372.736v278.528c0 92.16 0 138.24-15.36 188.416-19.456 54.272-62.464 97.28-116.736 116.736-51.2 16.384-97.28 16.384-189.44 16.384H372.736c-92.16 0-138.24 0-188.416-15.36-55.296-20.48-97.28-62.464-117.76-117.76C51.2 790.528 51.2 744.448 51.2 651.264V372.736c0-92.16 0-138.24 15.36-188.416 20.48-54.272 62.464-97.28 117.76-116.736C233.472 51.2 279.552 51.2 372.736 51.2h278.528z"
+        android:fillColor="#409ED7" />
+
+    <!--
+        The stepped V, straight from the SVG's second path. Scaled to 0.75 and shifted so the
+        glyph's own bounding box (206.73..819.53 x, 239.27..815.64 y) ends up centred on 512,512
+        rather than the artboard being centred, which would have left it sitting low and right.
+    -->
+    <group
+        android:scaleX="0.75"
+        android:scaleY="0.75"
+        android:translateX="127.15"
+        android:translateY="116.4">
+        <path
+            android:pathData="M375.22 483.46V239.27H206.73v72.1h72.08v504.27l540.8-576.37H619.42z"
+            android:fillColor="#FFFFFF" />
+    </group>
+
+</vector>

@@ -1,5 +1,7 @@
 package com.mlmvpn.scanner.engines.edg
 
+import com.mlmvpn.scanner.ui.home.frostedGlass
+import com.mlmvpn.scanner.ui.theme.*
 import android.content.Context
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
@@ -32,6 +34,7 @@ import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.IOException
+import com.mlmvpn.scanner.R
 
 // Colors
 private val BgDark = Color(0xFF0F172A)
@@ -72,9 +75,8 @@ fun EdgSettingsScreen(
         withContext(Dispatchers.IO) {
             try {
                 val client = OkHttpClient.Builder()
-                    .addInterceptor(com.mlmvpn.scanner.emergency.EmergencyInterceptor(context))
                     .build()
-                val isCfat = account.token.startsWith("cfat_") || account.email.isEmpty()
+                val isCfat = com.mlmvpn.scanner.data.CloudAuth.useBearer(account)
                 val authHeaders = Headers.Builder().apply {
                     if (isCfat) add("Authorization", "Bearer ${account.token}")
                     else {
@@ -121,14 +123,18 @@ fun EdgSettingsScreen(
     }
 
     Surface(
-        color = Color(0xFF202124),
+        // Transparent over the wallpaper; the Cloud tab that hosts this no longer pads it.
+        color = Color.Transparent,
         modifier = Modifier
             .fillMaxSize()
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize().padding(
+                top = com.mlmvpn.scanner.ui.LocalContentTopInset.current,
+                bottom = com.mlmvpn.scanner.ui.LocalSystemBottomPadding.current,
+            )) {
             // Header
             Row(
-                modifier = Modifier.fillMaxWidth().background(SurfaceDark).padding(16.dp),
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -136,13 +142,13 @@ fun EdgSettingsScreen(
                     Box(
                         modifier = Modifier
                             .size(36.dp)
-                            .background(Primary.copy(alpha = 0.15f), RoundedCornerShape(10.dp)),
+                            .background(Primary.copy(alpha = 0.15f), ControlShape),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             Icons.Default.Tune,
                             contentDescription = null,
-                            tint = Primary,
+                            tint = TextMuted,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -185,13 +191,13 @@ fun EdgSettingsScreen(
                 }
             } else {
                 Column(
-                    modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 100.dp),
+                    modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(20.dp)
                 ) {
                     // Proxy IP
-                    Column(modifier = Modifier.fillMaxWidth().background(SurfaceDark, RoundedCornerShape(12.dp)).border(1.dp, BorderDark, RoundedCornerShape(12.dp)).padding(16.dp)) {
+                    Column(modifier = Modifier.fillMaxWidth().frostedGlass(ControlShape).border(1.dp, BorderDark, ControlShape).padding(16.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Dns, contentDescription = null, tint = Primary, modifier = Modifier.size(20.dp))
+                            Icon(Icons.Default.Dns, contentDescription = null, tint = TextMuted, modifier = Modifier.size(20.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.edg_proxy_ip_title), color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                         }
@@ -202,18 +208,16 @@ fun EdgSettingsScreen(
                             value = proxyIp,
                             onValueChange = { proxyIp = it },
                             placeholder = { Text(androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.edg_proxy_ip_hint), color = TextMuted) },
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = Primary, unfocusedBorderColor = BorderDark,
-                                focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary
-                            ),
+                            colors = iosFieldColors(),
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true
-                        )
+                        ,
+        shape = ControlShape,)
                     }
                 }
 
                 // Save Button
-                Box(modifier = Modifier.fillMaxWidth().background(SurfaceDark).padding(16.dp)) {
+                Box(modifier = Modifier.fillMaxWidth().frostedGlass(androidx.compose.ui.graphics.RectangleShape).padding(16.dp)) {
                     Button(
                         onClick = {
                             coroutineScope.launch {
@@ -221,9 +225,8 @@ fun EdgSettingsScreen(
                                 withContext(Dispatchers.IO) {
                                     try {
                                         val client = OkHttpClient.Builder()
-                                            .addInterceptor(com.mlmvpn.scanner.emergency.EmergencyInterceptor(context))
                                             .build()
-                                        val isCfat = account.token.startsWith("cfat_") || account.email.isEmpty()
+                                        val isCfat = com.mlmvpn.scanner.data.CloudAuth.useBearer(account)
                                         val authHeaders = Headers.Builder().apply {
                                             if (isCfat) add("Authorization", "Bearer ${account.token}")
                                             else {
@@ -266,15 +269,15 @@ fun EdgSettingsScreen(
                         },
                         modifier = Modifier.fillMaxWidth().height(50.dp),
                         enabled = !isSaving,
-                        colors = ButtonDefaults.buttonColors(containerColor = Primary, disabledContainerColor = BorderDark)
-                    ) {
+                        colors = iosButtonColors(Primary),
+                        border = iosButtonBorder(Primary, enabled = !isSaving)) {
                         if (isSaving) {
-                            CircularProgressIndicator(color = BgDark, modifier = Modifier.size(24.dp))
+                            CircularProgressIndicator( modifier = Modifier.size(24.dp))
                         } else {
                             Text(androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.edg_save_settings), color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                         }
                     }
-                    Spacer(modifier = Modifier.height(100.dp))
+                    Spacer(modifier = Modifier.height(24.dp))
                 }
             }
         }

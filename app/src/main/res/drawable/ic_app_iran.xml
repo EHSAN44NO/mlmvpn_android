@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The Iran configs tile.
+
+    The supplied mark is the outline of the country, drawn as a single filled path in near-black
+    with no background of its own. A bare silhouette dropped into a grid of squircles reads as a
+    rendering fault rather than as an icon, so it is seated on the same squircle every other tile
+    uses - white, as asked, which is also the only ground this mark can sit on: it is one solid
+    dark shape, so any tint dark enough to be a colour would swallow it.
+
+    See HomeApp.imageRes: a tile with artwork gets no coloured background drawn behind it, so the
+    squircle has to be part of the asset. The squircle spans 51.2..972.8 of a 1024 box - a 90%
+    inset, which is the convention every shipped icon here follows and which AppIcon's TileFace
+    scales back up by 100/90.
+
+    The mark itself is the source path unaltered. Only the group transform is ours: measured
+    bounds of the path are 21.591 x 19.058 in its own 21.477 viewport, scaled to fill 60% of the
+    squircle's width and centred on the box. Sixty rather than more because this is a silhouette
+    with fine coastline detail along the south - pushed larger it crowds the corners and the
+    detail closes up at grid size.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="1024"
+    android:viewportHeight="1024">
+
+    <!-- The tile. White, so the dark mark reads at grid size. -->
+    <path
+        android:pathData="M651.264 51.2c92.16 0 138.24 0 188.416 15.36 54.272 19.456 97.28 62.464 116.736 116.736C972.8 233.472 972.8 280.576 972.8 372.736v278.528c0 92.16 0 138.24-15.36 188.416-19.456 54.272-62.464 97.28-116.736 116.736-51.2 16.384-97.28 16.384-189.44 16.384H372.736c-92.16 0-138.24 0-188.416-15.36-55.296-20.48-97.28-62.464-117.76-117.76C51.2 790.528 51.2 744.448 51.2 651.264V372.736c0-92.16 0-138.24 15.36-188.416 20.48-54.272 62.464-97.28 117.76-116.736C233.472 51.2 279.552 51.2 372.736 51.2h278.528z"
+        android:fillColor="#FFFFFF" />
+
+    <!-- The country, exactly as supplied. -->
+    <group
+        android:scaleX="25.61067"
+        android:scaleY="25.61067"
+        android:translateX="236.88"
+        android:translateY="238.30">
+        <path
+            android:pathData="M17.782 4.736c-2.172-1.708-4.248-1.705-6.36-.141-2.174 1.608-6.072.34-6.518-2.256-.202-1.181-.531-1.036-1.196-.537-.933.701-1.798.988-2.613-.15-.224-.31-.472-.256-.778-.034-.295.218-.37.427-.284.771C.407 3.899.62 5.485 1.877 6.6c.31.272.466.64.255.893-1.367 1.65.025 2.41 1.048 3.227.579.46.972.84 1.054 1.683.05.508.223 1.724 1.038 1.555 1.742-.364 2.017.871 2.751 1.876.984 1.351 2.489 2.471 4.113 2.386 1.329-.066 2.246-.939 3.266.938.546 1.011 2.75.57 4.194.867.934.191.398-1.01.926-1.305.088-.051.171-.115.253-.174.402-.287.763-1.446.693-1.911-.064-.415-.307-.552-.61-.773-.93-.668-2.031-1.346-.711-2.661.259-.259.379-.816-.034-.912-1.441-.326-.783-1.525-1.035-2.321-.365-1.154.618-2.102.661-3.535.264-1.233-1.24-1.133-1.957-1.697"
+            android:fillColor="#121111" />
+    </group>
+</vector>

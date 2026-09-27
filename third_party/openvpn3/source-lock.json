@@ -1,0 +1,14 @@
+{
+  "coreCommit": "2986b58108726a7aff278a50caa0cff9c4cdf943",
+  "jniApi": 1,
+  "storeRevision": 1,
+  "storeVersion": "1.0.1",
+  "sources": [
+    {"name":"OpenVPN 3", "url":"https://codeload.github.com/OpenVPN/openvpn3/zip/2986b58108726a7aff278a50caa0cff9c4cdf943", "sha256":"f6be52f0b74a57a701a4ce07a4cd0d7daace2f2994ded9e53c68c8a1a541b64b", "license":"MPL-2.0"},
+    {"name":"Mbed TLS 3.6.7", "url":"https://codeload.github.com/Mbed-TLS/mbedtls/zip/refs/tags/mbedtls-3.6.7", "sha256":"d359314abc9bced38ddf9f0f9423e8c1c5084113a00f26d6864e1ceea6bf1153", "license":"Apache-2.0 OR GPL-2.0-or-later"},
+    {"name":"Mbed TLS framework", "url":"https://codeload.github.com/Mbed-TLS/mbedtls-framework/zip/dde0c4a0e448a0552f18817dcea633bb851fd288", "sha256":"2808e7a9b6fd87f294d1423bb29984057d0654b4f0d70b0d9cf085e887472337", "license":"Apache-2.0 OR GPL-2.0-or-later"},
+    {"name":"Asio 1.30.2", "url":"https://codeload.github.com/chriskohlhoff/asio/zip/refs/tags/asio-1-30-2", "sha256":"948373ed2e838ee1181937380c754e8fe6da8b18022eae922bcdc0cd38d6dbde", "license":"BSL-1.0"},
+    {"name":"LZ4 1.10.0", "url":"https://codeload.github.com/lz4/lz4/zip/refs/tags/v1.10.0", "sha256":"3224b4c80f351f194984526ef396f6079bd6332dd9825c72ac0d7a37b3cdc565", "license":"BSD-2-Clause (library)"},
+    {"name":"fmt 11.1.4", "url":"https://codeload.github.com/fmtlib/fmt/zip/refs/tags/11.1.4", "sha256":"7e85cbf6125a76daa0f83cd9240eff863d988aca68cd5f66c01ff7b59fa886b6", "license":"MIT"}
+  ]
+}

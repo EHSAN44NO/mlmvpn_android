@@ -1,30 +1,64 @@
 package com.mlmvpn.scanner.update
 
+import org.json.JSONArray
+import android.provider.Settings
+import android.os.Build
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.util.Log
 import androidx.core.content.FileProvider
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.TimeUnit
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
 
 /**
  * Checks the GitHub "latest release" of mlmvpn/mlmvpn_android against the installed
  * versionName and, if newer, downloads + installs the APK. Every network call here is
- * best-effort: GitHub is blocked for many users in Iran, so any failure (no internet,
- * DNS/TLS block, rate limit, malformed response) is swallowed silently -- this must never
- * surface an error or interrupt anything else the app is doing.
+ * best-effort: GitHub is blocked for many users in Iran, so a failure (no internet,
+ * DNS/TLS block, rate limit, malformed response) must never interrupt anything else -- but it is
+ * no longer SILENT, because a user who opened the update page and pressed check is owed an answer.
+ * See [state].
+ *
+ * ## Which release a user gets
+ *
+ * `/releases/latest` is GitHub's own answer, not ours: the most recent **non-draft,
+ * non-prerelease** release, ordered by `created_at` -- which is the TAG's commit date, not the
+ * publish date -- unless a release has been explicitly ticked "Set as the latest release", which
+ * overrides the ordering. Three consequences worth knowing before publishing:
+ *
+ *  - A draft or a pre-release is invisible here. Nobody is ever offered one.
+ *  - Tagging an old commit produces an old `created_at`, so a release published today can lose to
+ *    one published last week. If two releases are live at once, tick the one that should win.
+ *  - Whatever GitHub returns is then still compared against the installed version by [isNewer],
+ *    so a "latest" whose tag is LOWER than what is installed is ignored. The app never downgrades.
  */
 object UpdateChecker {
     private const val TAG = "UpdateChecker"
     private const val REPO = "mlmvpn/mlmvpn_android"
     private const val API_URL = "https://api.github.com/repos/$REPO/releases/latest"
+
+    private const val PREFS = "app_settings"
+    private const val KEY_AUTO_WIFI = "update_auto_download_wifi"
+    private const val KEY_LAST_CHECK = "update_last_check_at"
+
+    /** Auto-download over Wi-Fi is on out of the box, like the platform updaters users know. */
+    const val DEFAULT_AUTO_WIFI = true
 
     data class UpdateInfo(
         val versionName: String,
@@ -33,21 +67,84 @@ object UpdateChecker {
         val changelog: List<String>
     )
 
+    /**
+     * What the last check found.
+     *
+     * Added because "no update" and "the check never happened" used to be the same thing -- a null
+     * flow -- and a page with a Check button cannot tell the user anything with that. Every branch
+     * here is something the screen can say in words.
+     */
+    sealed class State {
+        /** Nothing has been asked yet this session. */
+        object Idle : State()
+        object Checking : State()
+        data class UpToDate(val checkedAt: Long) : State()
+        data class Available(val info: UpdateInfo, val checkedAt: Long) : State()
+        /** The check itself did not complete -- offline, blocked, rate-limited. */
+        data class Failed(val reason: String) : State()
+    }
+
+    private val _state = MutableStateFlow<State>(State.Idle)
+    val state: StateFlow<State> = _state.asStateFlow()
+
+    /** Kept for the app-wide "an update is available" dialog, which only cares about that case. */
     val updateAvailableFlow = MutableStateFlow<UpdateInfo?>(null)
     val downloadProgressFlow = MutableStateFlow<Int?>(null) // null = not downloading, 0..100
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(8, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
-        .build()
+    /** True while a background (auto) download is filling the cache. */
+    private val _autoDownloading = MutableStateFlow(false)
+    val autoDownloading: StateFlow<Boolean> = _autoDownloading.asStateFlow()
+
+    /**
+     * For the version check: a small JSON body that should arrive quickly or not at all.
+     *
+     * Built per call by [UpdateNet], which resolves over DNS-over-HTTPS and sends the request
+     * through the engine's local proxy when a tunnel is up. Both matter here: the download used to
+     * fail with `Unable to resolve host "github.com"` on a line where the check beside it had just
+     * succeeded, because the two use different hostnames and the network answered them
+     * differently.
+     */
+    private fun client(context: Context) = UpdateNet.client(context, 8, 10)
+
+    /**
+     * For the APK download, which is ~66 MB.
+     *
+     * The check's 10-second read timeout applies to each individual read, and on the kind of
+     * throttled line this app exists to work around, a single read stalling past ten seconds is
+     * ordinary rather than exceptional -- the download would abort mid-file and report a timeout.
+     * Sixty seconds still catches a genuinely dead connection.
+     */
+    private fun downloadClient(context: Context) = UpdateNet.client(context, 15, 60)
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var autoJob: Job? = null
 
     private var lastCheckAttempt = 0L
     private const val MIN_CHECK_INTERVAL_MS = 60_000L // avoid hammering GitHub from many trigger points
 
-    suspend fun checkForUpdate(context: Context) {
+    private fun prefs(context: Context) =
+        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    /** When the last check actually completed, or 0. Persisted, so the page can say it. */
+    fun lastCheckedAt(context: Context): Long = prefs(context).getLong(KEY_LAST_CHECK, 0L)
+
+    fun autoDownloadOnWifi(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_AUTO_WIFI, DEFAULT_AUTO_WIFI)
+
+    fun setAutoDownloadOnWifi(context: Context, value: Boolean) {
+        prefs(context).edit().putBoolean(KEY_AUTO_WIFI, value).apply()
+    }
+
+    /**
+     * @param force skip the rate limit. The limit exists because several places call this on their
+     *   own schedule; a user who pressed a button is not one of them, and silently doing nothing
+     *   for a button press is the single worst thing an updater can do.
+     */
+    suspend fun checkForUpdate(context: Context, force: Boolean = false) {
         val now = System.currentTimeMillis()
-        if (now - lastCheckAttempt < MIN_CHECK_INTERVAL_MS) return
+        if (!force && now - lastCheckAttempt < MIN_CHECK_INTERVAL_MS) return
         lastCheckAttempt = now
+        if (force) _state.value = State.Checking
         withContext(Dispatchers.IO) {
             try {
                 val req = Request.Builder()
@@ -56,48 +153,106 @@ object UpdateChecker {
                     .header("User-Agent", "mlmvpn-android")
                     .get()
                     .build()
-                client.newCall(req).execute().use { resp ->
-                    if (!resp.isSuccessful) return@withContext
-                    val body = resp.body?.string() ?: return@withContext
+                client(context).newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) {
+                        _state.value = State.Failed("HTTP ${resp.code}")
+                        return@withContext
+                    }
+                    val body = resp.body?.string()
+                    if (body == null) {
+                        _state.value = State.Failed(S(R.string.update_check_failed))
+                        return@withContext
+                    }
                     val json = JSONObject(body)
                     val tag = json.optString("tag_name", "").removePrefix("v").removePrefix("V")
-                    if (tag.isBlank()) return@withContext
                     val current = context.packageManager
-                        .getPackageInfo(context.packageName, 0).versionName ?: return@withContext
-                    if (!isNewer(tag, current)) return@withContext
-
-                    val assets = json.optJSONArray("assets") ?: return@withContext
-                    var apkUrl: String? = null
-                    var apkSize = 0L
-                    for (i in 0 until assets.length()) {
-                        val asset = assets.getJSONObject(i)
-                        val name = asset.optString("name", "")
-                        if (name.endsWith(".apk", ignoreCase = true)) {
-                            apkUrl = asset.optString("browser_download_url", null)
-                            apkSize = asset.optLong("size", 0L)
-                            break
-                        }
+                        .getPackageInfo(context.packageName, 0).versionName
+                    if (tag.isBlank() || current == null) {
+                        _state.value = State.Failed(S(R.string.update_check_failed))
+                        return@withContext
                     }
-                    if (apkUrl.isNullOrBlank()) return@withContext
+
+                    prefs(context).edit().putLong(KEY_LAST_CHECK, now).apply()
+
+                    if (!isNewer(tag, current)) {
+                        updateAvailableFlow.value = null
+                        _state.value = State.UpToDate(now)
+                        return@withContext
+                    }
+
+                    val assets = json.optJSONArray("assets")
+                    val chosen = assets?.let { pickApkForThisDevice(it) }
+                    if (chosen == null) {
+                        // A release with no APK this device can install is not an update; saying
+                        // "up to date" would be a lie, so it is reported as a failed check.
+                        _state.value = State.Failed(S(R.string.update_no_asset))
+                        return@withContext
+                    }
 
                     val notesBody = json.optString("body", "")
                     val changelog = notesBody.lines()
                         .map { it.trim().removePrefix("-").removePrefix("*").trim() }
                         .filter { it.isNotBlank() }
 
-                    updateAvailableFlow.value = UpdateInfo(
+                    val info = UpdateInfo(
                         versionName = tag,
-                        apkUrl = apkUrl,
-                        apkSizeBytes = apkSize,
-                        changelog = changelog.ifEmpty { listOf(notesBody.trim()).filter { it.isNotBlank() } }
+                        apkUrl = chosen.first,
+                        apkSizeBytes = chosen.second,
+                        changelog = changelog.ifEmpty {
+                            listOf(notesBody.trim()).filter { it.isNotBlank() }
+                        }
                     )
+                    updateAvailableFlow.value = info
+                    _state.value = State.Available(info, now)
+                    maybeAutoDownload(context, info)
                 }
             } catch (e: Exception) {
-                // Silent by design -- GitHub being unreachable (filtered network, no internet,
-                // rate-limited) must never bother the user or break app flow.
+                // Never rethrown: GitHub being unreachable must not break app flow. But it IS
+                // recorded, so a page that asked can say what happened instead of nothing.
                 Log.d(TAG, "update check skipped: ${e.message}")
+                _state.value = State.Failed(e.message ?: S(R.string.update_check_failed))
             }
         }
+    }
+
+    /**
+     * Fill the cache in the background when the user has asked for that and the line is free.
+     *
+     * Unmetered only, and by the system's own definition of unmetered rather than by transport
+     * type -- a Wi-Fi the user has marked as metered, or a phone tethering another phone, is
+     * exactly the case the setting is meant to protect against, and TRANSPORT_WIFI alone does not
+     * catch either.
+     *
+     * Downloading is all it does. Installing needs the user's consent and a foreground activity,
+     * so an updater that installed by itself would be both impossible and unwelcome.
+     */
+    private fun maybeAutoDownload(context: Context, info: UpdateInfo) {
+        if (!autoDownloadOnWifi(context)) return
+        if (autoJob?.isActive == true) return
+        if (!isUnmetered(context)) return
+        if (cachedApk(context, info) != null) return
+        val app = context.applicationContext
+        autoJob = scope.launch {
+            _autoDownloading.value = true
+            try {
+                fetchApk(app, info) { /* no progress UI for a silent download */ }
+                Log.i(TAG, "auto-downloaded ${info.versionName} over an unmetered link")
+            } catch (e: Exception) {
+                Log.d(TAG, "auto-download skipped: ${e.message}")
+            } finally {
+                _autoDownloading.value = false
+            }
+        }
+    }
+
+    private fun isUnmetered(context: Context): Boolean = try {
+        val cm = context.applicationContext
+            .getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val caps = cm?.activeNetwork?.let { cm.getNetworkCapabilities(it) }
+        caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == true &&
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+    } catch (e: Exception) {
+        false
     }
 
     /** Simple dotted-numeric version compare, e.g. "1.3.0" > "1.2.1". Non-numeric parts treated as 0. */
@@ -117,6 +272,79 @@ object UpdateChecker {
         updateAvailableFlow.value = null
     }
 
+    /**
+     * Picks the release asset this device can actually install.
+     *
+     * Up to 1.2.1 a release carried a single APK and taking the first `.apk` was correct. From
+     * 1.2.2 the build is split per ABI, so a release carries three:
+     *
+     *     mlmvpn-1.2.2-arm64-v8a-release.apk
+     *     mlmvpn-1.2.2-armeabi-v7a-release.apk
+     *     mlmvpn-1.2.2-universal-release.apk
+     *
+     * GitHub returns them in upload order, so "the first one" is whichever happened to be
+     * uploaded first -- and handing an armeabi-v7a phone the arm64 build produces a bare
+     * "App not installed" from the system installer with nothing to explain it.
+     *
+     * Preference order:
+     *   1. an asset naming this device's own ABI, most-preferred ABI first. [Build.SUPPORTED_ABIS]
+     *      is already ordered that way, so a 64-bit phone takes the arm64 split rather than the
+     *      32-bit one it could also run.
+     *   2. the universal build, which contains every ABI.
+     *   3. any `.apk` at all -- the single-asset releases that are already out there.
+     *
+     * @return the download URL and its size, or null if the release carries no APK.
+     */
+    private fun pickApkForThisDevice(assets: JSONArray): Pair<String, Long>? {
+        val apks = ArrayList<Pair<String, JSONObject>>()
+        for (i in 0 until assets.length()) {
+            val asset = assets.getJSONObject(i)
+            val name = asset.optString("name", "")
+            if (name.endsWith(".apk", ignoreCase = true)) {
+                apks.add(name.lowercase() to asset)
+            }
+        }
+        if (apks.isEmpty()) return null
+
+        // Matched on the ABI as a whole word: "armeabi-v7a" contains neither "arm64-v8a" nor
+        // "x86_64", but a bare contains("x86") WOULD match "x86_64", so the separators matter.
+        val exact = Build.SUPPORTED_ABIS.firstNotNullOfOrNull { abi ->
+            apks.firstOrNull { (name, _) -> name.contains("-" + abi.lowercase()) }
+        }
+        val chosen = exact
+            ?: apks.firstOrNull { (name, _) -> name.contains("universal") }
+            ?: apks.first()
+
+        val url = chosen.second.optString("browser_download_url", "")
+        if (url.isBlank()) return null
+        Log.i(TAG, "update asset: ${chosen.first} for abis ${Build.SUPPORTED_ABIS.joinToString()}")
+        return url to chosen.second.optLong("size", 0L)
+    }
+
+    /** Where a downloaded APK lives. Named per version, so two versions cannot be confused. */
+    private fun apkFileFor(context: Context, info: UpdateInfo): File {
+        val dir = File(context.cacheDir, "updates").apply { mkdirs() }
+        return File(dir, "mlmvpn-${info.versionName}.apk")
+    }
+
+    /**
+     * The already-downloaded APK for this version, if it is complete.
+     *
+     * Complete means the byte count the release said it would be. A truncated file -- a server
+     * closing the stream early, a process killed mid-write -- is the same size question, and
+     * handing one to the installer produces "App not installed" with nothing to explain it.
+     */
+    fun cachedApk(context: Context, info: UpdateInfo): File? {
+        val f = apkFileFor(context, info)
+        if (!f.exists()) return null
+        if (info.apkSizeBytes > 0 && f.length() != info.apkSizeBytes) return null
+        if (f.length() <= 0) return null
+        return f
+    }
+
+    /** True when the APK is already on disk and installing is instant. */
+    fun isDownloaded(context: Context, info: UpdateInfo): Boolean = cachedApk(context, info) != null
+
     /** Downloads the APK with progress reporting, then launches the system installer. */
     suspend fun downloadAndInstall(
         context: Context,
@@ -125,52 +353,110 @@ object UpdateChecker {
     ) {
         withContext(Dispatchers.IO) {
             try {
-                downloadProgressFlow.value = 0
-                val dir = File(context.cacheDir, "updates").apply { mkdirs() }
-                val apkFile = File(dir, "mlmvpn_update.apk")
+                // Straight to the installer when the file is already here. This is the path taken
+                // after the user grants "install unknown apps" and comes back -- which used to
+                // re-download all 66 MB despite a comment promising it would not.
+                val ready = cachedApk(context, info)
+                if (ready != null) {
+                    downloadProgressFlow.value = 100
+                    withContext(Dispatchers.Main) { installApk(context, ready) }
+                    return@withContext
+                }
 
-                val req = Request.Builder().url(info.apkUrl).get().build()
-                client.newCall(req).execute().use { resp ->
-                    if (!resp.isSuccessful) {
-                        throw Exception("HTTP ${resp.code}")
-                    }
-                    val respBody = resp.body ?: throw Exception("empty response")
-                    val total = respBody.contentLength().takeIf { it > 0 } ?: info.apkSizeBytes
-                    respBody.byteStream().use { input ->
-                        apkFile.outputStream().use { output ->
-                            val buffer = ByteArray(64 * 1024)
-                            var downloaded = 0L
-                            var lastReported = -1
-                            while (true) {
-                                val read = input.read(buffer)
-                                if (read == -1) break
-                                output.write(buffer, 0, read)
-                                downloaded += read
-                                if (total > 0) {
-                                    val pct = ((downloaded * 100) / total).toInt().coerceIn(0, 100)
-                                    if (pct != lastReported) {
-                                        downloadProgressFlow.value = pct
-                                        lastReported = pct
-                                    }
-                                }
+                downloadProgressFlow.value = 0
+                val apkFile = fetchApk(context, info) { pct -> downloadProgressFlow.value = pct }
+                downloadProgressFlow.value = 100
+                withContext(Dispatchers.Main) { installApk(context, apkFile) }
+            } catch (e: Exception) {
+                Log.e(TAG, "download/install failed", e)
+                downloadProgressFlow.value = null
+                withContext(Dispatchers.Main) { onError(e.message ?: S(R.string.download_error)) }
+            }
+        }
+    }
+
+    /**
+     * Download to the cache and return the file. Throws on anything that would leave a bad APK.
+     *
+     * The size check at the end is the important part: an HTTP 200 whose body stops early is not
+     * an error at the socket level, so without it a truncated APK reaches the installer looking
+     * exactly like a complete one.
+     */
+    private fun fetchApk(context: Context, info: UpdateInfo, onProgress: (Int) -> Unit): File {
+        val apkFile = apkFileFor(context, info)
+        val partFile = File(apkFile.path + ".part")
+
+        val req = Request.Builder().url(info.apkUrl).get().build()
+        downloadClient(context).newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}")
+            val respBody = resp.body ?: throw Exception("empty response")
+            if (partFile.exists()) partFile.delete()
+            val total = respBody.contentLength().takeIf { it > 0 } ?: info.apkSizeBytes
+            var downloaded = 0L
+            respBody.byteStream().use { input ->
+                partFile.outputStream().use { output ->
+                    val buffer = ByteArray(64 * 1024)
+                    var lastReported = -1
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read == -1) break
+                        output.write(buffer, 0, read)
+                        downloaded += read
+                        if (total > 0) {
+                            val pct = ((downloaded * 100) / total).toInt().coerceIn(0, 100)
+                            if (pct != lastReported) {
+                                onProgress(pct)
+                                lastReported = pct
                             }
                         }
                     }
                 }
-                downloadProgressFlow.value = 100
+            }
+            if (total > 0 && downloaded != total) {
+                partFile.delete()
+                throw Exception(S(R.string.update_incomplete_download))
+            }
+        }
 
-                withContext(Dispatchers.Main) {
-                    installApk(context, apkFile)
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "download/install failed", e)
-                downloadProgressFlow.value = null
-                withContext(Dispatchers.Main) { onError(e.message ?: "خطای دانلود") }
+        // Only now does it become the real file. A ".part" that never finished can never be picked
+        // up by cachedApk and handed to the installer.
+        if (apkFile.exists()) apkFile.delete()
+        if (!partFile.renameTo(apkFile)) {
+            partFile.delete()
+            throw Exception(S(R.string.download_error))
+        }
+        pruneOldApks(context, apkFile)
+        return apkFile
+    }
+
+    /** One APK in the cache at a time; the others are versions nobody will install now. */
+    private fun pruneOldApks(context: Context, keep: File) {
+        runCatching {
+            File(context.cacheDir, "updates").listFiles()?.forEach { f ->
+                if (f.name != keep.name) f.delete()
             }
         }
     }
 
     private fun installApk(context: Context, apkFile: File) {
+        // On Android 8+ an app may only launch the package installer once the user has allowed it
+        // to install unknown apps. Without this the ACTION_VIEW below opens the installer, which
+        // immediately backs out to a settings prompt and loses the file it was given. Sending them
+        // to the right settings page first means the download survives -- and it genuinely does
+        // now, because downloadAndInstall reuses a complete cached APK instead of starting over.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !context.packageManager.canRequestPackageInstalls()
+        ) {
+            runCatching {
+                context.startActivity(
+                    Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
+                        .setData(Uri.parse("package:" + context.packageName))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }
+            return
+        }
+
         val uri: Uri = FileProvider.getUriForFile(
             context, "${context.packageName}.fileprovider", apkFile
         )

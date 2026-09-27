@@ -34,14 +34,9 @@ object VpnGateController {
         withContext(Dispatchers.IO) {
             val ctx = context.applicationContext
 
-            // Written only when we still have one. Servers restored from the archive carry
-            // metadata but no profile — the SoftEther path doesn't need it, and the OpenVPN
-            // path is only reachable for servers that came straight from a live fetch.
-            if (ovpnText.isNotBlank()) {
-                val target = VpnGateEngine.pendingFile(ctx)
-                target.parentFile?.mkdirs()
-                target.writeText(ovpnText)
-            }
+            // The server's OpenVPN profile used to be staged on disk here for the openvpn3
+            // path. Nothing reads it now: that path is gone, and SoftEther needs only the
+            // host and port, which the row already carries.
 
             Log.d(TAG, "connect(): ${server.hostName} (${server.countryShort})")
 
@@ -52,6 +47,7 @@ object VpnGateController {
                 Intent(ctx, MyVpnService::class.java).apply {
                     putExtra("NODE_URI", SoftEtherEngine.uriFor(server.ip))
                     putExtra("NODE_ID", server.id)
+                    putExtra("MTU_PROFILE", com.mlmvpn.scanner.utils.NetworkSettings.Method.GATEWAY.id)
                 }
             )
         }

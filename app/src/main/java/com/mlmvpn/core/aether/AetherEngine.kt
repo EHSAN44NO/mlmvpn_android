@@ -49,6 +49,17 @@ class AetherEngine private constructor(
     private val tag = "AetherEngine"
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val processRef = java.util.concurrent.atomic.AtomicReference<Process?>(null)
+
+    /**
+     * The options the running process was started with, or null when none is running.
+     *
+     * What lets a tunnel ADOPT an engine the game booster already started to measure WARP:
+     * [start] refuses a second start, so without this the booster's measurement and the tunnel
+     * that follows it would have to stop the engine and scan again from nothing.
+     */
+    @Volatile
+    var runningOptions: AetherOptions? = null
+        private set
     private val stopping = AtomicBoolean(false)
     private val logBuffer = ArrayDeque<String>(MAX_LOG_BUFFER)
     private val crashLogFile: File by lazy { File(context.filesDir, "aether/last-crash.log") }
@@ -81,6 +92,13 @@ class AetherEngine private constructor(
      * this function used to do — is impossible on targetSdk >= 29.
      */
     fun prepareBinary(onError: (String) -> Unit = {}): File? {
+        // A copy installed from «ام‌ال‌ام استور» wins over the shipped one. It lives in filesDir,
+        // which Android will not exec directly, so it is started through the system linker —
+        // see StoreEngines. Nothing else about the engine changes.
+        com.mlmvpn.scanner.store.StoreFiles.activeFile(context, "aether", AetherBinaryLocator.LIB_NAME)?.let {
+            binaryReady = true
+            return it
+        }
         val exe = AetherBinaryLocator.executable(context)
         if (!exe.exists()) {
             // Almost always a packaging problem, not a device problem: the .so was not
@@ -118,8 +136,10 @@ class AetherEngine private constructor(
             return false
         }
         if (processRef.get() != null) {
+            // Refused, but the state is left alone: it describes the engine that IS running. The
+            // old FAILED here wiped `connected` from a healthy session, so the game booster could
+            // no longer adopt it and the UI read "failed" over a working tunnel.
             onError("موتور قبلاً روشن است")
-            _state.value = AetherState.failed("موتور قبلاً روشن است", "ALREADY_RUNNING")
             return false
         }
         val exe = prepareBinary { msg ->
@@ -135,7 +155,9 @@ class AetherEngine private constructor(
         val socksPort = AETHER_SOCKS_PORT
         val dataDir = File(context.filesDir, "aether/data").apply { mkdirs() }
         val env = options.toEnv(System.getenv(), dataDir.absolutePath, socksPort)
-        val pb = ProcessBuilder(exe.absolutePath).apply {
+        val pb = ProcessBuilder(
+            com.mlmvpn.scanner.store.StoreEngines.command(context, "aether", AetherBinaryLocator.LIB_NAME)
+        ).apply {
             directory(dataDir)
             redirectErrorStream(false)
             environment().clear()
@@ -151,6 +173,7 @@ class AetherEngine private constructor(
             return false
         }
         processRef.set(proc)
+        runningOptions = options
         mirrorToLogcat = options.verbose
         _state.value = AetherState.starting(options, socksPort)
 
@@ -363,6 +386,7 @@ class AetherEngine private constructor(
 
     private fun onExit(code: Int, options: AetherOptions) {
         processRef.set(null)
+        runningOptions = null
         if (stopping.get()) {
             _state.value = _state.value.copy(
                 running = false, connected = false,
@@ -421,6 +445,7 @@ class AetherEngine private constructor(
         telemetryJob = null
         lastLoggedStage = null
         val proc = processRef.getAndSet(null)
+        runningOptions = null
         if (proc != null) {
             try { proc.destroy() } catch (_: Exception) {}
             try { proc.waitFor(2, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {}

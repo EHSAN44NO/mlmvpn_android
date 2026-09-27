@@ -9,7 +9,8 @@ import android.util.Log
 object Native {
     init {
         try {
-            System.loadLibrary("mhrv_rs")
+            // Prefers a copy installed from the app's store; the shipped one otherwise.
+            com.mlmvpn.scanner.store.StoreEngines.loadLibrary("gst", "mhrv_rs")
             Log.i("MhrvNative", "Successfully loaded libmhrv_rs.so")
         } catch (e: UnsatisfiedLinkError) {
             Log.e("MhrvNative", "Failed to load libmhrv_rs.so: ${e.message}")

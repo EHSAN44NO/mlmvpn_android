@@ -5,6 +5,8 @@ import androidx.preference.PreferenceManager
 import com.mlmvpn.scanner.ui.tlsPing
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
 
 data class GstRelay(
     val id: String = java.util.UUID.randomUUID().toString(),
@@ -34,14 +36,14 @@ object GstConfigManager {
     )
 
     val ITEM_DESCRIPTIONS = mapOf(
-        "youtubei.googleapis.com" to "بهترین برای اپ یوتیوب",
-        "googlevideo.com" to "عالی برای لود سریع ویدیو",
-        "www.youtube.com" to "وب‌سایت یوتیوب",
-        "mtalk.google.com" to "پایداری بالا",
-        "142.250.186.110" to "سرور اصلی گوگل اج",
-        "142.251.37.110" to "سرور اصلی گوگل اج",
-        "104.16.24.34" to "آی‌پی کلودفلر",
-        "104.17.45.12" to "آی‌پی کلودفلر"
+        "youtubei.googleapis.com" to S(R.string.best_for_the_youtube_app),
+        "googlevideo.com" to S(R.string.great_for_fast_video_loading),
+        "www.youtube.com" to S(R.string.the_youtube_website),
+        "mtalk.google.com" to S(R.string.high_stability),
+        "142.250.186.110" to S(R.string.google_s_own_edge_server),
+        "142.251.37.110" to S(R.string.google_s_own_edge_server),
+        "104.16.24.34" to S(R.string.cloudflare_ip),
+        "104.17.45.12" to S(R.string.cloudflare_ip)
     )
 
     // The canonical Google frontend IP from the upstream mhrv-rs reference config

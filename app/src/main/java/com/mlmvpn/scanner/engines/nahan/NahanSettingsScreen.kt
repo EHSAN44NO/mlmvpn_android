@@ -1,5 +1,6 @@
 package com.mlmvpn.scanner.engines.nahan
 
+import com.mlmvpn.scanner.ui.home.frostedGlass
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -29,6 +30,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
 
 // ============================================================================
 // NahanSettingsScreen — Full-screen Dialog for Nahan Worker Configuration
@@ -100,17 +103,20 @@ fun NahanSettingsScreen(
     }
 
     Surface(
-        shape = RoundedCornerShape(0.dp),
-        color = Color(0xFF202124),
+        // Transparent over the wallpaper; the Cloud tab that hosts this no longer pads it.
+        color = Color.Transparent,
         modifier = Modifier
             .fillMaxSize()
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize().padding(
+                top = com.mlmvpn.scanner.ui.LocalContentTopInset.current,
+                bottom = com.mlmvpn.scanner.ui.LocalSystemBottomPadding.current,
+            )) {
                 // ── Header ──
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(SurfaceDark)
+                        .frostedGlass(androidx.compose.ui.graphics.RectangleShape)
                         .padding(16.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
@@ -119,13 +125,13 @@ fun NahanSettingsScreen(
                         Box(
                             modifier = Modifier
                                 .size(36.dp)
-                                .background(Primary.copy(alpha = 0.15f), RoundedCornerShape(10.dp)),
+                                .background(Primary.copy(alpha = 0.15f), ControlShape),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 Icons.Default.Tune,
                                 contentDescription = null,
-                                tint = Primary,
+                                tint = TextMuted,
                                 modifier = Modifier.size(20.dp)
                             )
                         }
@@ -205,9 +211,9 @@ fun NahanSettingsScreen(
                         verticalArrangement = Arrangement.spacedBy(20.dp)
                     ) {
                         // ── Section 1: Basic Settings ──
-                        Column(modifier = Modifier.fillMaxWidth().background(SurfaceDark, RoundedCornerShape(12.dp)).border(1.dp, BorderDark, RoundedCornerShape(12.dp)).padding(16.dp)) {
+                        Column(modifier = Modifier.fillMaxWidth().frostedGlass(ControlShape).border(1.dp, BorderDark, ControlShape).padding(16.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Settings, contentDescription = null, tint = Primary, modifier = Modifier.size(20.dp))
+                                Icon(Icons.Default.Settings, contentDescription = null, tint = TextMuted, modifier = Modifier.size(20.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.nhn_basic_settings), color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                             }
@@ -226,19 +232,16 @@ fun NahanSettingsScreen(
                                     trailingIcon = {
                                         ExposedDropdownMenuDefaults.TrailingIcon(expanded = protocolExpanded)
                                     },
-                                    colors = OutlinedTextFieldDefaults.colors(
-                                        focusedBorderColor = Primary,
-                                        unfocusedBorderColor = BorderDark,
-                                        focusedTextColor = TextPrimary,
-                                        unfocusedTextColor = TextPrimary
-                                    ),
+                                    colors = iosFieldColors(),
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .menuAnchor()
-                                )
+                                ,
+        shape = ControlShape,)
                                 ExposedDropdownMenu(
                                     expanded = protocolExpanded,
-                                    onDismissRequest = { protocolExpanded = false }
+                                    onDismissRequest = { protocolExpanded = false },
+                                    modifier = Modifier.iosMenu(),
                                 ) {
                                     listOf("VLESS", "Trojan", "Both").forEach { option ->
                                         DropdownMenuItem(
@@ -258,11 +261,9 @@ fun NahanSettingsScreen(
                                 label = { Text(androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.nhn_api_route), color = TextMuted) },
                                 modifier = Modifier.fillMaxWidth(),
                                 singleLine = true,
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = Primary, unfocusedBorderColor = BorderDark,
-                                    focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary
-                                )
-                            )
+                                colors = iosFieldColors()
+                            ,
+        shape = ControlShape,)
                             Spacer(modifier = Modifier.height(12.dp))
                             OutlinedTextField(
                                 value = masterKey,
@@ -270,11 +271,9 @@ fun NahanSettingsScreen(
                                 label = { Text(androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.nhn_master_key), color = TextMuted) },
                                 modifier = Modifier.fillMaxWidth(),
                                 singleLine = true,
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = Primary, unfocusedBorderColor = BorderDark,
-                                    focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary
-                                )
-                            )
+                                colors = iosFieldColors()
+                            ,
+        shape = ControlShape,)
                         }
 
                         Divider(color = BorderDark)
@@ -296,7 +295,7 @@ fun NahanSettingsScreen(
                                         .clip(RoundedCornerShape(8.dp))
                                         .background(
                                             if (isSelected) Primary.copy(alpha = 0.2f)
-                                            else Color(0xFF3C4043)
+                                            else BorderDark
                                         )
                                         .border(
                                             1.dp,
@@ -324,14 +323,14 @@ fun NahanSettingsScreen(
 
                         // Maintenance Host
                         NahanTextField(
-                            label = "Maintenance Host",
+                            label = S(R.string.maintenance_host),
                             value = maintenanceHost,
                             onValueChange = { maintenanceHost = it }
                         )
 
                         // Resolve IP
                         NahanTextField(
-                            label = "Resolve IP (DNS)",
+                            label = S(R.string.resolve_ip_dns),
                             value = resolveIp,
                             onValueChange = { resolveIp = it }
                         )
@@ -343,11 +342,9 @@ fun NahanSettingsScreen(
                             label = { Text(androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.nhn_custom_dns), color = TextMuted) },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = Primary, unfocusedBorderColor = BorderDark,
-                                focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary
-                            )
-                        )
+                            colors = iosFieldColors()
+                        ,
+        shape = ControlShape,)
                         Spacer(modifier = Modifier.height(12.dp))
                         OutlinedTextField(
                             value = customRelay,
@@ -355,11 +352,9 @@ fun NahanSettingsScreen(
                             label = { Text(androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.nhn_custom_relay), color = TextMuted) },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = Primary, unfocusedBorderColor = BorderDark,
-                                focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary
-                            )
-                        )
+                            colors = iosFieldColors()
+                        ,
+        shape = ControlShape,)
                         Spacer(modifier = Modifier.height(12.dp))
                         OutlinedTextField(
                             value = backupRelay,
@@ -367,11 +362,9 @@ fun NahanSettingsScreen(
                             label = { Text(androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.nhn_backup_relay), color = TextMuted) },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = Primary, unfocusedBorderColor = BorderDark,
-                                focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary
-                            )
-                        )
+                            colors = iosFieldColors()
+                        ,
+        shape = ControlShape,)
                         Spacer(modifier = Modifier.height(12.dp))
                         OutlinedTextField(
                             value = cleanIps,
@@ -379,11 +372,9 @@ fun NahanSettingsScreen(
                             label = { Text(androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.nhn_clean_ips), color = TextMuted) },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = false,
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = Primary, unfocusedBorderColor = BorderDark,
-                                focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary
-                            )
-                        )
+                            colors = iosFieldColors()
+                        ,
+        shape = ControlShape,)
 
                         Divider(color = BorderDark)
 
@@ -406,7 +397,7 @@ fun NahanSettingsScreen(
                                     containerColor = Primary.copy(alpha = 0.15f),
                                     contentColor = Primary
                                 ),
-                                shape = RoundedCornerShape(10.dp),
+                                shape = ControlShape,
                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                             ) {
                                 Icon(
@@ -423,8 +414,8 @@ fun NahanSettingsScreen(
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .background(BgDark, RoundedCornerShape(12.dp))
-                                    .border(1.dp, BorderDark, RoundedCornerShape(12.dp))
+                                    .background(BgDark, ControlShape)
+                                    .border(1.dp, BorderDark, ControlShape)
                                     .padding(24.dp),
                                 contentAlignment = Alignment.Center
                             ) {
@@ -506,14 +497,14 @@ fun NahanSettingsScreen(
                         }
 
                         // Extra spacing for floating nav bar
-                        Spacer(modifier = Modifier.height(100.dp))
+                        Spacer(modifier = Modifier.height(24.dp))
                     }
 
                     // ── Save Button ──
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(SurfaceDark)
+                            .frostedGlass(androidx.compose.ui.graphics.RectangleShape)
                             .padding(16.dp)
                     ) {
                         Button(
@@ -579,7 +570,7 @@ fun NahanSettingsScreen(
                                 containerColor = Primary,
                                 contentColor = BgDark
                             ),
-                            shape = RoundedCornerShape(14.dp)
+                            shape = RoundedCornerShape(16.dp)
                         ) {
                             if (isSaving) {
                                 CircularProgressIndicator(
@@ -609,7 +600,7 @@ fun NahanSettingsScreen(
                         }
                     }
                 }
-                Spacer(modifier = Modifier.height(100.dp))
+                Spacer(modifier = Modifier.height(24.dp))
             }
         }
 
@@ -632,9 +623,9 @@ fun NahanSettingsScreen(
 @Composable
 private fun NahanSectionHeader(title: String, icon: androidx.compose.ui.graphics.vector.ImageVector) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, contentDescription = null, tint = Primary, modifier = Modifier.size(18.dp))
+        Icon(icon, contentDescription = null, tint = TextMuted, modifier = Modifier.size(18.dp))
         Spacer(modifier = Modifier.width(8.dp))
-        Text(title, color = Primary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        Text(title, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -651,14 +642,8 @@ private fun NahanTextField(
         label = { Text(label, color = TextMuted, fontSize = 12.sp) },
         modifier = Modifier.fillMaxWidth(),
         singleLine = singleLine,
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = Primary,
-            unfocusedBorderColor = BorderDark,
-            focusedTextColor = TextPrimary,
-            unfocusedTextColor = TextPrimary,
-            cursorColor = Primary
-        ),
-        shape = RoundedCornerShape(10.dp)
+        colors = iosFieldColors(),
+        shape = ControlShape
     )
 }
 
@@ -688,8 +673,8 @@ private fun NahanUserCard(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(BgDark, RoundedCornerShape(12.dp))
-            .border(1.dp, BorderDark, RoundedCornerShape(12.dp))
+            .background(BgDark, ControlShape)
+            .border(1.dp, BorderDark, ControlShape)
     ) {
         Row(
             modifier = Modifier
@@ -706,7 +691,7 @@ private fun NahanUserCard(
             ) {
                 Text(
                     user.name.firstOrNull()?.uppercase() ?: "?",
-                    color = Primary,
+                    color = TextPrimary,
                     fontWeight = FontWeight.Bold,
                     fontSize = 14.sp
                 )
@@ -812,7 +797,7 @@ private fun NahanUserCard(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(SurfaceDark)
+                    .frostedGlass(androidx.compose.ui.graphics.RectangleShape)
                     .padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
@@ -822,12 +807,7 @@ private fun NahanUserCard(
                     label = { Text(androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.nhn_user_name), fontSize = 11.sp) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Primary,
-                        unfocusedBorderColor = BorderDark,
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary
-                    ),
+                    colors = iosFieldColors(),
                     shape = RoundedCornerShape(8.dp)
                 )
                 OutlinedTextField(
@@ -836,12 +816,7 @@ private fun NahanUserCard(
                     label = { Text(androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.nhn_limit_gb), fontSize = 11.sp) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Primary,
-                        unfocusedBorderColor = BorderDark,
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary
-                    ),
+                    colors = iosFieldColors(),
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                         keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
                     ),
@@ -853,12 +828,7 @@ private fun NahanUserCard(
                     label = { Text(androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.nhn_daily_limit_gb), fontSize = 11.sp) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Primary,
-                        unfocusedBorderColor = BorderDark,
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary
-                    ),
+                    colors = iosFieldColors(),
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                         keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
                     ),
@@ -870,12 +840,7 @@ private fun NahanUserCard(
                     label = { Text(androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.nhn_expiry_days_input), fontSize = 11.sp) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Primary,
-                        unfocusedBorderColor = BorderDark,
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary
-                    ),
+                    colors = iosFieldColors(),
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                         keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
                     ),
@@ -887,12 +852,7 @@ private fun NahanUserCard(
                     label = { Text(androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.nhn_user_proxy_ip), fontSize = 11.sp) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Primary,
-                        unfocusedBorderColor = BorderDark,
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary
-                    ),
+                    colors = iosFieldColors(),
                     shape = RoundedCornerShape(8.dp)
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -954,14 +914,19 @@ private fun AddNahanUserDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = SurfaceDark,
-        shape = RoundedCornerShape(20.dp),
+        containerColor = DialogSurface,
+        modifier = androidx.compose.ui.Modifier.border(
+            0.7.dp,
+            androidx.compose.ui.graphics.Color.White.copy(alpha = 0.15f),
+            CardShape,
+        ),
+        shape = CardShape,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     Icons.Default.PersonAdd,
                     contentDescription = null,
-                    tint = Primary,
+                    tint = TextMuted,
                     modifier = Modifier.size(22.dp)
                 )
                 Spacer(modifier = Modifier.width(10.dp))
@@ -976,13 +941,8 @@ private fun AddNahanUserDialog(
                     label = { Text(androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.nhn_user_name), color = TextMuted, fontSize = 12.sp) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Primary,
-                        unfocusedBorderColor = BorderDark,
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary
-                    ),
-                    shape = RoundedCornerShape(10.dp)
+                    colors = iosFieldColors(),
+                    shape = ControlShape
                 )
 
                 // UUID display (read-only)
@@ -993,13 +953,8 @@ private fun AddNahanUserDialog(
                     label = { Text(androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.nhn_uuid_auto), color = TextMuted, fontSize = 12.sp) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = BorderDark,
-                        unfocusedBorderColor = BorderDark,
-                        focusedTextColor = TextDim,
-                        unfocusedTextColor = TextDim
-                    ),
-                    shape = RoundedCornerShape(10.dp)
+                    colors = iosFieldColors(),
+                    shape = ControlShape
                 )
 
                 OutlinedTextField(
@@ -1008,16 +963,11 @@ private fun AddNahanUserDialog(
                     label = { Text(androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.nhn_total_limit_gb), color = TextMuted, fontSize = 12.sp) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Primary,
-                        unfocusedBorderColor = BorderDark,
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary
-                    ),
+                    colors = iosFieldColors(),
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                         keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
                     ),
-                    shape = RoundedCornerShape(10.dp)
+                    shape = ControlShape
                 )
 
                 OutlinedTextField(
@@ -1026,16 +976,11 @@ private fun AddNahanUserDialog(
                     label = { Text(androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.nhn_daily_traffic_limit), color = TextMuted, fontSize = 12.sp) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Primary,
-                        unfocusedBorderColor = BorderDark,
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary
-                    ),
+                    colors = iosFieldColors(),
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                         keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
                     ),
-                    shape = RoundedCornerShape(10.dp)
+                    shape = ControlShape
                 )
 
                 OutlinedTextField(
@@ -1044,16 +989,11 @@ private fun AddNahanUserDialog(
                     label = { Text(androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.nhn_expiry_days_input), color = TextMuted, fontSize = 12.sp) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Primary,
-                        unfocusedBorderColor = BorderDark,
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary
-                    ),
+                    colors = iosFieldColors(),
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                         keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
                     ),
-                    shape = RoundedCornerShape(10.dp)
+                    shape = ControlShape
                 )
 
                 OutlinedTextField(
@@ -1062,13 +1002,8 @@ private fun AddNahanUserDialog(
                     label = { Text(androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.nhn_user_proxy_ip), color = TextMuted, fontSize = 12.sp) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Primary,
-                        unfocusedBorderColor = BorderDark,
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary
-                    ),
-                    shape = RoundedCornerShape(10.dp)
+                    colors = iosFieldColors(),
+                    shape = ControlShape
                 )
             }
         },
@@ -1098,7 +1033,7 @@ private fun AddNahanUserDialog(
                     containerColor = Primary,
                     contentColor = BgDark
                 ),
-                shape = RoundedCornerShape(10.dp)
+                shape = ControlShape
             ) {
                 Text(androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.nhn_add), fontWeight = FontWeight.Bold)
             }

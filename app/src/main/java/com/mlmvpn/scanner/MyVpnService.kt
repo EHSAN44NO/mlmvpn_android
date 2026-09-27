@@ -34,7 +34,50 @@ class MyVpnService : VpnService() {
     private var lostNetworkWhileConnected = false
     private var reconnectJob: kotlinx.coroutines.Job? = null
 
+    /**
+     * Whether this service is one of the things holding the SNI front up.
+     *
+     * The front is a separate process and the service is what raises it for an SNI config, so the
+     * service is also what has to put it down again -- which it never did. Disconnecting from the
+     * connection list took the tunnel away and left the front running, and the home screen went on
+     * showing the SNI lamp over whatever the user connected next.
+     *
+     * A flag rather than an unconditional release in `onDestroy`, because `onDestroy` runs for
+     * every Xray disconnect and most of them never touched the front; and because the internal
+     * reconnect re-runs the connect block without an `onDestroy` in between, which would claim the
+     * front a second time and leave one claim behind on the way out.
+     */
+    private var frontHeld = false
+
+    /**
+     * Give the SNI front back, exactly once, whether we leave by failure or by disconnect.
+     *
+     * On a thread of its own because the main caller is `onDestroy`, which runs on the main
+     * thread, and giving the front back can mean force-killing a process behind a lock. The flag
+     * is cleared first, so the second caller returns without waiting on the first.
+     */
+    private fun releaseFront() {
+        if (!frontHeld) return
+        frontHeld = false
+        Thread {
+            runCatching { com.mlmvpn.scanner.engines.rstaspoof.RstaSpoofManager.release() }
+        }.start()
+    }
+
     companion object {
+        /** Game session route profiles, sent as the GAME_ROUTE_PROFILE extra. See setupVpn. */
+        const val GAME_ROUTE_FULL = "FULL"
+        const val GAME_ROUTE_DNS_ONLY = "DNS_ONLY"
+        /** DNS_ONLY plus the addresses in the GAME_SPLIT_ROUTES extra, sent out fragmented. */
+        const val GAME_ROUTE_SPLIT = "SPLIT"
+        const val MAX_SPLIT_ROUTES = 16
+
+        /**
+         * The resolver address a DNS-only game session hands the game. Any address works as long
+         * as nothing real lives there; it only ever exists inside the tunnel.
+         */
+        const val DEFAULT_GAME_DNS_IP = "10.0.0.53"
+
         /**
          * Inner MTU ceiling for the Aether TUN. See the use site for the byte-by-byte
          * reasoning; short version is that MASQUE/QUIC adds ~80 bytes of outer overhead and
@@ -46,6 +89,22 @@ class MyVpnService : VpnService() {
         val isRunningFlow = kotlinx.coroutines.flow.MutableStateFlow(false)
         val connectedNodeIdFlow = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
         val connectionPhaseFlow = kotlinx.coroutines.flow.MutableStateFlow(Phase.IDLE)
+
+        /**
+         * True while the config this service is carrying is an SNI-spoof one.
+         *
+         * Published rather than re-derived, because the only other way to answer it from outside
+         * was to look the connected node id up in [com.mlmvpn.scanner.data.NodeManager] and parse
+         * its URI -- and that list loads asynchronously, so a caller that asked during the first
+         * composition after a process start got "no" for a config that plainly was one. The home
+         * screen did exactly that and lit the V2Ray lamp beside the SNI lamp, showing two engines
+         * for one connection, and it stayed wrong because nothing in its cache key changed when
+         * the list finally arrived.
+         *
+         * This service already computes the same fact, from the config it is actually connecting,
+         * to decide whether to bring the local TLS front up first. That is the authority.
+         */
+        val sniSessionFlow = kotlinx.coroutines.flow.MutableStateFlow(false)
         val xrayMutex = kotlinx.coroutines.sync.Mutex()
         var isRunning: Boolean
             get() = isRunningFlow.value
@@ -68,6 +127,20 @@ class MyVpnService : VpnService() {
             connectionPhaseFlow.collect { phase ->
                 if (phase == Phase.CONNECTED) {
                     com.mlmvpn.scanner.update.UpdateChecker.checkForUpdate(applicationContext)
+                    // The one point that means the engine actually came up. Recorded here rather
+                    // than at start so the Quick Settings tile can never replay something that
+                    // failed -- see LastEngine. Every feature that reaches this service does so
+                    // with the same two extras, so one hook covers all of them.
+                    // Not for game sessions: those are per-game configs (a DNS-only resolver, a
+                    // game-only tunnel), and replaying one from the Quick Settings tile would
+                    // bring it up as a whole-device VPN that routes nothing the user expects.
+                    lastConnectIntent?.takeIf { !it.getBooleanExtra("GAME_MODE", false) }?.let { started ->
+                        com.mlmvpn.scanner.data.LastEngine.recordXray(
+                            applicationContext,
+                            started.getStringExtra("NODE_URI"),
+                            started.getStringExtra("NODE_ID"),
+                        )
+                    }
                 }
             }
         }
@@ -214,8 +287,26 @@ class MyVpnService : VpnService() {
                 .edit()
                 .putBoolean("game_mode_active", true)
                 .putString("game_package", gamePackage)
+                // How much of the game's traffic enters the tunnel -- see setupVpn. Callers that
+                // do not say get FULL, which is exactly what every game session did before.
+                .putString("game_route_profile", intent.getStringExtra("GAME_ROUTE_PROFILE") ?: GAME_ROUTE_FULL)
+                .putString("game_dns_ip", intent.getStringExtra("GAME_DNS_IP") ?: DEFAULT_GAME_DNS_IP)
+                // DNS_ONLY plus these IPv4 addresses (comma list): the hosts whose TLS the session
+                // sends out fragmented. Empty for every other profile.
+                .putString("game_split_routes", intent.getStringExtra("GAME_SPLIT_ROUTES") ?: "")
                 .apply()
             Log.d("MyVpnService", "Game Mode activated for: $gamePackage")
+        } else {
+            // A normal connect must not inherit the last game session's routing. The flag was
+            // only ever cleared by STOP and onDestroy, so connecting a config straight after a
+            // game session (no STOP in between) kept the tunnel limited to the game app.
+            getSharedPreferences("game_booster_prefs", android.content.Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean("game_mode_active", false)
+                .remove("game_route_profile")
+                .remove("game_dns_ip")
+                .remove("game_split_routes")
+                .apply()
         }
 
         // Dedicated DNS (per-user ECS-steering worker) — passed by GameBoosterManager for game
@@ -229,14 +320,43 @@ class MyVpnService : VpnService() {
             } catch (e: Exception) { emptyList() }
         } ?: emptyList()
 
-        val sharedPrefs = getSharedPreferences("app_settings", android.content.Context.MODE_PRIVATE)
-        val backendDns = sharedPrefs.getString("backend_dns", "1.1.1.1") ?: "1.1.1.1"
-        val allowLan = androidx.preference.PreferenceManager.getDefaultSharedPreferences(this).getBoolean("allow_lan", false)
+        // Through NetworkSettings, not straight out of two different preference files. These
+        // are app-wide choices that every engine has to agree on; read locally they drifted.
+        val backendDns = com.mlmvpn.scanner.utils.NetworkSettings.primaryDns(this)
+        // sharingActive, not allowLan: the raw switch says what the user chose, this says
+        // whether it applies right now once the share timer and the own-network-only rule
+        // have had their say.
+        val allowLan = com.mlmvpn.scanner.lan.LanShare.sharingActive(this)
+        val lanPassword = com.mlmvpn.scanner.utils.NetworkSettings.lanPassword(this)
+            .takeIf { allowLan }
+        val lanBlocked = com.mlmvpn.scanner.utils.NetworkSettings.lanBlocked(this)
+            .takeIf { allowLan }.orEmpty()
         val vpnPrefs = getSharedPreferences("vpn_routing_prefs", android.content.Context.MODE_PRIVATE)
-        val mtu = vpnPrefs.getInt("vpn_mtu", 1420)
+
+        // Which of this service's four features is being started, so the right MTU field applies.
+        //
+        // This service carries V2Ray configs, Quick Connect, the MLM Gateway and SNI anti-filter,
+        // and until now they were indistinguishable once the intent arrived: every caller passed
+        // NODE_URI and NODE_ID and nothing else. They are different products on different paths
+        // -- Gateway is SoftEther inside TLS inside TCP, Quick Connect is whatever the pool row
+        // says -- so they cannot share one MTU any more than they share one server. Callers that
+        // do not name a profile are treated as V2Ray, which is what they all were.
+        val mtuMethod = com.mlmvpn.scanner.utils.NetworkSettings.Method.byId(
+            intent.getStringExtra("MTU_PROFILE")
+        ) ?: com.mlmvpn.scanner.utils.NetworkSettings.Method.V2RAY
+        val mtu = com.mlmvpn.scanner.utils.NetworkSettings.mtu(this, mtuMethod)
 
         serviceScope.launch {
             xrayMutex.withLock {
+                // The five-transport stack (MASQUE/WireGuard/WoW/Psiphon/Tor) runs under its own
+                // VpnService, and Android grants the device tun to exactly one at a time. The
+                // second establish() does not fail -- it takes the interface away from the first,
+                // which carries on believing it still has one. So this is the choke point every
+                // Xray-family connect passes through, and it makes sure the other side has let
+                // go before we build a tun of our own. A no-op, and one volatile read, whenever
+                // nothing else is running.
+                com.mlmvpn.scanner.ui.tunnel.TunnelExclusion.releaseForXray(this@MyVpnService)
+
                 // Clean up any existing connection before starting a new one
                 try { vpnInterface?.close() } catch (e: Exception) {}
                 vpnInterface = null
@@ -255,20 +375,16 @@ class MyVpnService : VpnService() {
                 val isAetherCfg = nodeUri.startsWith("{") &&
                     org.json.JSONObject(nodeUri).optString("type") ==
                         com.mlmvpn.core.aether.AetherTunEngine.CONFIG_TYPE
-                // VPN Gate (OpenVPN): the openvpn3 core brings up its own VpnService, in its
-                // own :openvpn process. Establishing a TUN here as well would revoke the one
-                // it creates. Same arrangement as AmneziaWG above.
-                val isVpnGate = nodeUri.startsWith(
-                    com.mlmvpn.scanner.engines.vpngate.VpnGateEngine.URI_SCHEME)
-                // SoftEther's own SSL-VPN. Same arrangement: the vendored client owns the TUN.
+                // SoftEther's own SSL-VPN: the vendored client owns the TUN, so this service
+                // deliberately does not build one. Same arrangement as AmneziaWG above.
                 val isSoftEther = nodeUri.startsWith(
                     com.mlmvpn.scanner.engines.vpngate.SoftEtherEngine.URI_SCHEME)
                 // These engines own their own TUN, so this service deliberately does not build
                 // one — fd stays 0 by design, exactly as in proxy mode.
-                val engineOwnsTun = isAmneziaWg || isAetherCfg || isVpnGate || isSoftEther
+                val engineOwnsTun = isAmneziaWg || isAetherCfg || isSoftEther
                 var fd = 0
                 if (!isProxyMode && !engineOwnsTun) {
-                    setupVpn(backendDns, mtu, isRawJsonConfig)
+                    setupVpn(backendDns, mtu, isRawJsonConfig, noIpv6 = isRawJsonConfig && routesByApp(nodeUri))
                     fd = vpnInterface?.fd ?: 0
                 }
                 // Surface the TUN state in the in-app GST log so we can tell whether the
@@ -337,9 +453,23 @@ class MyVpnService : VpnService() {
                         // 1280 is the IPv6 minimum MTU, so it is deliverable on every path
                         // that carries IP at all. Roughly 10% more per-packet overhead, in
                         // exchange for no drops.
-                        val aetherMtu = minOf(mtu, AETHER_TUN_MTU)
+                        // A DEFAULT now, not a cap.
+                        //
+                        // It used to be `minOf(mtu, 1280)`, which silently overrode anything the
+                        // user set above it -- so on this path the MTU field in Settings could
+                        // only ever be turned down, and a user who raised it saw no change and no
+                        // reason. The number below is still what an untouched install gets, for
+                        // every reason set out above; an explicit choice is now obeyed, including
+                        // upward. That is the point of the setting.
+                        // MASQUE's field, not this feature's: the constraint being answered here
+                        // is QUIC's framing overhead, which is the same overhead the MASQUE
+                        // transport measures itself against, and a user who tuned one and found
+                        // the other unchanged would be right to call that broken.
+                        val aetherMtu = com.mlmvpn.scanner.utils.NetworkSettings.mtu(
+                            this@MyVpnService, com.mlmvpn.scanner.utils.NetworkSettings.Method.MASQUE
+                        )
                         Log.i(com.mlmvpn.core.aether.AetherEngine.PERF_TAG,
-                            "tun mtu: $aetherMtu (app default $mtu, capped for MASQUE/QUIC overhead)")
+                            "tun mtu: $aetherMtu (default $AETHER_TUN_MTU for MASQUE/QUIC overhead)")
                         currentEngine = com.mlmvpn.core.aether.AetherTunEngine(
                             openTun = {
                                 setupVpn(backendDns, aetherMtu, false)
@@ -436,6 +566,8 @@ class MyVpnService : VpnService() {
                                     localPort = localPort,
                                     backendDns = backendDns,
                                     allowLan = allowLan,
+                                    lanPassword = lanPassword,
+                                    lanBlocked = lanBlocked,
                                     // fd==0 means setupVpn() was skipped (proxy mode, or a TUN
                                     // establish failure) -- a "tun" inbound with no real fd to
                                     // attach to isn't just inert, it hands xray-core a bogus
@@ -483,29 +615,6 @@ class MyVpnService : VpnService() {
                             Log.d("MyVpnService", "SoftEther Engine Started Successfully!")
                             connectionPhaseFlow.value = Phase.CONNECTED
                         }
-                    } else if (isVpnGate) {
-                        Log.d("MyVpnService", "VPN Gate (OpenVPN) config detected")
-                        // Auto-switch re-dials whatever URI is stored for the node as a VLESS
-                        // config; it cannot do anything with a vpngate:// sentinel, so keep it
-                        // out of this session entirely.
-                        autoSwitchJob?.cancel()
-                        // openvpn3 driven directly, in this process, on this service's own TUN.
-                        // The AAR's own service wrapper is only a shell around the same core
-                        // and silently discards every diagnostic it produces.
-                        currentEngine = com.mlmvpn.scanner.engines.vpngate.Ovpn3Engine()
-                        val success = currentEngine?.start(this@MyVpnService, nodeUri, localPort) ?: false
-                        if (!success) {
-                            Log.e("MyVpnService", "Failed to start VPN Gate engine")
-                            try { currentEngine?.stop() } catch (_: Exception) {}
-                            currentEngine = null
-                            connectionPhaseFlow.value = Phase.FAILED
-                            isRunning = false
-                            connectedNodeId = null
-                            stopSelf()
-                        } else {
-                            Log.d("MyVpnService", "VPN Gate Engine Started Successfully!")
-                            connectionPhaseFlow.value = Phase.CONNECTED
-                        }
                     } else if (isAmneziaWg) {
                         Log.d("MyVpnService", "AmneziaWG Config detected")
                         currentEngine = com.mlmvpn.core.warp.AmneziaWgInjector(fd)
@@ -549,6 +658,15 @@ class MyVpnService : VpnService() {
                                     }
                                 }
                                 
+                                // A config that routes by APP (a rule with `process`) needs the
+                                // connection's real destination address kept: the owner lookup asks
+                                // Android about (source, destination) exactly as the app opened it,
+                                // and sniffing that REPLACES the destination with the domain leaves
+                                // it nothing to ask with — every app rule would silently never match.
+                                // routeOnly keeps the domain for domain rules and the address for
+                                // the lookup (setupVpn kept IPv6 off for it). Every other config
+                                // keeps its behaviour.
+                                val routesByApp = routesByApp(nodeUri)
                                 if (!hasTun) {
                                     val tunInbound = org.json.JSONObject().apply {
                                         put("protocol", "tun")
@@ -563,7 +681,7 @@ class MyVpnService : VpnService() {
                                         put("sniffing", org.json.JSONObject().apply {
                                             put("enabled", true)
                                             put("destOverride", org.json.JSONArray().put("fakedns").put("tls").put("http").put("quic"))
-                                            put("routeOnly", false)
+                                            put("routeOnly", routesByApp)
                                         })
                                     }
                                     // Insert tun as the first inbound
@@ -611,11 +729,22 @@ class MyVpnService : VpnService() {
                         } else {
                             nodeUri
                         }
-                        
-                        
+
+                        // A whole config brings its own routing, so the Gemini / Google apps fix
+                        // that generateConfig builds in has to be fitted in here -- only where the
+                        // tunnel is a worker, and not at all with the switch off. See
+                        // XrayJsonGenerator.applyGoogleFix.
+                        val startConfig = com.mlmvpn.scanner.utils.XrayJsonGenerator.applyGoogleFix(finalConfig)
+                            ?.also {
+                                com.mlmvpn.scanner.engines.gst.GstLog.i(
+                                    "MyVpnService", "Gemini / Google apps fix applied to this config"
+                                )
+                            }
+                            ?: finalConfig
+
                         currentEngine = com.mlmvpn.core.warp.VlessXrayInjector(fd)
-                        
-                        val success = currentEngine?.start(this@MyVpnService, finalConfig, localPort) ?: false
+
+                        val success = currentEngine?.start(this@MyVpnService, startConfig, localPort) ?: false
                         if (!success) {
                             com.mlmvpn.scanner.engines.gst.GstLog.e("MyVpnService", "JSON engine failed to start")
                             Log.e("MyVpnService", "Failed to start JSON engine")
@@ -649,11 +778,19 @@ class MyVpnService : VpnService() {
 
                         // Auto-start RSTA Spoof if this is an SNI config (routes through local RSTA proxy)
                         val isSniConfig = config.address == "127.0.0.1" && config.port == 40443
+                        sniSessionFlow.value = isSniConfig
                         if (isSniConfig) {
                             Log.d("MyVpnService", ">>> SNI config detected â€” ensuring RSTA Spoof is running")
-                            val rstaOk = com.mlmvpn.scanner.engines.rstaspoof.RstaSpoofManager.ensureRunning(this@MyVpnService)
+                            val rstaOk = if (frontHeld) {
+                                com.mlmvpn.scanner.engines.rstaspoof.RstaSpoofManager.isRunningFlow.value
+                            } else {
+                                com.mlmvpn.scanner.engines.rstaspoof.RstaSpoofManager
+                                    .acquire(this@MyVpnService)
+                                    .also { frontHeld = true }
+                            }
                             if (!rstaOk) {
                                 Log.e("MyVpnService", "RSTA Spoof failed to start â€” cannot connect SNI config")
+                                releaseFront()
                                 stopSelf()
                                 return@withLock
                             }
@@ -663,6 +800,7 @@ class MyVpnService : VpnService() {
                             Log.d("MyVpnService", "RSTA port 40443 ready: $portReady")
                             if (!portReady) {
                                 Log.e("MyVpnService", "RSTA port 40443 is NOT listening â€” aborting connection")
+                                releaseFront()
                                 stopSelf()
                                 return@withLock
                             }
@@ -673,6 +811,8 @@ class MyVpnService : VpnService() {
                             localPort = localPort,
                             backendDns = backendDns,
                             allowLan = allowLan,
+                            lanPassword = lanPassword,
+                            lanBlocked = lanBlocked,
                             // Proxy mode (PROXY_MODE extra) deliberately skips setupVpn() above,
                             // so fd stays 0 -- there is no real TUN file descriptor for xray-core
                             // to attach a "tun" inbound to. Building the config with
@@ -691,6 +831,16 @@ class MyVpnService : VpnService() {
                             pinnedHostIps = pinnedHosts
                         )
                         Log.d("MyVpnService", "Xray JSON config generated (${jsonConfig.length} chars)")
+                        if (jsonConfig.contains("\"tag\":\"${com.mlmvpn.scanner.utils.XrayJsonGenerator.QUIC_REFUSAL_TAG}\"")) {
+                            com.mlmvpn.scanner.engines.gst.GstLog.i(
+                                "MyVpnService", "QUIC refused at once (Gemini / Google apps fix)"
+                            )
+                        }
+                        if (jsonConfig.contains("\"tag\":\"${com.mlmvpn.scanner.utils.XrayJsonGenerator.GOOGLE_V4_TAG}\"")) {
+                            com.mlmvpn.scanner.engines.gst.GstLog.i(
+                                "MyVpnService", "Google reached by IPv4 address (Gemini / Google apps fix)"
+                            )
+                        }
                         
                         currentEngine = com.mlmvpn.core.warp.VlessXrayInjector(fd)
                         val success = currentEngine?.start(this@MyVpnService, jsonConfig, localPort) ?: false
@@ -712,25 +862,104 @@ class MyVpnService : VpnService() {
         return START_STICKY
     }
 
-    private fun setupVpn(backendDns: String = "1.1.1.1", mtu: Int = 1420, isRawJsonConfig: Boolean = false) {
+    /**
+     * A raw Xray config that routes by APP (a rule with `process`, e.g. GitHub Tunnel's per-app
+     * exit country). Such a config needs two things from this service, both keyed on this one
+     * test so they cannot disagree: the tun keeps each connection's real destination address
+     * (sniffing `routeOnly`) for the owner lookup, and IPv6 stays off (see [setupVpn]'s `noIpv6`).
+     */
+    private fun routesByApp(config: String): Boolean = try {
+        val rules = org.json.JSONObject(config).optJSONObject("routing")?.optJSONArray("rules")
+        rules != null && (0 until rules.length()).any { (rules.optJSONObject(it)?.optJSONArray("process")?.length() ?: 0) > 0 }
+    } catch (_: Exception) { false }
+
+    /**
+     * `noIpv6`: add no IPv6 address or route, which makes Android BLOCK the family for every app
+     * (not leak it): a v6 connect fails at once, apps fall back to IPv4, and the system resolver
+     * stops returning AAAA on a network with no v6. Needed with routeOnly: the tun then forwards
+     * the address an app dialled instead of the sniffed name, and the far end (a GitHub runner)
+     * has no IPv6 — every v6 site failed with the connection closed.
+     */
+    private fun setupVpn(backendDns: String = "1.1.1.1", mtu: Int = 1420, isRawJsonConfig: Boolean = false, noIpv6: Boolean = false) {
         if (vpnInterface != null) return
 
         try {
+            val gamePrefs = applicationContext.getSharedPreferences("game_booster_prefs", android.content.Context.MODE_PRIVATE)
+            val isGameMode = gamePrefs.getBoolean("game_mode_active", false)
+            val routeProfile = if (isGameMode) {
+                gamePrefs.getString("game_route_profile", GAME_ROUTE_FULL) ?: GAME_ROUTE_FULL
+            } else GAME_ROUTE_FULL
+            val split = routeProfile == GAME_ROUTE_SPLIT
+            val dnsOnly = routeProfile == GAME_ROUTE_DNS_ONLY || split
+
             val builder = Builder()
                 .setSession("Cloudflare VPN")
                 .addAddress("10.0.0.2", 32)
-                .addAddress("fd00:1:2:3:4:5:6:2", 128)
-                .addRoute("0.0.0.0", 0)
-                .addRoute("::", 0)
-                .addDnsServer(backendDns)
-                .addDnsServer("8.8.8.8")
-                .setMtu(mtu)
-            // Routing Logic
-            val gamePrefs = applicationContext.getSharedPreferences("game_booster_prefs", android.content.Context.MODE_PRIVATE)
-            val isGameMode = gamePrefs.getBoolean("game_mode_active", false)
+            if (split) {
+                // SPLIT = DNS_ONLY plus a handful of /32s: the sign-in hosts the booster proved
+                // are filtered on their TLS name and open when the ClientHello is sent in pieces.
+                // Only connections to those addresses enter the tunnel (to the fragmenting
+                // outbound); the match and everything else still leave by the physical network.
+                (gamePrefs.getString("game_split_routes", "") ?: "").split(',')
+                    .map { it.trim() }
+                    .filter { it.matches(Regex("""^\d{1,3}(\.\d{1,3}){3}$""")) }
+                    .distinct().take(MAX_SPLIT_ROUTES)
+                    .forEach { ip ->
+                        try { builder.addRoute(ip, 32) } catch (e: Exception) { Log.w("MyVpnService", "split route $ip refused: ${e.message}") }
+                    }
+            }
+            if (dnsOnly) {
+                // Game booster, DNS steering: ONLY the resolver enters the tunnel.
+                //
+                // Routing 0.0.0.0/0 here -- what every DNS boost used to do -- sent all of the
+                // game's UDP through Xray's userspace TUN and freedom outbound just to rewrite
+                // DNS, an extra hop on exactly the traffic whose ping is the point. With one /32
+                // route the game's DNS queries come to us and everything else falls through to
+                // the physical network (Android's VPN fall-through rule for unrouted
+                // destinations), on the kernel path, untouched.
+                //
+                // IPv6 is left unconfigured on purpose: with no v6 address, route or resolver the
+                // VPN blocks the family for the game, which then uses IPv4 -- the family our
+                // resolver answers for and the booster measured.
+                val dnsIp = gamePrefs.getString("game_dns_ip", DEFAULT_GAME_DNS_IP) ?: DEFAULT_GAME_DNS_IP
+                builder.addRoute(dnsIp, 32)
+                builder.addDnsServer(dnsIp)
+                Log.i("MyVpnService", "game routing: DNS only ($dnsIp) -- gameplay stays on the physical network")
+            } else {
+                builder.addRoute("0.0.0.0", 0)
+                // IPv6 as a whole, and only above 1280.
+                //
+                // 1280 is IPv6's minimum link MTU and the kernel enforces it: putting a v6
+                // address on an interface below that fails, and establish() then comes back
+                // as "Cannot set address" with no tunnel at all. Below it, neither the
+                // address NOR the route is added -- a route without an address of its family
+                // is dropped by Android, which leaves v6 unclaimed and leaking over the
+                // carrier link, while adding nothing of the family makes VpnService block it.
+                if (noIpv6) {
+                    Log.i("MyVpnService", "IPv6 blocked: this config routes by app (routeOnly keeps v6 addresses)")
+                } else if (mtu >= 1280) {
+                    builder.addAddress("fd00:1:2:3:4:5:6:2", 128)
+                    builder.addRoute("::", 0)
+                } else {
+                    Log.i("MyVpnService", "IPv6 blocked: MTU $mtu is under the IPv6 minimum")
+                }
+                builder.addDnsServer(backendDns)
+                builder.addDnsServer("8.8.8.8")
+            }
+            builder.setMtu(mtu)
+            // Every VPN counts as metered by default from API 29, and games read that: some warn
+            // about or throttle downloads on a "metered" connection. A game session is not one.
+            if (isGameMode && android.os.Build.VERSION.SDK_INT >= 29) builder.setMetered(false)
 
+            // Routing Logic
             if (isGameMode) {
                 val gamePackage = gamePrefs.getString("game_package", null)
+                if (dnsOnly) {
+                    // This app too, so the booster can check from the inside that the game's DNS
+                    // really is ours and that everything else really does fall through. Safe only
+                    // because a single /32 is routed: the engine's own sockets never match it.
+                    try { builder.addAllowedApplication(applicationContext.packageName) } catch (e: Exception) {}
+                }
                 if (gamePackage != null) {
                     try {
                         builder.addAllowedApplication(gamePackage)
@@ -743,6 +972,29 @@ class MyVpnService : VpnService() {
                     } catch (e: Exception) {
                         Log.e("MyVpnService", "Failed to add game package to VPN routing", e)
                     }
+                }
+            } else if (connectedNodeId == com.mlmvpn.scanner.engines.sanction.AntiSanctionManager.NODE_ID &&
+                com.mlmvpn.scanner.engines.sanction.AntiSanctionManager.routedPackages(applicationContext).isNotEmpty()
+            ) {
+                // Anti-sanction with apps chosen: only those packages enter the tunnel, and the
+                // config sends everything inside it to the worker. Domain rules cannot do this --
+                // a native app resolves through its own DoH, talks QUIC, and does its sign-in
+                // under Play Services' UID, so nothing written about "the app's domains" ever
+                // matches the traffic that actually matters.
+                val routed = com.mlmvpn.scanner.engines.sanction.AntiSanctionManager
+                    .routedPackages(applicationContext)
+                var added = 0
+                for (app in routed) {
+                    if (app == applicationContext.packageName) continue
+                    try { builder.addAllowedApplication(app); added++ } catch (e: Exception) {
+                        Log.w("MyVpnService", "anti-sanction: $app is not installed")
+                    }
+                }
+                Log.d("MyVpnService", "Anti-sanction: routing $added app(s) through the worker")
+                // addAllowedApplication with nothing valid would tunnel NOTHING; fall back to the
+                // whole device so the feature degrades to its domain behaviour instead of dying.
+                if (added == 0) {
+                    try { builder.addDisallowedApplication(applicationContext.packageName) } catch (e: Exception) {}
                 }
             } else {
                 val prefs = applicationContext.getSharedPreferences("vpn_routing_prefs", android.content.Context.MODE_PRIVATE)
@@ -826,6 +1078,10 @@ class MyVpnService : VpnService() {
         connectedNodeId = null
         isRunningFlow.value = false
         connectedNodeIdFlow.value = null
+        sniSessionFlow.value = false
+        // The front is a process, and this is the only place that knows this service is done with
+        // it. Without this the door stayed open after every SNI disconnect.
+        releaseFront()
         if (connectionPhaseFlow.value != Phase.FAILED) connectionPhaseFlow.value = Phase.IDLE
         try {
             getSharedPreferences("game_booster_prefs", android.content.Context.MODE_PRIVATE)
@@ -1016,9 +1272,15 @@ class MyVpnService : VpnService() {
         autoSwitchJob = serviceScope.launch {
             val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(this@MyVpnService)
             
+            // Never during a game session: auto-switch swaps the running config for a random node,
+            // which mid-match drops the game's connection and replaces a per-game route with a
+            // whole-device one. Asked again after every wait and right before switching -- a game
+            // session can begin at any point of a fifteen-minute interval or a long test round.
+            fun isGameSession() = getSharedPreferences("game_booster_prefs", android.content.Context.MODE_PRIVATE)
+                .getBoolean("game_mode_active", false)
+
             while (true) {
-                // Check if auto-switch is enabled
-                val isAutoSwitchEnabled = prefs.getBoolean("auto_switch_enabled", false)
+                val isAutoSwitchEnabled = prefs.getBoolean("auto_switch_enabled", false) && !isGameSession()
                 if (!isAutoSwitchEnabled) {
                     // Auto-switch is off by default, so for most users this branch is the only
                     // one that ever runs. Re-checking a single boolean every 10s meant ~8.6k
@@ -1032,7 +1294,7 @@ class MyVpnService : VpnService() {
                 kotlinx.coroutines.delay(intervalMinutes * 60 * 1000L)
                 
                 // Double check if still enabled after delay
-                if (!prefs.getBoolean("auto_switch_enabled", false) || !isRunning) continue
+                if (!prefs.getBoolean("auto_switch_enabled", false) || !isRunning || isGameSession()) continue
                 
                 val platformStr = prefs.getString("auto_switch_platform", "None") ?: "None"
                 
@@ -1090,10 +1352,10 @@ class MyVpnService : VpnService() {
                     }
                 }
                 
-                if (bestNode != null && connectedNodeId != bestNode.id && isRunning) {
+                if (bestNode != null && connectedNodeId != bestNode.id && isRunning && !isGameSession()) {
                     Log.d("AutoSwitch", "Found better node: ${bestNode.name} with score $bestScore. Switching...")
                     
-                    val isProxyMode = prefs.getBoolean("proxy_mode", false)
+                    val isProxyMode = com.mlmvpn.scanner.utils.NetworkSettings.proxyMode(this@MyVpnService)
                     val localPort = com.mlmvpn.scanner.utils.LocalPort.getString(this@MyVpnService)
                     val startIntent = Intent(this@MyVpnService, MyVpnService::class.java).apply {
                         putExtra("NODE_URI", bestNode.uri)

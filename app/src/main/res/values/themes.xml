@@ -22,6 +22,12 @@
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:navigationBarColor">@color/gs_bg</item>
 
+        <!-- IRANSansX for anything still drawn as an Android View. Compose gets it through
+             MaterialTheme's typography instead; both point at the same font resource so a
+             dialog built from XML and a screen built from Compose agree. -->
+        <item name="android:fontFamily">@font/iransansx</item>
+        <item name="fontFamily">@font/iransansx</item>
+
         <!-- Text Input fields -->
         <item name="textInputStyle">@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox</item>
         <item name="editTextStyle">@style/Widget.AppCompat.EditText</item>

@@ -9,6 +9,8 @@ import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
 
 class SubGenDeployer(private val context: Context) {
 
@@ -20,14 +22,9 @@ class SubGenDeployer(private val context: Context) {
 
     suspend fun deploySubWorker(account: CloudAccount, onProgress: (Int, String) -> Unit): Pair<Boolean, String> = withContext(Dispatchers.IO) {
         try {
-            val isCfat = account.token.startsWith("cfat_") || account.email.isEmpty()
-            val authHeaders = Headers.Builder().apply {
-                if (isCfat) add("Authorization", "Bearer ${account.token}")
-                else {
-                    add("X-Auth-Email", account.email)
-                    add("X-Auth-Key", account.token)
-                }
-            }.build()
+            // The one implementation, for the reason spelled out in SubGenManager: a local copy
+            // of these two branches is a copy that will not receive the next fix.
+            val authHeaders = com.mlmvpn.scanner.data.CloudAuth.headers(account)
 
             // 1. Check Subdomain
             onProgress(10, context.getString(com.mlmvpn.scanner.R.string.subgen_deploy_checking_sub))
@@ -126,7 +123,7 @@ class SubGenDeployer(private val context: Context) {
             if (namespaceId.isEmpty()) {
                 android.util.Log.e("SubGenDeployer", "KV Error Details: $kvErrorDetails")
                 if (kvErrorDetails.contains("10000") || kvErrorDetails.contains("Authentication error")) {
-                    return@withContext Pair(false, "خطای دسترسی کلادفلر: توکن شما دسترسی Workers KV Storage ندارد. لطفاً در تنظیمات توکن دسترسی KV را اضافه کنید.")
+                    return@withContext Pair(false, S(R.string.cloudflare_access_error_your_token_has_no))
                 }
                 return@withContext Pair(false, context.getString(com.mlmvpn.scanner.R.string.subgen_deploy_kv_error) + "\n" + kvErrorDetails)
             }
@@ -135,7 +132,7 @@ class SubGenDeployer(private val context: Context) {
             onProgress(60, context.getString(com.mlmvpn.scanner.R.string.subgen_deploy_upload))
             var workerScript = ""
             try {
-                context.assets.open("sub_worker.js").bufferedReader().use {
+                com.mlmvpn.scanner.store.StoreFiles.open(context, "sub_worker.js").bufferedReader().use {
                     workerScript = it.readText()
                 }
             } catch (e: Exception) {

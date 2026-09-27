@@ -49,6 +49,8 @@ import com.mlmvpn.scanner.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
 
 /**
  * The whole setup flow for the MITM domain-fronting profile, as a single card that lives at the
@@ -143,7 +145,7 @@ fun MitmSetupCard() {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
+                .clip(ControlShape)
                 .clickable { cardOpenState = !cardOpenValue },
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -163,27 +165,27 @@ fun MitmSetupCard() {
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text("دامین‌فرانتینگ — بدون سرور", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                Text(S(R.string.domain_fronting_no_server), color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    if (allDone && !cardOpenValue) "آماده است — کانفیگ پایین را انتخاب کنید"
-                    else "یوتیوب، اینستاگرام، واتس‌اپ، فیسبوک و ردیت بدون هیچ سرور و ورکری",
+                    if (allDone && !cardOpenValue) S(R.string.ready_pick_the_config_below)
+                    else S(R.string.youtube_instagram_whatsapp_facebook_and_reddit_with),
                     color = TextMuted, fontSize = 11.sp, lineHeight = 15.sp
                 )
             }
             if (allDone) {
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(20.dp))
+                        .clip(CardShape)
                         .background(GreenOk.copy(alpha = 0.18f))
                         .padding(horizontal = 10.dp, vertical = 4.dp)
                 ) {
-                    Text("آماده", color = GreenOk, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    Text(S(R.string.ready_2), color = GreenOk, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 }
             }
             Spacer(Modifier.width(4.dp))
             Icon(
-                Icons.Default.ExpandMore, contentDescription = if (cardOpenValue) "بستن" else "باز کردن",
+                Icons.Default.ExpandMore, contentDescription = if (cardOpenValue) S(R.string.collapse) else S(R.string.expand),
                 tint = TextMuted, modifier = Modifier.size(20.dp).rotate(cardArrow)
             )
         }
@@ -195,25 +197,25 @@ fun MitmSetupCard() {
         // ---- steps -----------------------------------------------------------------
         StepRow(
             index = 1,
-            title = "ساخت گواهی اختصاصی این گوشی",
-            subtitle = "برنامه خودش می‌سازد — چیزی از اینترنت دانلود نمی‌شود",
+            title = S(R.string.create_a_certificate_for_this_phone),
+            subtitle = S(R.string.the_app_builds_it_itself_nothing_is),
             done = certExists,
             active = !certExists
         )
         StepRow(
             index = 2,
-            title = "نصب گواهی در اندروید",
+            title = S(R.string.install_the_certificate_in_android),
             subtitle = if (MitmCertManager.canUseDirectInstaller)
-                "تنها مرحله‌ای که اندروید اجازه نمی‌دهد برنامه خودش انجام دهد"
+                S(R.string.the_one_step_android_will_not_let)
             else
-                "اندروید ۱۱ به بالا: فایل را ذخیره می‌کنیم و شما از تنظیمات نصبش می‌کنید",
+                S(R.string.android_11_and_above_we_save_the),
             done = certTrusted,
             active = certExists && !certTrusted
         )
         StepRow(
             index = 3,
-            title = "افزودن کانفیگ به همین پوشه",
-            subtitle = "بعد از این، کانفیگ پایین همین صفحه نمایش داده می‌شود",
+            title = S(R.string.add_the_config_to_this_folder),
+            subtitle = S(R.string.after_this_the_config_appears_at_the),
             done = configReady,
             active = certExists && certTrusted && !configReady,
             isLast = true
@@ -225,7 +227,7 @@ fun MitmSetupCard() {
         when {
             !certExists || !configReady -> {
                 ActionButton(
-                    text = if (busy) "در حال آماده‌سازی..." else "شروع راه‌اندازی",
+                    text = if (busy) S(R.string.preparing) else S(R.string.start_setup),
                     icon = Icons.Default.Rocket,
                     enabled = !busy,
                     accent = Primary
@@ -235,7 +237,7 @@ fun MitmSetupCard() {
                     scope.launch {
                         val ok = withContext(Dispatchers.IO) { MitmProfile.setUp(context) }
                         busy = false
-                        if (!ok) error = "ساخت گواهی یا خواندن کانفیگ ناموفق بود. یک‌بار دیگر تلاش کنید."
+                        if (!ok) error = S(R.string.building_the_certificate_or_reading_the_config)
                         refresh()
                     }
                 }
@@ -244,7 +246,7 @@ fun MitmSetupCard() {
                 // Android 10 and below: the system installer still accepts a certificate handed
                 // to it by an app, so this is a single confirmation for the user.
                 ActionButton(
-                    text = "نصب گواهی",
+                    text = S(R.string.install_the_certificate),
                     icon = Icons.Default.Shield,
                     enabled = true,
                     accent = YellowWarn
@@ -254,12 +256,12 @@ fun MitmSetupCard() {
                     val started = intent != null && runCatching { context.startActivity(intent) }.isSuccess
                     if (!started) {
                         runCatching { context.startActivity(MitmCertManager.securitySettingsIntent()) }
-                        error = "پنجره نصب باز نشد. از تنظیمات > امنیت > نصب گواهی، فایل را دستی نصب کنید."
+                        error = S(R.string.the_installer_did_not_open_install_the)
                     }
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "در پنجره‌ای که باز می‌شود، اگر اسم خواست همین نام پیشنهادی را تأیید کنید. اگر پرسید گواهی برای چیست، «CA Certificate» را انتخاب کنید.",
+                    S(R.string.in_the_window_that_opens_accept_the),
                     color = TextMuted, fontSize = 11.sp, lineHeight = 16.sp
                 )
             }
@@ -269,7 +271,7 @@ fun MitmSetupCard() {
                 // picking the file themselves. We put the file somewhere the picker can see it
                 // and spell out the taps -- there is no public deep link to that screen.
                 ActionButton(
-                    text = if (exportedName != null) "باز کردن تنظیمات اندروید" else "ذخیره گواهی در پوشه دانلود",
+                    text = if (exportedName != null) S(R.string.open_android_settings) else S(R.string.save_the_certificate_to_downloads),
                     icon = if (exportedName != null) Icons.Default.Shield else Icons.Default.Download,
                     enabled = !busy,
                     accent = YellowWarn
@@ -280,7 +282,7 @@ fun MitmSetupCard() {
                         scope.launch {
                             val name = withContext(Dispatchers.IO) { MitmCertManager.exportToDownloads(context) }
                             busy = false
-                            if (name == null) error = "ذخیره فایل گواهی ناموفق بود."
+                            if (name == null) error = S(R.string.could_not_save_the_certificate_file)
                             else exportedName = name
                         }
                     } else {
@@ -292,14 +294,14 @@ fun MitmSetupCard() {
                 Spacer(Modifier.height(10.dp))
                 if (exportedName == null) {
                     Text(
-                        "اندروید ۱۱ به بالا اجازه نمی‌دهد برنامه‌ها گواهی را خودشان نصب کنند. اول فایل را ذخیره می‌کنیم، بعد از تنظیمات نصبش می‌کنید.",
+                        S(R.string.android_11_and_above_does_not_let),
                         color = TextMuted, fontSize = 11.sp, lineHeight = 16.sp
                     )
                 } else {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
+                            .clip(ControlShape)
                             .background(SurfaceDark.copy(alpha = 0.7f))
                             .padding(12.dp)
                     ) {
@@ -307,19 +309,19 @@ fun MitmSetupCard() {
                             Icon(Icons.Default.Check, null, tint = GreenOk, modifier = Modifier.size(15.dp))
                             Spacer(Modifier.width(6.dp))
                             Text(
-                                "فایل ذخیره شد: پوشه Download → $exportedName",
+                                S(R.string.file_saved_download_folder_exportedname, exportedName),
                                 color = GreenOk, fontSize = 11.sp, fontWeight = FontWeight.Medium
                             )
                         }
                         Spacer(Modifier.height(8.dp))
-                        Text("حالا در تنظیمات اندروید:", color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text(S(R.string.now_in_android_settings), color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(5.dp))
                         listOf(
-                            "امنیت (Security) → تنظیمات بیشتر امنیت",
-                            "رمزگذاری و اطلاعات ورود (Encryption & credentials)",
-                            "نصب گواهی (Install a certificate)",
-                            "گواهی CA را انتخاب کنید و «Install anyway» را بزنید",
-                            "از پوشه Download فایل «$exportedName» را انتخاب کنید"
+                            S(R.string.security_more_security_settings),
+                            S(R.string.encryption_credentials),
+                            S(R.string.install_a_certificate),
+                            S(R.string.choose_ca_certificate_and_tap_install_anyway),
+                            S(R.string.pick_exportedname_from_the_download_folder, exportedName)
                         ).forEachIndexed { i, line ->
                             Row(modifier = Modifier.padding(bottom = 3.dp), verticalAlignment = Alignment.Top) {
                                 Text("${i + 1}.", color = YellowWarn, fontSize = 10.sp, fontWeight = FontWeight.Bold)
@@ -329,7 +331,7 @@ fun MitmSetupCard() {
                         }
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "اگر جای این گزینه‌ها در گوشی شما کمی متفاوت بود، در جستجوی تنظیمات عبارت «certificate» را بزنید. بعد از نصب، به برنامه برگردید تا خودش تشخیص بدهد.",
+                            S(R.string.if_these_options_sit_somewhere_slightly_different),
                             color = TextDim, fontSize = 10.sp, lineHeight = 14.sp
                         )
                     }
@@ -339,7 +341,7 @@ fun MitmSetupCard() {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
+                        .clip(ControlShape)
                         .background(GreenOk.copy(alpha = 0.12f))
                         .padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -347,7 +349,7 @@ fun MitmSetupCard() {
                     Icon(Icons.Default.Check, null, tint = GreenOk, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        "همه چیز آماده است. کانفیگ پایین را انتخاب و اتصال را بزنید.",
+                        S(R.string.everything_is_ready_pick_the_config_below),
                         color = GreenOk, fontSize = 12.sp, fontWeight = FontWeight.Medium
                     )
                 }
@@ -368,19 +370,19 @@ fun MitmSetupCard() {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
+                .clip(ControlShape)
                 .background(YellowWarn.copy(alpha = 0.09f))
-                .border(1.dp, YellowWarn.copy(alpha = 0.30f), RoundedCornerShape(12.dp))
+                .border(1.dp, YellowWarn.copy(alpha = 0.30f), ControlShape)
                 .padding(12.dp),
             verticalAlignment = Alignment.Top
         ) {
             Icon(Icons.Default.Language, null, tint = YellowWarn, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(10.dp))
             Column {
-                Text("فقط در مرورگر کار می‌کند", color = YellowWarn, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text(S(R.string.works_in_the_browser_only), color = YellowWarn, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(3.dp))
                 Text(
-                    "سایت‌ها را در کروم (یا هر مرورگر مشابه) باز کنید. اپلیکیشن یوتیوب و اینستاگرام با این روش باز نمی‌شوند — این محدودیت خود اندروید است. برای فایرفاکس باید گزینه استفاده از گواهی‌های شخصی را هم روشن کنید.",
+                    S(R.string.open_the_sites_in_chrome_or_any),
                     color = TextMuted, fontSize = 11.sp, lineHeight = 16.sp
                 )
             }
@@ -400,15 +402,15 @@ fun MitmSetupCard() {
                 .padding(vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(Icons.Default.HelpOutline, null, tint = Primary, modifier = Modifier.size(15.dp))
+            Icon(Icons.Default.HelpOutline, null, tint = TextMuted, modifier = Modifier.size(15.dp))
             Spacer(Modifier.width(6.dp))
             Text(
-                "راهنمای نصب گواهی برای برندهای مختلف",
-                color = Primary, fontSize = 11.sp, fontWeight = FontWeight.Medium
+                S(R.string.certificate_installation_by_phone_brand),
+                color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Medium
             )
             Spacer(Modifier.weight(1f))
             Icon(
-                Icons.Default.ExpandMore, null, tint = Primary,
+                Icons.Default.ExpandMore, null, tint = TextMuted,
                 modifier = Modifier.size(18.dp).rotate(guideArrow)
             )
         }
@@ -417,70 +419,70 @@ fun MitmSetupCard() {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
+                    .clip(ControlShape)
                     .background(SurfaceDark.copy(alpha = 0.7f))
                     .padding(12.dp)
             ) {
                 Text(
-                    "سریع‌ترین راه در همه‌ی گوشی‌ها: در نوار جستجوی خودِ تنظیمات یکی از این‌ها را بنویسید:",
+                    S(R.string.the_quickest_way_on_any_phone_type),
                     color = TextPrimary, fontSize = 11.sp, lineHeight = 16.sp
                 )
                 Spacer(Modifier.height(6.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf("certificate", "گواهی", "credentials").forEach { kw ->
+                    listOf("certificate", S(R.string.certificate), "credentials").forEach { kw ->
                         Box(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
+                                .clip(RoundedCornerShape(8.dp))
                                 .background(Primary.copy(alpha = 0.15f))
                                 .padding(horizontal = 8.dp, vertical = 3.dp)
                         ) {
-                            Text(kw, color = Primary, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                            Text(kw, color = TextPrimary, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
                         }
                     }
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "بعد گزینه‌ای شبیه «نصب گواهی» یا «Install a certificate» را بزنید و «گواهی CA / CA certificate» را انتخاب کنید. اگر اخطار داد، «Install anyway» را بزنید. در آخر فایل «${MitmCertManager.EXPORT_FILE_NAME}» را از پوشه Download انتخاب کنید.",
+                    S(R.string.then_tap_something_like_install_a_certificate, MitmCertManager.EXPORT_FILE_NAME),
                     color = TextMuted, fontSize = 10.sp, lineHeight = 15.sp
                 )
 
                 Spacer(Modifier.height(10.dp))
                 Box(Modifier.fillMaxWidth().height(1.dp).background(BorderDark))
                 Spacer(Modifier.height(10.dp))
-                Text("مسیر دستی بر اساس برند:", color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text(S(R.string.the_manual_path_by_brand), color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(8.dp))
 
                 BrandPath(
-                    "سامسونگ (One UI)",
-                    "تنظیمات ← بیومتریک و امنیت (Biometrics and security) ← تنظیمات امنیتی دیگر (Other security settings) ← نصب از حافظه دستگاه (Install from device storage) ← گواهی CA"
+                    S(R.string.samsung_one_ui),
+                    S(R.string.settings_biometrics_and_security_other_security_settings)
                 )
                 BrandPath(
-                    "شیائومی / ردمی / پوکو (MIUI و HyperOS)",
-                    "تنظیمات ← رمزها و امنیت (Passwords & security) ← امنیت سیستم / حریم خصوصی ← رمزگذاری و اطلاعات ورود (Encryption & credentials) ← نصب گواهی از حافظه"
+                    S(R.string.xiaomi_redmi_poco_miui_and_hyperos),
+                    S(R.string.settings_passwords_security_system_security_privacy_encrypti)
                 )
                 BrandPath(
-                    "پیکسل و اندروید خام (۱۲ و بالاتر)",
-                    "تنظیمات ← امنیت و حریم خصوصی (Security & privacy) ← تنظیمات بیشتر امنیت (More security settings) ← رمزگذاری و اطلاعات ورود ← نصب گواهی ← گواهی CA"
+                    S(R.string.pixel_and_stock_android_12_and_above),
+                    S(R.string.settings_security_privacy_more_security_settings_encryption)
                 )
                 BrandPath(
-                    "پیکسل و اندروید خام (۱۱)",
-                    "تنظیمات ← امنیت (Security) ← رمزگذاری و اطلاعات ورود (Encryption & credentials) ← نصب گواهی ← گواهی CA"
+                    S(R.string.pixel_and_stock_android_11),
+                    S(R.string.settings_security_encryption_credentials_install_a_certifica)
                 )
                 BrandPath(
-                    "هواوی و آنر (EMUI / MagicOS)",
-                    "تنظیمات ← امنیت (Security) ← تنظیمات بیشتر (More settings) ← رمزگذاری و اطلاعات ورود ← نصب گواهی از حافظه"
+                    S(R.string.huawei_and_honor_emui_magicos),
+                    S(R.string.settings_security_more_settings_encryption_credentials_insta)
                 )
                 BrandPath(
-                    "آنر / اوپو / ریلمی / وان‌پلاس (ColorOS و OxygenOS)",
-                    "تنظیمات ← رمز و امنیت (Password & security) ← امنیت سیستم (System security) ← رمزگذاری و اطلاعات ورود ← نصب از حافظه"
+                    S(R.string.honor_oppo_realme_oneplus_coloros_and_oxygenos),
+                    S(R.string.settings_password_security_system_security_encryption_creden)
                 )
                 BrandPath(
-                    "ویوو (Funtouch OS / OriginOS)",
-                    "تنظیمات ← تنظیمات بیشتر (More settings) ← امنیت و حریم خصوصی ← رمزگذاری و اطلاعات ورود ← نصب گواهی"
+                    S(R.string.vivo_funtouch_os_originos),
+                    S(R.string.settings_more_settings_security_privacy_encryption_credentia)
                 )
                 BrandPath(
-                    "موتورولا، نوکیا، ایسوس، سونی",
-                    "همان مسیر اندروید خام است — تنظیمات ← امنیت ← رمزگذاری و اطلاعات ورود ← نصب گواهی",
+                    S(R.string.motorola_nokia_asus_sony),
+                    S(R.string.the_same_as_stock_android_settings_security),
                     isLast = true
                 )
 
@@ -489,7 +491,7 @@ fun MitmSetupCard() {
                     Icon(Icons.Default.Info, null, tint = YellowWarn, modifier = Modifier.size(13.dp))
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        "اگر گوشی شما رمز یا الگوی قفل صفحه ندارد، اندروید قبل از نصب گواهی از شما می‌خواهد یکی تنظیم کنید — این شرط خود اندروید است.",
+                        S(R.string.if_your_phone_has_no_screen_lock),
                         color = TextMuted, fontSize = 10.sp, lineHeight = 15.sp
                     )
                 }
@@ -498,7 +500,7 @@ fun MitmSetupCard() {
                     Icon(Icons.Default.Language, null, tint = TextDim, modifier = Modifier.size(13.dp))
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        "فایرفاکس گواهی‌های نصب‌شده توسط کاربر را به‌صورت پیش‌فرض قبول نمی‌کند. اگر با فایرفاکس کار می‌کنید: About Firefox ← پنج بار روی لوگو بزنید ← Settings ← Secret Settings ← گزینه «Use third party CA certificates» را روشن کنید.",
+                        S(R.string.firefox_does_not_accept_user_installed_certificates),
                         color = TextDim, fontSize = 10.sp, lineHeight = 15.sp
                     )
                 }
@@ -516,7 +518,7 @@ fun MitmSetupCard() {
                 .padding(vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("جزئیات و مدیریت گواهی", color = TextMuted, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+            Text(S(R.string.certificate_details_and_management), color = TextMuted, fontSize = 11.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.weight(1f))
             Icon(
                 Icons.Default.ExpandMore, null, tint = TextMuted,
@@ -527,11 +529,11 @@ fun MitmSetupCard() {
         AnimatedVisibility(visible = expanded, enter = expandVertically(), exit = shrinkVertically()) {
             Column {
                 Spacer(Modifier.height(6.dp))
-                InfoLine("نام گواهی", MitmCertManager.commonName(context) ?: "—")
+                InfoLine(S(R.string.certificate_name), MitmCertManager.commonName(context) ?: "—")
                 val fp = remember(certExists) { MitmCertManager.fingerprint(context) }
                 if (fp != null) {
                     Spacer(Modifier.height(6.dp))
-                    Text("اثر انگشت (SHA-256)", color = TextDim, fontSize = 10.sp)
+                    Text(S(R.string.fingerprint_sha_256), color = TextDim, fontSize = 10.sp)
                     Spacer(Modifier.height(3.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
@@ -550,7 +552,7 @@ fun MitmSetupCard() {
                     Icon(Icons.Default.Info, null, tint = TextDim, modifier = Modifier.size(14.dp))
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        "این گواهی مخصوص همین گوشی است و هیچ‌جا ارسال نمی‌شود. گواهی کسی دیگر را هرگز نصب نکنید و گواهی خودتان را هم به کسی ندهید.",
+                        S(R.string.this_certificate_belongs_to_this_phone_alone),
                         color = TextDim, fontSize = 10.sp, lineHeight = 15.sp
                     )
                 }
@@ -568,31 +570,31 @@ fun MitmSetupCard() {
                                     MitmProfile.setUp(context)
                                 }
                                 busy = false
-                                if (!ok) error = "ساخت گواهی جدید ناموفق بود."
+                                if (!ok) error = S(R.string.could_not_build_a_new_certificate)
                                 refresh()
                             }
                         },
                         enabled = !busy,
-                        shape = RoundedCornerShape(10.dp),
+                        shape = ControlShape,
                         border = androidx.compose.foundation.BorderStroke(1.dp, BorderDark),
                         modifier = Modifier.weight(1f)
                     ) {
                         Icon(Icons.Default.Refresh, null, tint = TextMuted, modifier = Modifier.size(14.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("ساخت گواهی جدید", color = TextMuted, fontSize = 11.sp)
+                        Text(S(R.string.build_a_new_certificate), color = TextMuted, fontSize = 11.sp)
                     }
                     OutlinedButton(
                         onClick = { runCatching { context.startActivity(MitmCertManager.securitySettingsIntent()) } },
-                        shape = RoundedCornerShape(10.dp),
+                        shape = ControlShape,
                         border = androidx.compose.foundation.BorderStroke(1.dp, BorderDark),
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("تنظیمات امنیت", color = TextMuted, fontSize = 11.sp)
+                        Text(S(R.string.security_settings), color = TextMuted, fontSize = 11.sp)
                     }
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "اگر گواهی جدید بسازید، باید یک‌بار دیگر آن را نصب کنید و گواهی قبلی را از تنظیمات اندروید پاک کنید. مسیر حذف گواهی برای هر برند در «مرکز آموزش» آموزش شماره ۱۷ نوشته شده.",
+                    S(R.string.if_you_build_a_new_certificate_you),
                     color = TextDim, fontSize = 10.sp, lineHeight = 14.sp
                 )
             }
@@ -666,12 +668,20 @@ private fun ActionButton(
     Button(
         onClick = onClick,
         enabled = enabled,
-        shape = RoundedCornerShape(12.dp),
+        shape = ControlShape,
+        // Tinted glass with an accent rim and accent text -- the primary-action treatment used by
+        // Save in the add-node form and by the connect button. The old solid accent fill with
+        // BgDark text on it was the last survivor of the pre-redesign button style, and on the
+        // yellow accent it put near-black text on near-yellow, which is what was reported.
         colors = ButtonDefaults.buttonColors(
-            containerColor = accent,
-            contentColor = BgDark,
-            disabledContainerColor = accent.copy(alpha = 0.35f),
-            disabledContentColor = BgDark.copy(alpha = 0.6f)
+            containerColor = accent.copy(alpha = 0.22f),
+            contentColor = accent,
+            disabledContainerColor = accent.copy(alpha = 0.08f),
+            disabledContentColor = TextDim,
+        ),
+        border = androidx.compose.foundation.BorderStroke(
+            width = 1.5.dp,
+            color = if (enabled) accent else BorderDark,
         ),
         modifier = Modifier.fillMaxWidth().height(46.dp)
     ) {

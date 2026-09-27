@@ -1,26 +1,70 @@
 package com.mlmvpn.scanner.ui
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
+import com.mlmvpn.scanner.ui.settings.Ios
+import com.mlmvpn.scanner.ui.settings.IosScreen
+import com.mlmvpn.scanner.ui.settings.SettingsGroup
+import com.mlmvpn.scanner.ui.settings.SettingsRow
+import com.mlmvpn.scanner.ui.settings.SettingsSectionHeader
+import com.mlmvpn.scanner.ui.theme.BadgeShape
+import com.mlmvpn.scanner.ui.theme.ControlShape
+import com.mlmvpn.scanner.ui.theme.PanelShape
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
+
+// =================================================================================================
+// The tutorials screen.
+//
+// What this replaces: nineteen numbered `Card`s in one flat list, each of which EXPANDED IN PLACE
+// into a wall of raw text -- `**bold**` markers stripped rather than rendered, every line the same
+// size and weight, warnings detected by searching for an emoji, and the FAQ behind a translucent
+// `Dialog` at 90% × 85% of the screen.
+//
+// Reading a tutorial and choosing one are two different jobs, and the old screen did both in the
+// same scroll: expanding article 14 pushed articles 15-19 off the bottom and left you scrolling
+// through prose to get back to the list. So the list is a list -- grouped, so nineteen items are
+// four short sections -- and an article is a page.
+//
+// The content strings themselves are untouched. They were always written in a small markdown
+// dialect; the difference is that it is now rendered instead of stripped.
+// =================================================================================================
 
 data class HelpArticle(
     val id: String,
@@ -29,211 +73,436 @@ data class HelpArticle(
     val content: String
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * Which section an article belongs to.
+ *
+ * Keyed by id rather than by position so the two language lists cannot drift apart, and so adding
+ * an article is one line here instead of a renumbering of every title after it.
+ */
+private fun sectionOf(id: String): Int = when (id) {
+    "base", "home_screen", "quick_connect" -> 0
+    "nahan_users", "nahan_settings_guide", "sort_panel", "mythological_names", "cloudflare_limits" -> 1
+    "scanner_pro", "ip_archive", "fixed_ip", "edg_fixed_ip", "bpb_fixed_ip", "flag_logic" -> 2
+    else -> 3
+}
+
+private fun sectionTitles(isFa: Boolean): List<String> =
+    if (isFa) listOf("شروع کنید", "پنل‌ها و کانفیگ", "سرعت و آی‌پی ثابت", "ابزارهای دیگر")
+    else listOf("Getting started", "Panels & configs", "Speed & fixed IP", "Other tools")
+
 @Composable
 fun HelpCenterScreen(onDismiss: () -> Unit) {
-    var searchQuery by remember { mutableStateOf("") }
-    var expandedArticleId by remember { mutableStateOf<String?>(null) }
-    var showFaqModal by remember { mutableStateOf(false) }
-    // Physical back closes the FAQ first (Tutorial > FAQ), before leaving the screen.
-    androidx.activity.compose.BackHandler(enabled = showFaqModal) { showFaqModal = false }
-
-    val primaryColor = Color(0xFF4285F4)
-    val bgColor = Color(0xFF121212)
-    val surfaceColor = Color(0xFF1E1E1E)
-    val textColor = Color(0xFFE8EAED)
-    val mutedColor = Color(0xFF9AA0A6)
-
     val isFa = com.mlmvpn.scanner.utils.AppLocaleManager.getResolvedLocale().language == "fa"
 
-    val titleStr = if (isFa) "مرکز آموزش و مستندات" else "Help & Documentation Center"
-    val searchStr = if (isFa) "جستجو در آموزش‌ها..." else "Search tutorials..."
-    val noResultStr = if (isFa) "موردی یافت نشد!" else "No results found!"
+    var searchQuery by remember { mutableStateOf("") }
+    var openArticleId by remember { mutableStateOf<String?>(null) }
+    var showFaq by remember { mutableStateOf(false) }
 
-    val articles = remember(isFa) {
-        if (isFa) getHelpArticlesFa() else getHelpArticlesEn()
+    val articles = remember(isFa) { if (isFa) getHelpArticlesFa() else getHelpArticlesEn() }
+
+    // ---- pushed pages -----------------------------------------------------------------------
+    val openArticle = articles.firstOrNull { it.id == openArticleId }
+    if (openArticle != null) {
+        androidx.activity.compose.BackHandler { openArticleId = null }
+        HelpArticleScreen(
+            article = openArticle,
+            isFa = isFa,
+            onBack = { openArticleId = null },
+        )
+        return
+    }
+    if (showFaq) {
+        androidx.activity.compose.BackHandler { showFaq = false }
+        HelpFaqScreen(isFa = isFa, onBack = { showFaq = false })
+        return
     }
 
-    val filteredArticles = remember(searchQuery, isFa) {
-        if (searchQuery.isBlank()) articles
-        else articles.filter { 
-            it.title.contains(searchQuery, ignoreCase = true) || 
-            it.content.contains(searchQuery, ignoreCase = true) 
+    val query = searchQuery.trim()
+    val matches = remember(query, isFa) {
+        if (query.isBlank()) emptyList()
+        else articles.filter {
+            it.title.contains(query, ignoreCase = true) || it.content.contains(query, ignoreCase = true)
         }
     }
+    val sections = sectionTitles(isFa)
 
-    Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = bgColor
+    IosScreen(
+        title = if (isFa) "آموزش‌ها" else "Tutorials",
+        onBack = onDismiss,
+        backLabel = if (isFa) "خانه" else "Home",
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-                // Top App Bar
-                Surface(
-                    color = surfaceColor,
-                    modifier = Modifier.fillMaxWidth().height(64.dp),
-                    shadowElevation = 4.dp
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(onClick = onDismiss) {
-                            Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = textColor)
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = titleStr,
-                            color = primaryColor,
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.Bold
+        Spacer(Modifier.height(10.dp))
+
+        HelpSearchField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            placeholder = if (isFa) "جست‌وجو در آموزش‌ها" else "Search tutorials",
+        )
+
+        Spacer(Modifier.height(18.dp))
+
+        if (query.isNotBlank()) {
+            SettingsSectionHeader(
+                if (matches.isEmpty()) {
+                    if (isFa) "چیزی پیدا نشد" else "No results"
+                } else {
+                    if (isFa) "${faCount(matches.size)} نتیجه" else "${matches.size} results"
+                }
+            )
+            if (matches.isEmpty()) {
+                Text(
+                    if (isFa) {
+                        S(R.string.no_tutorial_matched_that_phrase_the_search) +
+                            S(R.string.so_a_shorter_word_may_do_better)
+                    } else {
+                        "Nothing matched. Search covers both titles and article text, so a shorter " +
+                            "word may work better."
+                    },
+                    color = Ios.SecondaryLabel,
+                    fontSize = 13.sp,
+                    lineHeight = 21.sp,
+                    modifier = Modifier.padding(horizontal = 20.dp),
+                )
+            } else {
+                SettingsGroup {
+                    matches.forEachIndexed { index, article ->
+                        if (index > 0) Separator()
+                        SettingsRow(
+                            title = article.title,
+                            subtitle = sections[sectionOf(article.id)],
+                            icon = article.icon,
+                            tint = Ios.Gray,
+                            onClick = { openArticleId = article.id },
                         )
                     }
                 }
+            }
+        } else {
+            // The FAQ first: it answers the questions people arrive with, before they go looking
+            // for the article that might contain the answer.
+            SettingsGroup {
+                SettingsRow(
+                    title = if (isFa) "پرسش‌های پرتکرار" else "Frequently asked questions",
+                    subtitle = if (isFa) "جواب کوتاه سؤال‌هایی که زیاد پرسیده می‌شود" else "Short answers to common questions",
+                    icon = Icons.Default.LiveHelp,
+                    tint = Ios.Teal,
+                    onClick = { showFaq = true },
+                )
+            }
 
-                // Search Bar
-                Box(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text(searchStr, color = mutedColor) },
-                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search", tint = mutedColor) },
-                        trailingIcon = {
-                            if (searchQuery.isNotEmpty()) {
-                                IconButton(onClick = { searchQuery = "" }) {
-                                    Icon(Icons.Default.Close, contentDescription = "Clear", tint = mutedColor)
-                                }
-                            }
-                        },
-                        textStyle = androidx.compose.ui.text.TextStyle(color = textColor),
-                        colors = TextFieldDefaults.outlinedTextFieldColors(
-                            focusedBorderColor = primaryColor,
-                            unfocusedBorderColor = Color(0xFF3C4043),
-                            cursorColor = primaryColor
-                        ),
-                        shape = RoundedCornerShape(12.dp),
-                        singleLine = true
-                    )
-                }
-
-                // FAQ Banner Button
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp)
-                        .padding(bottom = 16.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .clickable { showFaqModal = true },
-                    color = primaryColor.copy(alpha = 0.1f)
-                ) {
-                    Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.LiveHelp, contentDescription = null, tint = primaryColor, modifier = Modifier.size(28.dp))
-                        Spacer(modifier = Modifier.width(16.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(if (isFa) "پرسش و پاسخ‌های متداول (FAQ)" else "Frequently Asked Questions", color = primaryColor, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                            Text(if (isFa) "جواب سوالات پرتکرار شما اینجاست!" else "Find answers to common questions here!", color = textColor.copy(alpha = 0.7f), fontSize = 12.sp)
-                        }
-                        Icon(
-                            Icons.Default.ChevronRight, 
-                            contentDescription = null, 
-                            tint = primaryColor, 
-                            modifier = Modifier.scale(scaleX = if (isFa) -1f else 1f, scaleY = 1f)
+            sections.forEachIndexed { sectionIndex, sectionTitle ->
+                val inSection = articles.filter { sectionOf(it.id) == sectionIndex }
+                if (inSection.isEmpty()) return@forEachIndexed
+                Spacer(Modifier.height(20.dp))
+                SettingsSectionHeader(sectionTitle)
+                SettingsGroup {
+                    inSection.forEachIndexed { index, article ->
+                        if (index > 0) Separator()
+                        SettingsRow(
+                            title = article.title,
+                            icon = article.icon,
+                            tint = Ios.Gray,
+                            onClick = { openArticleId = article.id },
                         )
                     }
                 }
-
-                // Articles List
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
-                    contentPadding = PaddingValues(bottom = 100.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    if (filteredArticles.isEmpty()) {
-                        item {
-                            Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                                Text(noResultStr, color = mutedColor)
-                            }
-                        }
-                    }
-
-                    items(filteredArticles, key = { it.id }) { article ->
-                        ArticleCard(
-                            article = article,
-                            isExpanded = expandedArticleId == article.id,
-                            onToggle = { 
-                                expandedArticleId = if (expandedArticleId == article.id) null else article.id 
-                            }
-                        )
-                    }
-                }
+            }
         }
-    }
 
-    if (showFaqModal) {
-        FaqModal(onDismiss = { showFaqModal = false }, isFa = isFa)
+        Spacer(Modifier.height(24.dp))
     }
 }
 
+/**
+ * The search field.
+ *
+ * An `OutlinedTextField` with a Material border sat at the top of this screen and nowhere else in
+ * the app. This is the same rounded, borderless control the rest of the app uses, and its clear
+ * button only exists while there is something to clear.
+ */
 @Composable
-fun ArticleCard(article: HelpArticle, isExpanded: Boolean, onToggle: () -> Unit) {
-    val primaryColor = Color(0xFF4285F4)
-    val surfaceColor = Color(0xFF1E1E1E)
-    val textColor = Color(0xFFE8EAED)
-    val mutedColor = Color(0xFF9AA0A6)
-
-    Card(
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { onToggle() },
-        colors = CardDefaults.cardColors(containerColor = surfaceColor),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+private fun HelpSearchField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .clip(ControlShape)
+            .background(Color.White.copy(alpha = 0.07f))
+            .heightIn(min = 40.dp)
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            Icons.Default.Search,
+            contentDescription = null,
+            tint = Ios.SecondaryLabel,
+            modifier = Modifier.size(17.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            singleLine = true,
+            textStyle = TextStyle(color = Ios.Label, fontSize = 15.sp),
+            cursorBrush = SolidColor(Ios.Blue),
+            modifier = Modifier.weight(1f),
+            decorationBox = { inner ->
+                if (value.isEmpty()) {
+                    Text(placeholder, color = Ios.SecondaryLabel.copy(alpha = 0.7f), fontSize = 15.sp)
+                }
+                inner()
+            },
+        )
+        if (value.isNotEmpty()) {
+            Icon(
+                Icons.Default.Cancel,
+                contentDescription = null,
+                tint = Ios.SecondaryLabel,
+                modifier = Modifier
+                    .size(17.dp)
+                    .clip(CircleShape)
+                    .clickable { onValueChange("") },
+            )
+        }
+    }
+}
+
+/** One tutorial, on its own page. */
+@Composable
+fun HelpArticleScreen(article: HelpArticle, isFa: Boolean, onBack: () -> Unit) {
+    IosScreen(
+        title = article.title,
+        onBack = onBack,
+        backLabel = if (isFa) "آموزش‌ها" else "Tutorials",
+    ) {
+        Spacer(Modifier.height(12.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color.White.copy(alpha = 0.08f)),
+                contentAlignment = Alignment.Center,
+            ) {
                 Icon(
-                    imageVector = article.icon,
+                    article.icon,
                     contentDescription = null,
-                    tint = primaryColor,
-                    modifier = Modifier.size(28.dp)
-                )
-                Spacer(modifier = Modifier.width(16.dp))
-                Text(
-                    text = article.title,
-                    color = textColor,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f)
-                )
-                Icon(
-                    imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = null,
-                    tint = mutedColor
+                    tint = Ios.Label,
+                    modifier = Modifier.size(21.dp),
                 )
             }
+            Spacer(Modifier.width(12.dp))
+            Text(
+                article.title,
+                color = Ios.Label,
+                fontSize = 19.sp,
+                fontWeight = FontWeight.Bold,
+                lineHeight = 27.sp,
+                modifier = Modifier.weight(1f),
+            )
+        }
 
-            AnimatedVisibility(visible = isExpanded) {
-                Column(modifier = Modifier.padding(top = 16.dp)) {
-                    Divider(color = Color(0xFF333333), modifier = Modifier.padding(bottom = 16.dp))
-                    
-                    // Simple Markdown-like parser for bold and line breaks
-                    val lines = article.content.split("\n")
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        for (line in lines) {
-                            if (line.trim().isEmpty()) continue
-                            
-                            // Highlight lines starting with warning or note
-                            val isWarning = line.contains("⚠️")
-                            
-                            val parsedLine = line.replace("**", "") // Simplified, in a real app use an AnnotatedString builder
-                            
-                            Text(
-                                text = parsedLine,
-                                color = if (isWarning) Color(0xFFFFB74D) else Color.White.copy(alpha = 0.85f),
-                                fontSize = 14.sp,
-                                lineHeight = 22.sp
-                            )
-                        }
-                    }
+        Spacer(Modifier.height(18.dp))
+        HelpBody(article.content)
+        Spacer(Modifier.height(32.dp))
+    }
+}
+
+/** The FAQ, on a page rather than in a 90%-of-the-screen dialog pretending to be one. */
+@Composable
+fun HelpFaqScreen(isFa: Boolean, onBack: () -> Unit) {
+    val faqs = remember(isFa) { if (isFa) getFaqsFa() else getFaqsEn() }
+    IosScreen(
+        title = if (isFa) "پرسش‌های پرتکرار" else "FAQ",
+        onBack = onBack,
+        backLabel = if (isFa) "آموزش‌ها" else "Tutorials",
+    ) {
+        Spacer(Modifier.height(14.dp))
+        faqs.forEachIndexed { index, faq ->
+            if (index > 0) Spacer(Modifier.height(10.dp))
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .clip(PanelShape)
+                    .background(Color.White.copy(alpha = 0.05f))
+                    .padding(14.dp),
+            ) {
+                Row(verticalAlignment = Alignment.Top) {
+                    Icon(
+                        Icons.Default.HelpOutline,
+                        contentDescription = null,
+                        tint = Ios.SecondaryLabel,
+                        modifier = Modifier.size(17.dp).padding(top = 2.dp),
+                    )
+                    Spacer(Modifier.width(9.dp))
+                    Text(
+                        faq.q,
+                        color = Ios.Label,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        lineHeight = 22.sp,
+                    )
+                }
+                Spacer(Modifier.height(9.dp))
+                Row(verticalAlignment = Alignment.Top) {
+                    Icon(
+                        Icons.Default.CheckCircleOutline,
+                        contentDescription = null,
+                        tint = Ios.Green,
+                        modifier = Modifier.size(17.dp).padding(top = 2.dp),
+                    )
+                    Spacer(Modifier.width(9.dp))
+                    Text(
+                        faq.a,
+                        color = Ios.SecondaryLabel,
+                        fontSize = 13.sp,
+                        lineHeight = 22.sp,
+                    )
                 }
             }
+        }
+        Spacer(Modifier.height(28.dp))
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// The renderer.
+//
+// The old one did `line.replace("**", "")` with a comment admitting it was a placeholder, so every
+// heading, every field name and every emphasised warning in nineteen articles came out as ordinary
+// body text. The markup was always there; nothing rendered it.
+// -------------------------------------------------------------------------------------------------
+
+/** `**bold**` becomes bold. Everything else is left exactly as written. */
+private fun markdownLine(text: String, base: Color, bold: Color) = buildAnnotatedString {
+    var rest = text
+    while (true) {
+        val open = rest.indexOf("**")
+        if (open == -1) break
+        val close = rest.indexOf("**", open + 2)
+        if (close == -1) break
+        withStyle(SpanStyle(color = base)) { append(rest.substring(0, open)) }
+        withStyle(SpanStyle(color = bold, fontWeight = FontWeight.SemiBold)) {
+            append(rest.substring(open + 2, close))
+        }
+        rest = rest.substring(close + 2)
+    }
+    withStyle(SpanStyle(color = base)) { append(rest) }
+}
+
+/** A line that is nothing but one bold run is a heading, not a sentence in bold. */
+private fun isHeading(line: String): Boolean {
+    val t = line.trim()
+    return t.startsWith("**") && t.endsWith("**") && t.count { it == '*' } == 4 && t.length > 4
+}
+
+private val STEP = Regex(S(R.string.s_0_9_s))
+
+@Composable
+private fun HelpBody(content: String) {
+    val lines = content.split("\n")
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
+        var previousWasBlank = true
+        for (raw in lines) {
+            val line = raw.trim()
+            if (line.isEmpty()) {
+                previousWasBlank = true
+                continue
+            }
+
+            when {
+                // Warnings were detected by looking for the emoji and then tinted orange -- still
+                // one more line of running text. A callout is the shape that actually stops the eye.
+                line.contains("⚠️") -> {
+                    Spacer(Modifier.height(14.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(PanelShape)
+                            .background(Ios.Orange.copy(alpha = 0.13f))
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        Icon(
+                            Icons.Default.WarningAmber,
+                            contentDescription = null,
+                            tint = Ios.Orange,
+                            modifier = Modifier.size(17.dp).padding(top = 1.dp),
+                        )
+                        Spacer(Modifier.width(9.dp))
+                        Text(
+                            markdownLine(
+                                line.replace("⚠️", "").trim(),
+                                Ios.Label.copy(alpha = 0.92f),
+                                Ios.Label,
+                            ),
+                            fontSize = 13.sp,
+                            lineHeight = 22.sp,
+                        )
+                    }
+                    Spacer(Modifier.height(4.dp))
+                }
+
+                isHeading(line) -> {
+                    Spacer(Modifier.height(if (previousWasBlank) 16.dp else 10.dp))
+                    Text(
+                        line.trim('*'),
+                        color = Ios.Label,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        lineHeight = 24.sp,
+                    )
+                    Spacer(Modifier.height(7.dp))
+                }
+
+                STEP.matches(line) -> {
+                    val m = STEP.find(line)!!
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(19.dp)
+                                .clip(CircleShape)
+                                .background(Color.White.copy(alpha = 0.10f)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                m.groupValues[1],
+                                color = Ios.SecondaryLabel,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            markdownLine(m.groupValues[2], Ios.SecondaryLabel, Ios.Label),
+                            fontSize = 13.sp,
+                            lineHeight = 23.sp,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+
+                else -> {
+                    Spacer(Modifier.height(if (previousWasBlank) 8.dp else 5.dp))
+                    Text(
+                        markdownLine(line, Ios.SecondaryLabel, Ios.Label),
+                        fontSize = 13.sp,
+                        lineHeight = 23.sp,
+                    )
+                }
+            }
+            previousWasBlank = false
         }
     }
 }
@@ -242,7 +511,7 @@ fun getHelpArticlesFa(): List<HelpArticle> {
     return listOf(
         HelpArticle(
             id = "base",
-            title = "۱. آموزش پایه (صفر تا صد استفاده)",
+            title = S(R.string.basic_guide_start_to_finish),
             icon = Icons.Default.School,
             content = """
                 **آموزش قدم به قدم استفاده از برنامه:**
@@ -261,7 +530,7 @@ fun getHelpArticlesFa(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "fixed_ip",
-            title = "۲. آموزش سیستم آی‌پی ثابت و تغییر لوکیشن (اختصاصی Nahan)",
+            title = S(R.string.fixed_ip_and_location_switching_nahan_exclusive),
             icon = Icons.Default.LocationOn,
             content = """
                 **چگونه لوکیشن کانفیگ خود را برای همیشه روی یک کشور (مثلاً آمریکا) قفل کنیم؟**
@@ -271,12 +540,12 @@ fun getHelpArticlesFa(): List<HelpArticle> {
                 **حالت اول: برای یک کاربر خاص (مثلاً user1) - روش پیشنهادی**
                 ۱. در تب ابری، بخش تنظیمات NHN، به لیست کاربران بروید.
                 ۲. روی آیکون مداد ✏️ (ویرایش) کنار نام کاربر کلیک کنید.
-                ۳. آی‌پی کشور مورد نظر (مثلاً آمریکا) را در فیلد جدیدِ **«آی‌پی ثابت اختصاصی کاربر (Proxy IP)�** قرار دهید و ذخیره کنید.
+                ۳. آی‌پی کشور مورد نظر (مثلاً آمریکا) را در فیلد جدیدِ **«آی‌پی ثابت اختصاصی کاربر (Proxy IP)»** قرار دهید و ذخیره کنید.
                 *نتیجه:* با این کار، هم آدرس اولیه کانفیگ و هم تونل خروجی این کاربر روی آی‌پی آمریکا قفل می‌شود.
                 
                 **حالت دوم: برای کل پنل (همه کاربران به صورت پیش‌فرض)**
                 اگر می‌خواهید همه کاربران پنل آی‌پی ثابت آمریکا را داشته باشند:
-                ۱. در تنظیمات شبکه NHN، فیلد **«ریلی اختصاصی (Custom Relay)�** را با آی‌پی آمریکا پر کنید. (این فیلد لوکیشن خروجی وورکر را به اجبار به آمریکا می‌فرستد).
+                ۱. در تنظیمات شبکه NHN، فیلد **«ریلی اختصاصی (Custom Relay)»** را با آی‌پی آمریکا پر کنید. (این فیلد لوکیشن خروجی وورکر را به اجبار به آمریکا می‌فرستد).
                 ۲. فیلد **«آی‌پی ثابت کل پنل / فرگمنت»** را هم با همان آی‌پی پر کنید. (این فیلد آدرسِ خامِ کانفیگی که دریافت می‌کنید را آمریکا می‌کند).
                 
                 **⚠️ قدم بسیار مهم (استقرار مجدد):**
@@ -285,7 +554,7 @@ fun getHelpArticlesFa(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "nahan_users",
-            title = "۳. مدیریت کاربران نهان (ساخت کانفیگ برای دوستان)",
+            title = S(R.string.managing_nahan_users_making_configs_for_friends),
             icon = Icons.Default.GroupAdd,
             content = """
                 **چگونه به صورت نامحدود برای دوستان و خانواده کانفیگ بسازیم؟**
@@ -302,7 +571,7 @@ fun getHelpArticlesFa(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "flag_logic",
-            title = "۴. جریان نمایش پرچم نودها چیست؟",
+            title = S(R.string.how_does_the_node_flag_work),
             icon = Icons.Default.Flag,
             content = """
                 **چرا با وجود اینکه آی‌پی کلادفلر را می‌دهیم، پرچم کشور واقعی سرور نمایش داده می‌شود؟**
@@ -319,7 +588,7 @@ fun getHelpArticlesFa(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "cloudflare_limits",
-            title = "۵. محدودیت ۱۰۰ هزار درخواست روزانه کلادفلر",
+            title = S(R.string.cloudflare_s_100_000_requests_a_day),
             icon = Icons.Default.Warning,
             content = """
                 **سقف مصرف کلادفلر چیست و چه زمانی با آن مواجه می‌شوید؟**
@@ -337,7 +606,7 @@ fun getHelpArticlesFa(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "sort_panel",
-            title = "۶. قابلیت قدرتمند «مرتب‌سازی بر اساس پنل»",
+            title = S(R.string.the_sort_by_panel_feature),
             icon = Icons.Default.Sort,
             content = """
                 **چگونه صدها کانفیگ ابری را بدون سردرگمی مدیریت کنیم؟**
@@ -355,7 +624,7 @@ fun getHelpArticlesFa(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "scanner_pro",
-            title = "۷. راهنمای جامع اسکنر هوشمند دومرحله‌ای",
+            title = S(R.string.a_full_guide_to_the_two_stage),
             icon = Icons.Default.Radar,
             content = """
                 **چرا اسکنر این اپلیکیشن با سایر اسکنرهای ساده متفاوت است؟**
@@ -374,7 +643,7 @@ fun getHelpArticlesFa(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "ip_archive",
-            title = "۸. سیستم آرشیو آی‌پی‌ها و تست مجدد (Retest)",
+            title = S(R.string.the_ip_archive_and_retesting),
             icon = Icons.Default.Storage,
             content = """
                 **چگونه بدون صرف زمان برای اسکن‌های طولانی، همیشه آی‌پی تمیز داشته باشیم؟**
@@ -394,7 +663,7 @@ fun getHelpArticlesFa(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "nahan_settings_guide",
-            title = "۹. راهنمای کامل تنظیمات پیشرفته پنل نهان",
+            title = S(R.string.a_full_guide_to_nahan_s_advanced),
             icon = Icons.Default.Settings,
             content = """
                 **راهنمای کامل فیلدهای تنظیمات پنل نهان**
@@ -418,7 +687,7 @@ fun getHelpArticlesFa(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "edg_fixed_ip",
-            title = "۱۰. راهنمای آی‌پی ثابت در پنل ادج (EDG)",
+            title = S(R.string.fixed_ip_in_the_edge_edg_panel),
             icon = Icons.Default.SettingsEthernet,
             content = """
                 **چگونه لوکیشن کانفیگ‌های پنل EDG را تغییر دهیم؟**
@@ -437,7 +706,7 @@ fun getHelpArticlesFa(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "bpb_fixed_ip",
-            title = "۱۱. راهنمای آی‌پی ثابت در پنل بی‌پی‌بی (BPB)",
+            title = S(R.string.fixed_ip_in_the_bpb_panel),
             icon = Icons.Default.SettingsEthernet,
             content = """
                 **چگونه آی‌پی ثابت کانفیگ‌های پنل BPB را تنظیم کنیم؟**
@@ -455,7 +724,7 @@ fun getHelpArticlesFa(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "routing_mode",
-            title = "۱۲. راهنمای حالت مسیریابی (Split Tunneling)",
+            title = S(R.string.a_guide_to_routing_mode_split_tunnelling),
             icon = Icons.Default.AltRoute,
             content = """
                 **چگونه فقط بعضی برنامه‌ها را از VPN عبور دهیم؟**
@@ -475,7 +744,7 @@ fun getHelpArticlesFa(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "mythological_names",
-            title = "۱۳. داستان اسامی اساطیری کانفیگ‌ها چیست؟",
+            title = S(R.string.where_do_the_mythological_config_names_come),
             icon = Icons.Default.AutoAwesome,
             content = """
                 **چرا اسامی اساطیری روی گروه‌های من نمایش داده می‌شود؟**
@@ -513,26 +782,26 @@ fun getHelpArticlesFa(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "sni_engine",
-            title = "۱۴. آموزش راه‌اندازی موتور ضد فیلتر SNI (اضطراری سوم)",
+            title = S(R.string.setting_up_the_sni_anti_filter_engine),
             icon = Icons.Default.RocketLaunch,
             content = """
                 **چگونه با استفاده از موتور ضد فیلتر SNI یک اینترنت بدون فیلتر و پرسرعت داشته باشیم؟**
                 
                 اگر به دنبال دور زدن فیلترینگ با بالاترین سرعت و پایداری ممکن هستید، سیستم SNI یکی از بهترین روش‌هاست. برای استفاده از این قابلیت، مراحل ساده‌ی زیر را به ترتیب انجام دهید:
                 
-                ۱. **ورود به بخش اضطراری:** از منوی اصلی اپلیکیشن، گزینه «اضطراری سوم (SNI)� را انتخاب کنید.
+                ۱. **ورود به بخش اضطراری:** از منوی اصلی اپلیکیشن، گزینه «اضطراری سوم (SNI)» را انتخاب کنید.
                 ۲. **اسکن و اتصال اولیه:** در بالای صفحه روی آیکون وای‌فای (اسکن/پینگ) کلیک کنید تا بهترین مسیرها بررسی شوند. سپس دکمه بزرگ «اتصال» را لمس کنید تا موتور ضد فیلتر در پس‌زمینه فعال شود.
                 ۳. **بازگشت به تب اتصال:** از این صفحه خارج شده و به تب اصلی نرم‌افزار (تب اتصال) برگردید.
-                ۴. **افزودن کانفیگ‌های SNI:** در بالای صفحه، روی دکمه «افزودن (+ )� کلیک کرده و گزینه «افزودن کانفیگ SNI� را انتخاب کنید.
+                ۴. **افزودن کانفیگ‌های SNI:** در بالای صفحه، روی دکمه «افزودن (+ )» کلیک کرده و گزینه «افزودن کانفیگ SNI» را انتخاب کنید.
                 ۵. **تعیین تعداد:** در پنجره باز شده، تعداد کانفیگ‌هایی که می‌خواهید بسازید را انتخاب کنید (توصیه می‌کنیم روی حداکثر مقدار تنظیم کنید) و دکمه افزودن را بزنید.
-                ۶. **تست و اتصال نهایی:** حالا به تب «نودها» بروید و **حتماً فقط از دکمه «تست دیلی (Delay)� استفاده کنید**. در این بخش فرقی نمی‌کند چه عدد دیلی به شما بدهد، این تست صرفاً برای تشخیص متصل بودن کانفیگ‌هاست. اما پیشنهاد می‌شود موردی که عدد کمتری دارد را انتخاب کنید (بی‌تاثیر نیست). پس از سبز شدن دیلی، به آن متصل شوید.
+                ۶. **تست و اتصال نهایی:** حالا به تب «نودها» بروید و **حتماً فقط از دکمه «تست دیلی (Delay)» استفاده کنید**. در این بخش فرقی نمی‌کند چه عدد دیلی به شما بدهد، این تست صرفاً برای تشخیص متصل بودن کانفیگ‌هاست. اما پیشنهاد می‌شود موردی که عدد کمتری دارد را انتخاب کنید (بی‌تاثیر نیست). پس از سبز شدن دیلی، به آن متصل شوید.
                 
                 ✅ **تبریک می‌گوییم! اینترنت شما فضایی شد 😍**
             """.trimIndent()
         ),
         HelpArticle(
             id = "sublink_generator",
-            title = "۱۵. آموزش ساخت لینک ساب با کلادفلر",
+            title = S(R.string.building_a_sub_link_with_cloudflare),
             icon = Icons.Default.Link,
             content = """
                 **چگونه برای دوستانمان لینک ساب (Subscription Link) اختصاصی بسازیم؟**
@@ -540,9 +809,9 @@ fun getHelpArticlesFa(): List<HelpArticle> {
                 با استفاده از قابلیت جدید «ساخت لینک ساب»، شما می‌توانید کانفیگ‌های خود را در قالب یک لینک دائمی به دوستان خود بدهید تا آن‌ها با وارد کردن آن در کلاینت‌های V2ray (مثل V2rayNG) همیشه به آخرین کانفیگ‌های شما دسترسی داشته باشند.
                 
                 **مراحل ساخت لینک ساب:**
-                ۱. ابتدا از منوی کشویی سمت راست (همبرگری)، گزینه **«ساخت لینک ساب»** را انتخاب کنید.
+                ۱. ابتدا از صفحه‌ی اصلی، آیکون **«لینک ساب»** را بزنید.
                 ۲. اگر حساب کلادفلر متصل نباشد، باید آن را در تب ابری متصل کنید.
-                ۳. در اولین ورود، روی دکمه **«راه‌اندازی سیستم (Deploy)�** کلیک کنید. سیستم به صورت خودکار یک وورکر فوق‌سریع برای شما در کلادفلر می‌سازد و فضای ذخیره‌سازی ابری (KV) را تنظیم می‌کند.
+                ۳. در اولین ورود، روی دکمه **«راه‌اندازی سیستم (Deploy)»** کلیک کنید. سیستم به صورت خودکار یک وورکر فوق‌سریع برای شما در کلادفلر می‌سازد و فضای ذخیره‌سازی ابری (KV) را تنظیم می‌کند.
                 ۴. پس از آماده‌سازی، روی دکمه (+) کلیک کنید تا یک لینک جدید بسازید.
                 ۵. در صفحه جدید، نام لینک، یک عبارت دلخواه کوتاه (Slug) برای آدرس، و گروهی از کانفیگ‌هایتان (مثلاً BPB یا VLESS) که می‌خواهید در این لینک قرار گیرند را انتخاب کنید.
                 ۶. می‌توانید برای لینک **تاریخ انقضا (به روز)** تعیین کنید. اگر این فیلد را پر کنید، پس از گذشت آن زمان، لینک از کار می‌افتد و کاربر به جای کانفیگ، یک پیام «منقضی شده است» دریافت می‌کند.
@@ -550,19 +819,19 @@ fun getHelpArticlesFa(): List<HelpArticle> {
                 
                 **قابلیت آپدیت خودکار و آمارگیری:**
                 - هر زمان که کانفیگ‌های آن گروه در اپلیکیشن شما تغییر کنند (مثلاً اسکن جدید بزنید)، لینک ساب به صورت **خودکار در پس‌زمینه** آپدیت می‌شود و دوستان شما با زدن دکمه آپدیت در V2rayNG، کانفیگ‌های جدید را دریافت می‌کنند.
-                - با کلیک روی دکمه **«آمار (📊)�** در کنار هر لینک، می‌توانید ببینید تا الان چند بار آن لینک توسط دیگران آپدیت و دانلود شده است!
+                - با کلیک روی دکمه **«آمار (📊)»** در کنار هر لینک، می‌توانید ببینید تا الان چند بار آن لینک توسط دیگران آپدیت و دانلود شده است!
             """.trimIndent()
         ),
         HelpArticle(
             id = "dedicated_dns",
-            title = "۱۶. DNS اختصاصی برای کاهش پینگ بازی",
+            title = S(R.string.dedicated_dns_for_lower_game_ping),
             icon = Icons.Default.Dns,
             content = """
                 **DNS اختصاصی چیست؟**
                 یک سرور DNS کاملاً شخصی که روی حساب Cloudflare **خودتان** (نه حساب مشترک) مستقر می‌شود و فقط مال شماست. کاملاً رایگان و بدون نیاز به کارت بانکی جهانی.
 
                 **چرا به حساب Cloudflare نیاز دارد؟**
-                این DNS باید روی زیرساخت شخصی خودتان اجرا شود تا هیچ‌کس دیگری از آن استفاده نکند و ترافیک/محدودیت آن فقط برای شما باشد � دقیقاً مثل پنل‌های EDG یا نهان که قبلاً مستقر کرده‌اید. برای همین ابتدا باید یک حساب Cloudflare را در **تب کلاد** وصل کنید.
+                این DNS باید روی زیرساخت شخصی خودتان اجرا شود تا هیچ‌کس دیگری از آن استفاده نکند و ترافیک/محدودیت آن فقط برای شما باشد » دقیقاً مثل پنل‌های EDG یا نهان که قبلاً مستقر کرده‌اید. برای همین ابتدا باید یک حساب Cloudflare را در **تب کلاد** وصل کنید.
 
                 **تفاوتش با DNS معمولی چیست؟**
                 یک DNS معمولی (مثل 1.1.1.1) فقط آدرس سرور بازی را برمی‌گرداند. اما این DNS اختصاصی با تکنیکی به نام **ECS (EDNS Client Subnet)** به سرور بالادست می‌گوید «انگار از منطقه X پرسیده می‌شود» تا نزدیک‌ترین و کم‌تاخیرترین سرور بازیِ آن منطقه را تحویل بگیرد. این یعنی بسته‌های بازی مسیر کوتاه‌تری طی می‌کنند و پینگ پایین می‌آید.
@@ -582,7 +851,7 @@ fun getHelpArticlesFa(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "domain_fronting",
-            title = "۱۷. دامین‌فرانتینگ (بدون سرور) — نصب و حذف گواهی",
+            title = S(R.string.domain_fronting_no_server_installing_and_removing),
             icon = Icons.Default.Shield,
             content = """
                 **این روش چیست؟**
@@ -651,11 +920,11 @@ fun getHelpArticlesFa(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "quick_connect",
-            title = "۱۸. اتصال سریع — فهرست آماده‌ی سرورها و انتخاب کشور",
+            title = S(R.string.quick_connect_the_ready_made_server_list),
             icon = Icons.Default.FlashOn,
             content = """
                 **این بخش چیست؟**
-                «اتصال سریع» دکمه‌ی وسط نوار پایین و صفحه‌ی اولی است که با باز کردن برنامه می‌بینید. یک فهرست آماده از هزاران سرور عمومی که خود برنامه دانلود می‌کند. **هیچ اکانتی نمی‌خواهد، هیچ پنلی نباید بسازید، هیچ کانفیگی نباید دستی وارد کنید و هیچ هزینه‌ای ندارد.**
+                «اتصال سریع» اولین آیکون صفحه‌ی اصلی برنامه است. یک فهرست آماده از هزاران سرور عمومی که خود برنامه دانلود می‌کند. **هیچ اکانتی نمی‌خواهد، هیچ پنلی نباید بسازید، هیچ کانفیگی نباید دستی وارد کنید و هیچ هزینه‌ای ندارد.**
 
                 این ساده‌ترین راه وصل شدن است. بقیه‌ی بخش‌های برنامه (پنل ابری، اسکنر، نودها) وقتی به کار می‌آیند که سرور شخصی خودتان را بخواهید؛ اتصال سریع برای وقتی است که فقط می‌خواهید همین حالا آنلاین شوید.
 
@@ -740,7 +1009,60 @@ fun getHelpArticlesFa(): List<HelpArticle> {
                 • **می‌خواهم همه‌ی اصلاح‌ها پاک شود** — فهرست کشورها را باز کنید و پایین صفحه «پاک کردن کشورهای اندازه‌گیری‌شده» را بزنید.
 
                 **گیت‌وی MLM کجا رفت؟**
-                جای دکمه‌ی وسط را اتصال سریع گرفت. گیت‌وی MLM (همان VPN Gate) حالا در **منوی همبرگری** بالای صفحه است و هیچ تغییری نکرده.
+                گیت‌وی MLM (همان VPN Gate) **آیکون خودش را روی صفحه‌ی اصلی** دارد و هیچ تغییری نکرده.
+            """.trimIndent()
+        ),
+        HelpArticle(
+            id = "home_screen",
+            title = S(R.string.the_home_screen_icons_dock_wallpaper),
+            icon = Icons.Default.Apps,
+            content = """
+                **منوی همبرگری حذف شد — هر چه داخلش بود روی صفحه‌ی اول آمد**
+
+                دیگر هیچ قابلیتی پشت منو پنهان نیست. آیپی ثابت، لیست ورکرها، DNS ضد تحریم، لینک ساب، مصرف، آموزش‌ها، درباره ما، هر سه حالت اضطراری، گیت‌وی MLM، اتصال سریع، کانفیگ رایگان، ابری و گیم بوستر — همه روی صفحه‌ی اصلی آیکون دارند.
+
+                **داک پایین صفحه**
+
+                چهار مورد پرکاربرد در یک حباب شیشه‌ای می‌مانند: **اسکن، V2Ray، تنظیمات و وایرگارد**. مثل آیفون، این داک فقط روی صفحه‌ی اصلی دیده می‌شود؛ وقتی وارد یک بخش می‌شوید، آن بخش تمام‌صفحه باز می‌شود و با دکمه‌ی برگشت گوشی یا فلش بالای صفحه به صفحه‌ی اصلی برمی‌گردید.
+
+                **جابه‌جا کردن آیکون‌ها**
+
+                ۱. انگشتتان را روی هر آیکونی **نگه دارید** تا آیکون‌ها شروع به لرزیدن کنند.
+                ۲. همان آیکون را **بکشید** هر جا که می‌خواهید؛ بقیه خودشان کنار می‌روند.
+                ۳. انگشت را بردارید — ترتیب همان لحظه ذخیره می‌شود.
+                ۴. برای خروج، دکمه‌ی **«تمام»** بالای صفحه یا دکمه‌ی برگشت گوشی.
+
+                چیدمان شما بعد از بستن برنامه هم سر جایش می‌ماند، و اگر در آپدیتی قابلیت تازه‌ای اضافه شود، آیکونش فقط به انتهای چیدمان شما اضافه می‌شود و چیزی ریست نمی‌شود. داک ثابت است و جابه‌جا نمی‌شود.
+
+                **سه تنظیم دیگر در «صفحه نمایش»**
+
+                • **اندازهٔ آیکون** — فقط خود آیکون‌ها را بزرگ و کوچک می‌کند؛ نوشته‌ها و فاصله‌ها ثابت می‌مانند. بالای اسلایدر چند آیکون نمونه زنده عوض می‌شوند.
+                • **تصویر زمینه در همه صفحات** — خاموش کنید تا هر صفحه‌ای به‌جز صفحهٔ اصلی پس‌زمینهٔ ساده بگیرد.
+                • **ظاهر برنامه** — روشن، تاریک یا خودکار. در این نسخه فقط صفحه‌های بازسازی‌شده رنگشان را از این تنظیم می‌گیرند؛ بقیه هنوز تیره می‌مانند.
+
+                **تنظیمات**
+
+                تنظیمات هم مثل آیفون گروه‌بندی شده است: **شبکه** (پورت محلی، DNS، حالت پروکسی، شبکه‌ی محلی، تنظیمات پیشرفته‌ی VPN)، **صفحه نمایش** (تصویر زمینه، نمایش ترافیک، زبان)، **مصرف**، **سیستم** و **درباره**.
+
+                بالای صفحه، همان‌جا که آیفون حساب اپل را نشان می‌دهد، **حساب کلادفلر متصل شما** است. اگر حسابی وصل کرده باشید، نام و ایمیلش را می‌بینید؛ اگر نه، زدنش شما را به تب ابری می‌برد تا وصل کنید.
+
+                **دکمه‌ی ذخیره دیگر وجود ندارد.** هر تغییری همان لحظه اعمال می‌شود. تنها استثنا پورت محلی است: تا وقتی عددی که نوشته‌اید معتبر نباشد، قرمز می‌شود، دلیلش را زیرش می‌نویسد و ذخیره نمی‌شود.
+
+                **عوض کردن تصویر زمینه**
+
+                به **تنظیمات ٔ صفحه نمایش ٔ تصویر زمینه** بروید. ده طرح آماده هست — شامگاه، کهربا، نیلی، زغالی، مه صبح، ارغوانی، اقیانوس، خاکستری، غروب و جنگل — که با یک ضربه اعمال می‌شوند. گزینه‌ی اول **«انتخاب از گالری»** است تا عکس خودتان را بگذارید.
+
+                انتخابگر عکس **مال خود اندروید** است، نه برنامه: برنامه هیچ دسترسی به گالری از شما نمی‌خواهد و فقط همان یک عکسی که انتخاب کردید را می‌گیرد. آن عکس داخل خود برنامه کپی می‌شود تا اگر بعداً از گالری پاکش کردید، تصویر زمینه‌تان از بین نرود.
+
+                **نوار بالای صفحه‌ی اصلی**
+
+                سپر سمت راست وضعیت اتصال را نشان می‌دهد (سبز = متصل)، و طرف دیگر مصرف لحظه‌ای این نشست است. اگر شمارنده‌ی مصرف را نمی‌خواهید، از تنظیمات خاموشش کنید.
+
+                **سوال‌های رایج**
+
+                • **آیکون گیم بوستر کجا بود؟** پیش‌تر پشت یک کلید در تنظیمات خاموش بود، چون در نوار پایین جا نبود. حالا خانه‌ی دائمی دارد و آن کلید حذف شد.
+                • **آیکونی را گم کردم.** شاید موقع جابه‌جایی جایش را عوض کرده‌اید؛ دوباره نگه دارید و ببریدش سر جای اول. هیچ آیکونی حذف نمی‌شود — فقط جابه‌جا می‌شود.
+                • **صفحه بالا و پایین نمی‌رود.** درست است؛ همه‌ی آیکون‌ها در یک صفحه جا می‌شوند.
             """.trimIndent()
         )
     )
@@ -750,7 +1072,7 @@ fun getHelpArticlesEn(): List<HelpArticle> {
     return listOf(
         HelpArticle(
             id = "base",
-            title = "1. Basic Tutorial (End-to-End Usage)",
+            title = "Basic Tutorial (End-to-End Usage)",
             icon = Icons.Default.School,
             content = """
                 **Step-by-step app usage tutorial:**
@@ -769,7 +1091,7 @@ fun getHelpArticlesEn(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "fixed_ip",
-            title = "2. Fixed IP System & Location Change (Nahan Exclusive)",
+            title = "Fixed IP System & Location Change (Nahan Exclusive)",
             icon = Icons.Default.LocationOn,
             content = """
                 **How to lock your config's location to a specific country (e.g., US) forever?**
@@ -793,7 +1115,7 @@ fun getHelpArticlesEn(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "nahan_users",
-            title = "3. Nahan User Management (Creating Configs for Friends)",
+            title = "Nahan User Management (Creating Configs for Friends)",
             icon = Icons.Default.GroupAdd,
             content = """
                 **How to create unlimited configs for friends and family?**
@@ -810,7 +1132,7 @@ fun getHelpArticlesEn(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "flag_logic",
-            title = "4. How do Node Flags Work?",
+            title = "How do Node Flags Work?",
             icon = Icons.Default.Flag,
             content = """
                 **Why is the real server's country flag shown even when we provide a Cloudflare IP?**
@@ -827,7 +1149,7 @@ fun getHelpArticlesEn(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "cloudflare_limits",
-            title = "5. Cloudflare's 100K Daily Request Limit",
+            title = "Cloudflare's 100K Daily Request Limit",
             icon = Icons.Default.Warning,
             content = """
                 **What is Cloudflare's usage cap and when will you face it?**
@@ -845,7 +1167,7 @@ fun getHelpArticlesEn(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "sort_panel",
-            title = "6. Powerful 'Sort by Panel' Feature",
+            title = "Powerful 'Sort by Panel' Feature",
             icon = Icons.Default.Sort,
             content = """
                 **How to manage hundreds of cloud configs without confusion?**
@@ -863,7 +1185,7 @@ fun getHelpArticlesEn(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "scanner_pro",
-            title = "7. Comprehensive Guide to Two-Stage Smart Scanner",
+            title = "Comprehensive Guide to Two-Stage Smart Scanner",
             icon = Icons.Default.Radar,
             content = """
                 **Why is this app's scanner different from other simple scanners?**
@@ -882,7 +1204,7 @@ fun getHelpArticlesEn(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "ip_archive",
-            title = "8. IP Archive System & Retest",
+            title = "IP Archive System & Retest",
             icon = Icons.Default.Storage,
             content = """
                 **How to always have clean IPs without spending time on long scans?**
@@ -902,7 +1224,7 @@ fun getHelpArticlesEn(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "nahan_settings_guide",
-            title = "9. Complete Guide to Nahan Panel Advanced Settings",
+            title = "Complete Guide to Nahan Panel Advanced Settings",
             icon = Icons.Default.Settings,
             content = """
                 **Complete guide to Nahan panel settings fields**
@@ -926,7 +1248,7 @@ fun getHelpArticlesEn(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "edg_fixed_ip",
-            title = "10. Fixed IP Guide for EDG Panel",
+            title = "Fixed IP Guide for EDG Panel",
             icon = Icons.Default.SettingsEthernet,
             content = """
                 **How to change the location of EDG panel configs?**
@@ -945,7 +1267,7 @@ fun getHelpArticlesEn(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "bpb_fixed_ip",
-            title = "11. Fixed IP Guide for BPB Panel",
+            title = "Fixed IP Guide for BPB Panel",
             icon = Icons.Default.SettingsEthernet,
             content = """
                 **How to set a fixed IP for BPB panel configs?**
@@ -963,7 +1285,7 @@ fun getHelpArticlesEn(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "routing_mode",
-            title = "12. Split Tunneling Guide",
+            title = "Split Tunneling Guide",
             icon = Icons.Default.AltRoute,
             content = """
                 **How to route only specific apps through the VPN?**
@@ -983,7 +1305,7 @@ fun getHelpArticlesEn(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "mythological_names",
-            title = "13. The Story of Mythological Config Names",
+            title = "The Story of Mythological Config Names",
             icon = Icons.Default.AutoAwesome,
             content = """
                 **Why are mythological names displayed on my groups?**
@@ -1021,7 +1343,7 @@ fun getHelpArticlesEn(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "sni_engine",
-            title = "14. How to Setup SNI Anti-Filter Engine (Emergency Level 3)",
+            title = "How to Setup SNI Anti-Filter Engine (Emergency Level 3)",
             icon = Icons.Default.RocketLaunch,
             content = """
                 **How to get high-speed, uncensored internet using the SNI Anti-Filter Engine?**
@@ -1040,7 +1362,7 @@ fun getHelpArticlesEn(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "sublink_generator",
-            title = "15. How to Create Sub Links with Cloudflare",
+            title = "How to Create Sub Links with Cloudflare",
             icon = Icons.Default.Link,
             content = """
                 **How to create a dedicated Subscription Link for friends?**
@@ -1048,7 +1370,7 @@ fun getHelpArticlesEn(): List<HelpArticle> {
                 Using the new "Create Sub Link" feature, you can provide your configs as a permanent link to your friends. They can add it to their V2ray clients (like V2rayNG) and always have access to your latest configs.
                 
                 **Steps to create a sub link:**
-                1. Open the right drawer (hamburger menu) and select **"Create Sub Link"**.
+                1. From the home screen, tap the **"Sub Link"** icon.
                 2. If your Cloudflare account is not connected, you must connect it in the Cloud tab.
                 3. On your first visit, tap **"Deploy System"**. The app will automatically build a high-speed worker and setup KV storage for you on Cloudflare.
                 4. After deployment, tap the (+) button to create a new link.
@@ -1063,14 +1385,14 @@ fun getHelpArticlesEn(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "dedicated_dns",
-            title = "16. Dedicated DNS for Lower Game Ping",
+            title = "Dedicated DNS for Lower Game Ping",
             icon = Icons.Default.Dns,
             content = """
                 **What is Dedicated DNS?**
                 A fully private DNS resolver deployed on **your own** Cloudflare account (not a shared one), dedicated to you alone. Completely free, no international bank card required.
 
                 **Why does it need a Cloudflare account?**
-                It must run on your own infrastructure so no one else shares it and its traffic/quota is yours only � exactly like the EDG or Nahan panels you may have deployed before. So first connect a Cloudflare account in the **Cloud tab**.
+                It must run on your own infrastructure so no one else shares it and its traffic/quota is yours only » exactly like the EDG or Nahan panels you may have deployed before. So first connect a Cloudflare account in the **Cloud tab**.
 
                 **How is it different from a normal DNS?**
                 A normal DNS (like 1.1.1.1) just returns the game server address. This dedicated DNS uses a technique called **ECS (EDNS Client Subnet)** to tell the upstream resolver "answer as if I'm in region X," so it returns the closest, lowest-latency game server for that region. That means game packets travel a shorter path and ping drops.
@@ -1090,7 +1412,7 @@ fun getHelpArticlesEn(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "domain_fronting",
-            title = "17. Domain Fronting (server-less) — installing and removing the certificate",
+            title = "Domain Fronting (server-less) — installing and removing the certificate",
             icon = Icons.Default.Shield,
             content = """
                 **What is this?**
@@ -1159,11 +1481,11 @@ fun getHelpArticlesEn(): List<HelpArticle> {
         ),
         HelpArticle(
             id = "quick_connect",
-            title = "18. Quick Connect — the ready-made server list and country picker",
+            title = "Quick Connect — the ready-made server list and country picker",
             icon = Icons.Default.FlashOn,
             content = """
                 **What is this?**
-                Quick Connect is the centre button on the bottom bar and the first screen you see when the app opens. It carries a ready-made list of thousands of public servers that the app downloads itself. **No account, no panel to deploy, no config to paste, and no cost.**
+                Quick Connect is the first icon on the app's home screen. It carries a ready-made list of thousands of public servers that the app downloads itself. **No account, no panel to deploy, no config to paste, and no cost.**
 
                 This is the simplest way to get online. The rest of the app (cloud panel, scanner, nodes) is for when you want a server of your own; Quick Connect is for when you just want to be online right now.
 
@@ -1248,7 +1570,86 @@ fun getHelpArticlesEn(): List<HelpArticle> {
                 • **I want all corrections cleared** — open the country list and press "Clear measured countries" at the bottom.
 
                 **Where did the MLM Gateway go?**
-                Quick Connect took the centre button, so the MLM Gateway (VPN Gate) now lives in the **hamburger menu** at the top. It is otherwise unchanged.
+                The MLM Gateway (VPN Gate) has **its own icon on the home screen** now. It is otherwise unchanged.
+            """.trimIndent()
+        ),
+        HelpArticle(
+            id = "home_screen",
+            title = "The home screen — icons, dock, wallpaper",
+            icon = Icons.Default.Apps,
+            content = """
+                **The hamburger drawer is gone — everything it held is on the home screen**
+
+                No feature is hidden behind a menu any more. Fixed IP, Workers, anti-sanction DNS,
+                Sub Link, Usage, Tutorials, About, all three emergency modes, MLM Gateway, Quick
+                Connect, Free Configs, Cloud and Game Boost all have icons on the home screen.
+
+                **The dock**
+
+                The four you reach for most sit in a glass bubble at the bottom: **Scanner, V2Ray,
+                Settings and WireGuard**. Like an iPhone, the dock is only on the home screen; open
+                a feature and it takes the full screen, and the phone's back button or the arrow at
+                the top brings you home.
+
+                **Rearranging the icons**
+
+                1. **Hold** your finger on any icon until the icons start to wobble.
+                2. **Drag** it wherever you want; the others move out of the way.
+                3. Let go — the order is saved right then.
+                4. Leave the mode with **"Done"** at the top, or the phone's back button.
+
+                Your layout survives closing the app, and if a later update adds a feature its icon
+                simply joins the end of your layout rather than resetting it. The dock is fixed and
+                does not rearrange.
+
+                **Three more settings under Display**
+
+                • **Icon Size** scales the icons only; captions and spacing stay put. A live sample
+                above the slider shows what you are getting.
+                • **Wallpaper on every screen** can be turned off to give every screen except the
+                home screen a plain background.
+                • **Appearance** switches between light, dark and automatic. In this release only the
+                rebuilt screens follow it; the rest are still dark and are being converted one at a
+                time.
+
+                **Settings**
+
+                Settings is grouped the iOS way too: **Network** (local port, DNS, proxy mode, local
+                network, advanced VPN settings), **Display** (wallpaper, traffic counters, language),
+                **Usage**, **System** and **About**.
+
+                At the top, where iOS shows your Apple Account, sits **your connected Cloudflare
+                account**. If you have one connected you see its name and email; if not, tapping the
+                card takes you to the Cloud tab to connect one.
+
+                **There is no Save button any more.** Every change applies the moment you make it.
+                The one exception is the local port: while the number you have typed is not valid it
+                turns red, says why underneath, and is not saved.
+
+                **Changing the wallpaper**
+
+                Go to **Settings > Display > Wallpaper**. Ten ready-made backdrops are there — Dusk,
+                Amber, Indigo, Charcoal, Morning Mist, Violet, Ocean, Slate, Sunset and Forest —
+                and a tap applies one. The first tile, **"From gallery"**, lets you use your own photo.
+
+                The photo picker is **Android's own**, not the app's: the app never asks for gallery
+                access and only ever receives the single image you chose. That image is copied into
+                the app, so deleting it from your gallery later does not take your wallpaper with it.
+
+                **The strip at the top of the home screen**
+
+                The shield shows connection state (green means connected), and the other side shows
+                this session's live traffic. Turn the counters off in Settings if you would rather
+                not see them.
+
+                **Common questions**
+
+                • **Where did the Game Boost icon come from?** It used to be off behind a switch in
+                Settings because the old bottom bar had no room for it. It has a permanent home now,
+                and that switch is gone.
+                • **I lost an icon.** You probably moved it while rearranging; hold and drag it back.
+                Nothing is ever removed — only moved.
+                • **The page does not scroll.** Correct; every icon fits on one screen.
             """.trimIndent()
         )
     )
@@ -1256,152 +1657,54 @@ fun getHelpArticlesEn(): List<HelpArticle> {
 
 data class FaqItem(val q: String, val a: String)
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun FaqModal(onDismiss: () -> Unit, isFa: Boolean) {
-    val primaryColor = Color(0xFF4285F4)
-    val bgColor = Color(0xFF1E1E1E)
-    val surfaceColor = Color(0xFF2D2E31)
-    val textColor = Color(0xFFE8EAED)
-    val mutedColor = Color(0xFF9AA0A6)
-
-    val faqs = remember(isFa) { if (isFa) getFaqsFa() else getFaqsEn() }
-
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false, dismissOnClickOutside = true)
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.6f))
-                .clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null) { onDismiss() },
-            contentAlignment = Alignment.Center
-        ) {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth(0.9f)
-                    .fillMaxHeight(0.85f)
-                    .padding(top = com.mlmvpn.scanner.ui.LocalSystemTopPadding.current, bottom = com.mlmvpn.scanner.ui.LocalSystemBottomPadding.current)
-                    .clip(RoundedCornerShape(20.dp))
-                    .clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null) { },
-                color = bgColor
-            ) {
-                Column(modifier = Modifier.fillMaxSize()) {
-                    // Header
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(surfaceColor)
-                            .padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(androidx.compose.foundation.shape.CircleShape)
-                                .background(primaryColor.copy(alpha = 0.2f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(Icons.Default.LiveHelp, contentDescription = null, tint = primaryColor)
-                        }
-                        Spacer(modifier = Modifier.width(16.dp))
-                        Text(
-                            text = if (isFa) "پرسش و پاسخ (FAQ)" else "FAQ",
-                            color = textColor,
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.weight(1f)
-                        )
-                        IconButton(onClick = onDismiss) {
-                            Icon(Icons.Default.Close, contentDescription = "Close", tint = mutedColor)
-                        }
-                    }
-
-                    // Content
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                            .padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        items(faqs) { faq ->
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(surfaceColor)
-                                    .padding(16.dp)
-                            ) {
-                                Row(verticalAlignment = Alignment.Top) {
-                                    Icon(Icons.Default.HelpOutline, contentDescription = null, tint = primaryColor, modifier = Modifier.size(20.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(faq.q, color = textColor, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                                }
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Row(verticalAlignment = Alignment.Top) {
-                                    Icon(Icons.Default.CheckCircleOutline, contentDescription = null, tint = Color(0xFF81C995), modifier = Modifier.size(20.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(faq.a, color = mutedColor, fontSize = 14.sp, lineHeight = 22.sp)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 fun getFaqsFa(): List<FaqItem> = listOf(
-    FaqItem("چرا نسخه جدید روی گوشی من نصب نمیشود و ارور \"Package conflicts\" میدهد؟", "این مشکل معمولاً به دلیل تداخل با نسخه قبلی است. ابتدا نسخه قدیمی را کاملاً پاک کنید و سپس نسخه جدید را نصب نمایید."),
-    FaqItem("آیا برنامه روی اندرویدهای قدیمی یا نسخه‌های خیلی جدید (مثل اندروید ۱۴ و ۱۵) کار میکند؟", "برنامه برای اکثر نسخه‌های اندروید بهینه شده است، اما در صورت بروز مشکل در نسخه‌های خاص، حتماً از آخرین آپدیت استفاده کنید یا کش برنامه را پاک کنید."),
-    FaqItem("آیا قابلیت نصب رو تلویزیون هوشمند اندروید وجود دارد؟", "بله از نسخه 1.0.5 برای تلویزیون های هوشمند اندروید بهینه سازی شده است."),
-    FaqItem("چرا بعد از اتمام اسکن آیپی، هیچ اتفاقی نمیافتد و لیست آیپی‌ها یا کانفیگ‌های ترکیبی نمایش داده نمیشود؟", "این مورد میتواند به دلیل کیفیت پایین اینترنت در لحظه اسکن یا محدودیت‌های اپراتور باشد. پیشنهاد میشود با اپراتور دیگری تست کنید یا بخش اسکنر را مجدداً اجرا نمایید، اما مشکل اصلی اینجاست که قطعا شما از کانفیگ نامناسب استفاده کرده اید، باید حتما از کانفیگ هایی که از پنل های nhn-edge-bpb گرفته اید استفاده کنید. و حتما کانفیگ های vless با پورت 443 استفاده کنید."),
-    FaqItem("چرا با وجود پینگ سبز، هیچ دانلودی ندارم و فقط آپلود انجام میشود؟", "پینگ سبز همیشه به معنای عبور دیتا نیست. ممکن است آیپی اسکن شده نیمه‌باز باشد یا پورت مورد نظر توسط اپراتور مسدود شده باشد. آیپی‌های دیگر را امتحان کنید."),
-    FaqItem("چرا در بخش NHN وقتی کاربر با حجم و زمان مشخص میسازم، کانفیگ خروجی کار نمیکند؟", "در آپدیت جدید 1.0.5 این مشکل حل شده."),
-    FaqItem("ارور \"Invalid API Token\" یا کد ۹۱۰۳ برای چیست؟", "این ارور مربوط به اشتباه بودن یا منقضی شدن توکن کلودفلر شماست. حتماً توکن را مطابق آموزش ویدیوها مجدداً ساخته و در برنامه وارد کنید."),
-    FaqItem("آیا امکان استفاده از قابلیت \"Per-app setting\" (انتخاب برنامه‌های خاص برای عبور از VPN) وجود دارد؟", "این قابلیت در برنامه وجود دارد به تنظیمات برنامه، تنظیمات vpn مراجعه بفرمایید."),
-    FaqItem("چرا در تلگرام یا اینستاگرام با وجود وصل بودن، لود شدن ویدیوها یا ربات‌ها کند است؟", "این موضوع معمولاً به دلیل تنظیمات DNS یا MTU است. در نسخه‌های جدید تلاش شده این مورد بهبود یابد، اما تعویض پروتکل (مثلاً از BPB به Edge یا برعکس) میتواند کمک کند."),
+    FaqItem(S(R.string.why_will_the_new_version_not_install), S(R.string.that_is_usually_a_clash_with_the)),
+    FaqItem(S(R.string.does_the_app_work_on_old_android), S(R.string.the_app_is_tuned_for_most_android)),
+    FaqItem(S(R.string.can_it_be_installed_on_an_android), S(R.string.yes_since_version_1_0_5_it)),
+    FaqItem(S(R.string.why_does_nothing_happen_after_the_ip), S(R.string.that_can_be_down_to_poor_internet)),
+    FaqItem(S(R.string.why_do_i_have_a_green_ping), S(R.string.a_green_ping_does_not_always_mean)),
+    FaqItem(S(R.string.in_the_nhn_section_when_i_create), S(R.string.that_was_fixed_in_update_1_0)),
+    FaqItem(S(R.string.what_does_an_invalid_api_token_error), S(R.string.that_error_means_your_cloudflare_token_is)),
+    FaqItem(S(R.string.is_there_a_per_app_setting_choosing), S(R.string.yes_the_app_has_it_go_to)),
+    FaqItem(S(R.string.why_are_videos_and_bots_slow_to), S(R.string.that_is_usually_down_to_dns_or)),
 
-    FaqItem("دکمه‌ی اتصال سریع در پنل بالای گوشی چطور کار می‌کند؟", "می‌توانید دکمه‌ی �mlmvpn� را از پنل تنظیمات سریع گوشی اضافه کنید (از بالای صفحه به پایین بکشید ← ویرایش/افزودن دکمه‌ها). با یک لمس، VPN روشن یا خاموش می‌شود؛ هنگام روشن‌شدن، تأخیر (delay) چند سرور اخیر شما گرفته شده و به سریع‌ترین وصل می‌شوید. تعداد سرورهایی که تست می‌شوند (پیش‌فرض ۲۰) را می‌توانید در تنظیمات ← تنظیمات VPN تغییر دهید. نکته: بار اول باید یک‌بار از داخل برنامه VPN را وصل کنید تا مجوز اتصال داده شود."),
+    FaqItem(S(R.string.how_does_the_quick_connect_button_in), S(R.string.you_can_add_the_mlmvpn_tile_to)),
 
-    FaqItem("گواهی دامین‌فرانتینگ را چطور حذف کنم؟", "در جستجوی تنظیمات گوشی بنویسید «trusted credentials» یا «گواهی»، بعد سربرگ «کاربر / User» را انتخاب کنید. گواهی ما با نام «MLM VPN Local CA …» آنجاست؛ رویش بزنید و «حذف / Remove» را انتخاب کنید. مسیر دقیق برای سامسونگ، شیائومی، پیکسل، هواوی، اوپو/ریلمی و ویوو به‌صورت جداگانه در آموزش شماره ۱۷ نوشته شده. اگر می‌خواهید همه‌ی گواهی‌های نصب‌شده را یک‌جا پاک کنید، در همان صفحه گزینه‌ی «پاک کردن اطلاعات ورود (Clear credentials)» هست — ولی توجه کنید که آن گزینه همه را پاک می‌کند نه فقط گواهی ما. بعد از حذف، تیک مرحله‌ی دوم داخل پوشه‌ی دامین‌فرانتینگ خودش برداشته می‌شود."),
+    FaqItem(S(R.string.how_do_i_remove_the_domain_fronting), S(R.string.in_your_phone_s_settings_search_type)),
 
-    FaqItem("با دامین‌فرانتینگ وصل شدم ولی اپ یوتیوب و اینستاگرام باز نمی‌شود، مشکل چیست؟", "مشکلی نیست، این روش از اول هم فقط برای مرورگر است. از اندروید ۷ به بعد، اندروید اجازه نمی‌دهد اپ‌های معمولی به گواهی‌هایی که کاربر نصب کرده اعتماد کنند — پس یوتیوب، اینستاگرام و بقیه‌ی اپ‌ها این گواهی را نمی‌بینند و کار نمی‌کنند. این محدودیت خود اندروید است و هیچ برنامه‌ای (بدون روت) نمی‌تواند دورش بزند. سایت‌ها را در کروم باز کنید؛ اگر می‌خواهید خودِ اپ‌ها هم کار کنند از کانفیگ‌های پنل ابری یا کانفیگ‌های ایران استفاده کنید."),
+    FaqItem(S(R.string.i_connected_with_domain_fronting_but_the), S(R.string.nothing_is_wrong_this_method_was_only)),
 
-    FaqItem("موقع نصب گواهی پیام «نصب گواهی‌های CA ممکن نبود … از null» می‌آید، چه کار کنم؟", "این پیام یعنی از مسیر اشتباه رفته‌اید. اندروید ۱۱ به بالا کامل جلوی نصب گواهی از داخل برنامه‌ها را گرفته است. راه درست همان چیزی است که خود برنامه می‌گوید: اول دکمه‌ی «ذخیره گواهی در پوشه دانلود» را بزنید، بعد از تنظیمات اندروید ← نصب گواهی ← گواهی CA، فایل MLM-VPN-Certificate.crt را از پوشه Download انتخاب کنید."),
+    FaqItem(S(R.string.while_installing_the_certificate_i_get_couldn), S(R.string.that_message_means_you_took_the_wrong)),
 
-    FaqItem("مرحله‌ی «نصب گواهی» تیک نمی‌خورد و دکمه‌ها نمی‌روند؟", "یعنی اندروید هنوز گواهی را قبول نکرده. سه دلیل رایج دارد: ۱) در مرحله‌ی انتخاب نوع گواهی، «گواهی CA / CA certificate» را نزده‌اید (اگر VPN یا Wi-Fi را بزنید نصب می‌شود ولی به کار ما نمی‌آید). ۲) فایل اشتباهی را انتخاب کرده‌اید؛ باید MLM-VPN-Certificate.crt باشد. ۳) گوشی شما قفل صفحه (رمز/الگو/اثر انگشت) ندارد — اندروید تا قفل صفحه نگذارید گواهی نصب نمی‌کند. لازم نیست برنامه را ببندید و باز کنید؛ برنامه خودش هر لحظه چک می‌کند و به‌محض نصب شدن، تیک می‌خورد."),
+    FaqItem(S(R.string.the_install_certificate_step_will_not_tick), S(R.string.it_means_android_has_not_accepted_the)),
 
-    FaqItem("آیا نصب این گواهی برای گوشی من خطرناک است؟ می‌توانم گواهی دوستم را نصب کنم؟", "گواهی‌ای که خودِ برنامه روی گوشی شما می‌سازد امن است: کلیدش فقط روی همین گوشی ساخته می‌شود و هیچ‌جا ارسال نمی‌شود. ولی **هرگز گواهی کسی دیگر را نصب نکنید و گواهی خودتان را به کسی ندهید.** هر کسی که فایل کلید شما را داشته باشد می‌تواند ترافیک اینترنت‌بانک و ایمیل شما را بخواند. برای همین ما عمداً یک گواهی آماده داخل برنامه نگذاشتیم و هر گوشی گواهی مخصوص خودش را می‌سازد."),
+    FaqItem(S(R.string.is_installing_this_certificate_dangerous_for_my), S(R.string.the_certificate_the_app_builds_on_your)),
 
-    FaqItem("در فایرفاکس دامین‌فرانتینگ کار نمی‌کند، ولی در کروم کار می‌کند. چرا؟", "فایرفاکس به‌صورت پیش‌فرض گواهی‌هایی که کاربر نصب کرده را نادیده می‌گیرد. برای روشن کردنش: Firefox ← منو ← Settings ← About Firefox ← پنج بار روی لوگو بزنید ← برگردید به Settings ← Secret Settings ← گزینه‌ی «Use third party CA certificates» را روشن کنید."),
+    FaqItem(S(R.string.domain_fronting_does_not_work_in_firefox), S(R.string.firefox_ignores_user_installed_certificates_by_default)),
 
-    FaqItem("کانفیگ‌های ایران ۷ و ۸ چه تفاوتی با ۱ تا ۶ دارند و چرا وصل نمی‌شوند؟", "شماره ۱ تا ۶ بر پایه نسخه‌ی قدیمی‌تر پروژه‌ی سرورلس ساخته شده‌اند و شماره ۷ و ۸ نسخه‌ی جدید (v48) هستند که کاملاً بدون تغییر اضافه شده‌اند. تفاوت ۷ و ۸ با هم فقط فاصله‌ی بین قطعه‌های ارسالی است (۸ برای شبکه‌هایی که به فاصله‌ی کوتاه گیر می‌دهند). اگر وصل نمی‌شوند، اول از همه پورت محلی را چک کنید: این کانفیگ‌ها فقط با پورت `10808` کار می‌کنند و ما عمداً دست‌کاری‌شان نکرده‌ایم. داخل خود پوشه‌ی کانفیگ‌های ایران هم اگر پورتتان اشتباه باشد اخطار قرمز نشان داده می‌شود."),
+    FaqItem(S(R.string.how_do_iran_configs_7_and_8), S(R.string.numbers_1_to_6_are_built_on)),
 
-    FaqItem("کدام حالت را برای چه کاری استفاده کنم؟", "• **کانفیگ‌های ایران (۱ تا ۸):** بدون سرور، برای باز شدن سایت‌ها و اپ‌های عمومی. اولین چیزی که باید امتحان کنید.\n• **پنل ابری (BPB / EDG / نهان):** سرور شخصی روی حساب کلادفلر خودتان؛ پایدارترین گزینه برای همه‌ی اپ‌ها، ولی باید یک‌بار دیپلوی کنید.\n• **دامین‌فرانتینگ:** بدون سرور و بدون هزینه، ولی فقط داخل مرورگر و نیاز به نصب گواهی دارد.\n• **تب گیمینگ:** برای کم کردن پینگ بازی، نه برای باز کردن سایت.\n• **اضطراری:** وقتی همه‌چیز مسدود است و حتی نمی‌توانید کانفیگ بگیرید."),
+    FaqItem(S(R.string.which_mode_should_i_use_for_what), S(R.string.iran_configs_1_to_8_no_server)),
 
-    FaqItem("چرا ویدیوهای یوتیوب و اینستاگرام قبلاً دیر شروع می‌شدند و حالا سریع‌تر شده‌اند؟", "چون قبلاً برنامه ترافیک QUIC (پروتکل جدیدی که یوتیوب و اینستاگرام اول امتحان می‌کنند) را داخل تونل می‌فرستاد، ولی ورکرهای کلادفلر اصلاً این نوع ترافیک را حمل نمی‌کنند. پس هر ویدیو اول چند صد میلی‌ثانیه معطل می‌ماند، شکست می‌خورد و بعد از راه معمولی امتحان می‌شد. در نسخه‌ی جدید این ترافیک سریع رد می‌شود تا مستقیم از راه درست برود. ترافیک بازی و تماس صوتی دست‌نخورده مانده است."),
+    FaqItem(S(R.string.why_did_youtube_and_instagram_videos_used), S(R.string.because_the_app_used_to_send_quic)),
 
-    FaqItem("چرا عددهای دیلی و سرعت در نسخه‌های قبلی خیلی بد نشان داده می‌شد؟", "تست دیلی یک اتصال واقعی برای هر کانفیگ باز می‌کند. قبلاً تعداد زیادی از این اتصال‌ها هم‌زمان روی یک سرور باز می‌شد که برای کلادفلر و سیستم فیلترینگ شبیه ترافیک مشکوک است و throttle می‌شود — یعنی عددهایی که می‌دیدید در واقع ازدحام خودِ تست را اندازه می‌گرفتند، نه شرایط واقعی شبکه را. این محدود شد و تست هم سبک‌تر شد، پس عددها حالا به واقعیت نزدیک‌ترند."),
+    FaqItem(S(R.string.why_were_the_delay_and_speed_numbers), S(R.string.the_delay_test_opens_a_real_connection)),
 
-    FaqItem("«اتصال سریع» چیست و با بقیه‌ی بخش‌ها چه فرقی دارد؟", "اتصال سریع دکمه‌ی وسط نوار پایین و صفحه‌ی اول برنامه است: یک فهرست آماده از هزاران سرور عمومی که خود برنامه دانلود می‌کند. هیچ اکانتی نمی‌خواهد، پنلی نباید بسازید و کانفیگی نباید وارد کنید. فرقش با پنل ابری این است که آنجا سرور شخصی خودتان روی حساب کلادفلر شماست (پایدارتر، ولی باید یک‌بار دیپلوی کنید) و اینجا سرورهای عمومی مشترک هستند (فوری، ولی کیفیتشان تضمینی نیست). آموزش کامل در بخش آموزش‌ها، شماره ۱۸."),
+    FaqItem(S(R.string.what_is_quick_connect_and_how_does), S(R.string.quick_connect_is_one_of_the_home)),
 
-    FaqItem("گیت‌وی MLM (VPN Gate) از دکمه‌ی وسط حذف شده، کجاست؟", "جای دکمه‌ی وسط را «اتصال سریع» گرفت. گیت‌وی MLM حالا در منوی همبرگری بالای صفحه است، با نام «گیت‌وی MLM (VPN Gate)». خودش هیچ تغییری نکرده و همه‌ی امکاناتش سر جایش است."),
+    FaqItem(S(R.string.where_is_the_mlm_gateway_vpn_gate), S(R.string.on_the_home_screen_an_icon_named)),
 
-    FaqItem("در اتصال سریع تیک سبز کنار اسم سرور یعنی چه؟", "یعنی کشور آن سرور دیگر ادعای فهرست نیست، اندازه‌گیری شده است. بعد از اینکه واقعاً به یک سرور وصل شدید، برنامه از داخل همان تونل از کلادفلر می‌پرسد ترافیک از کجا بیرون آمده. اگر جواب با پرچم قبلی فرق داشت، سرور برای همیشه به کشور واقعی‌اش منتقل می‌شود و به شما هم گفته می‌شود. دلیلش این است که وقتی کسی کشوری را انتخاب می‌کند، هدفش این است که از همان کشور بیرون بیاید."),
+    FaqItem(S(R.string.in_quick_connect_what_does_the_green), S(R.string.it_means_that_server_s_country_is)),
 
-    FaqItem("چرا بعد از اتصال نوشته می‌شود «مسیر تأیید شد (WARP)» و کشور را نشان نمی‌دهد؟", "چون وقتی مسیر از WARP کلادفلر رد می‌شود، کلادفلر عمداً کشور خودِ شما را گزارش می‌کند نه کشور سرور را — یعنی یک اتصال از تهران که واقعاً از فرانکفورت بیرون می‌رود، «ایران» گزارش می‌شود. برای همین در این حالت هیچ کشوری ثبت نمی‌شود، وگرنه همه‌ی سرورها اشتباهاً زیر پرچم ایران بایگانی می‌شدند. اتصال شما کاملاً سالم است، فقط کشور خروج از این راه قابل اثبات نیست."),
+    FaqItem(S(R.string.after_connecting_why_does_it_say_route), S(R.string.because_when_the_route_goes_through_cloudflare)),
 
-    FaqItem("در اتصال سریع پیام «هیچ سرور پاسخ‌گویی پیدا نشد» می‌گیرم، چه کار کنم؟", "معمولاً یعنی کشوری که انتخاب کرده‌اید سرور سالم کمی دارد. کادر کشور را روی «همه کشورها» بگذارید و دوباره جست‌وجو بزنید. اگر پیام «هیچ سروری دریافت نشد» می‌آید مشکل فرق دارد: دسترسی به منبع فهرست بسته است، پس اول یکی از گزینه‌های ضد تحریم یا کانفیگ‌های ایران را وصل کنید و بعد دکمه‌ی تازه‌سازی کنار انتخاب کشور را بزنید."),
+    FaqItem(S(R.string.in_quick_connect_i_get_no_responding), S(R.string.that_usually_means_the_country_you_picked)),
 
-    FaqItem("«پورت محلی» در تنظیمات چیست و چه عددی بگذارم؟", "پورتی است که برنامه روی خود گوشی برای عبور ترافیک باز می‌کند. پیش‌فرضش ۱۰۸۰۸ است و اگر دلیل خاصی ندارید همان را دست نزنید. نکته‌ی مهم این است که برنامه علاوه بر عددی که وارد می‌کنید، از «آن عدد + ۱۰۰۰۰» هم استفاده می‌کند (برای بررسی وضعیت اتصال و کشور). برای همین بعضی عددها با اینکه معتبر به نظر می‌رسند مشکل‌ساز می‌شوند — مثلاً ۲۱۰۰۰ باعث تداخل با بازه‌ای می‌شود که برنامه برای تست سرورها استفاده می‌کند. اگر عدد نامناسبی وارد کنید، همان‌جا زیر فیلد نوشته می‌شود مشکل چیست و تا اصلاحش نکنید دکمه‌ی ذخیره کار نمی‌کند."),
+    FaqItem(S(R.string.what_is_the_local_port_in_settings), S(R.string.it_is_the_port_the_app_opens)),
 
-    FaqItem("پورت محلی را عوض کردم و حالا همه‌ی سرورها «قطع» تست می‌شوند، چه کار کنم؟", "به تنظیمات برگردید و پورت محلی را به ۱۰۸۰۸ برگردانید. در نسخه‌های قبلی این فیلد هر عددی را قبول می‌کرد و بعضی عددها بی‌صدا با پورت‌های داخلی برنامه تداخل می‌کردند؛ نتیجه‌اش دقیقاً همین بود که تست سرورها همه را مرده نشان می‌داد یا کشور در نوار وضعیت پیدا نمی‌شد. در این نسخه چنین عددی اصلاً پذیرفته نمی‌شود، ولی اگر از نسخه‌ی قبلی مقدار بدی ذخیره شده باشد باید یک بار دستی اصلاحش کنید."),
+    FaqItem(S(R.string.i_changed_the_local_port_and_now), S(R.string.go_back_to_settings_and_set_the)),
 
-    FaqItem("چرا برای پرچم سرورها از دیتابیس IP استفاده نمی‌کنید؟", "چون دقیق نیست. روی یک فهرست ۲۸۲۷ سروری آزمایش کردیم: دیتابیس IP فقط در ۳۴٪ موارد با کشوری که خود سرور اعلام می‌کرد می‌خواند. آدرس‌های کلادفلر در آمریکا ثبت شده‌اند ولی از فرانکفورت جواب می‌دهند، و رنج‌های OVH و Oracle هم در یک کشور ثبت و از کشور دیگری سرو می‌شوند — یعنی دیتابیس می‌گوید رنج کجا ثبت شده، نه اینکه از کجا جواب می‌دهد. به‌جایش کشور را از روی اسم خود سرور می‌خوانیم (فوری و بدون اینترنت) و بعد از اتصال با اندازه‌گیری واقعی اصلاحش می‌کنیم.")
+    FaqItem(S(R.string.why_do_you_not_use_an_ip), S(R.string.because_it_is_not_accurate_we_tested))
 )
 
 fun getFaqsEn(): List<FaqItem> = listOf(
@@ -1417,9 +1720,9 @@ fun getFaqsEn(): List<FaqItem> = listOf(
 
     FaqItem("How does the Quick Settings VPN tile work?", "You can add the 'mlmvpn' tile from your phone's Quick Settings panel (swipe down from the top → edit/add tiles). One tap toggles the VPN; when turning on, it delay-tests your most recent servers and connects to the fastest. You can change how many servers are tested (default 20) in Settings → VPN Settings. Note: the first time, connect once from inside the app to grant VPN permission."),
 
-    FaqItem("What is \"Quick Connect\" and how is it different from the rest of the app?", "Quick Connect is the centre button on the bottom bar and the app's landing screen: a ready-made list of thousands of public servers that the app downloads itself. No account, no panel to deploy, no config to paste. The difference from the cloud panel is that there the server is your own, on your own Cloudflare account (more stable, but you have to deploy it once), while here the servers are public and shared (instant, but their quality is not guaranteed). Full walkthrough in Tutorials, number 18."),
+    FaqItem("What is \"Quick Connect\" and how is it different from the rest of the app?", "Quick Connect is one of the icons on the app's home screen: a ready-made list of thousands of public servers that the app downloads itself. No account, no panel to deploy, no config to paste. The difference from the cloud panel is that there the server is your own, on your own Cloudflare account (more stable, but you have to deploy it once), while here the servers are public and shared (instant, but their quality is not guaranteed). Full walkthrough in Tutorials, number 18."),
 
-    FaqItem("The MLM Gateway (VPN Gate) is gone from the centre button — where is it?", "Quick Connect took the centre button. The MLM Gateway is now in the hamburger menu at the top, listed as \"MLM Gateway (VPN Gate)\". It is otherwise unchanged and every one of its features is where it was."),
+    FaqItem("Where is the MLM Gateway (VPN Gate)?", "On the home screen, as an icon labelled \"MLM Gateway\". It is otherwise unchanged and every one of its features is where it was. If you cannot find it, you may have moved it yourself."),
 
     FaqItem("In Quick Connect, what does the green tick next to a server mean?", "It means that server's country is no longer the list's claim — it has been measured. After you actually connect, the app asks Cloudflare through that same tunnel where the traffic came out. If the answer differs from the previous flag, the server moves to its real country for good and you are told. The reason: when someone picks a country, the point is to come out in that country."),
 

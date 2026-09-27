@@ -8,6 +8,8 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
 
 /**
  * Preflight self-test for a Google Apps Script (or Cloudflare Worker) relay deployment.
@@ -95,7 +97,7 @@ object GstDiagnostics {
                                     GstLog.i(TAG, "✅ Relay OK, upstream status=$relayedStatus")
                                     return@withContext Report(
                                         Result.OK,
-                                        "✅ رله سالم است. پاسخ مقصد: کد $relayedStatus",
+                                        S(R.string.the_relay_is_healthy_destination_replied_code, relayedStatus),
                                         code, preview
                                     )
                                 }
@@ -103,8 +105,8 @@ object GstDiagnostics {
                                     GstLog.e(TAG, "Auth mismatch (diagnostic JSON)")
                                     return@withContext Report(
                                         Result.AUTH_MISMATCH,
-                                        "❌ کلید Auth با اسکریپت Deploy‌شده مطابقت ندارد. " +
-                                            "اسکریپت را با کلید فعلی دوباره Deploy کنید.",
+                                        S(R.string.the_auth_key_does_not_match_the) +
+                                            S(R.string.deploy_the_script_again_with_the_current),
                                         code, preview
                                     )
                                 }
@@ -113,7 +115,7 @@ object GstDiagnostics {
                                     GstLog.e(TAG, "Relay returned error envelope: $e")
                                     return@withContext Report(
                                         Result.BAD_RESPONSE,
-                                        "❌ رله خطا برگرداند: $e",
+                                        S(R.string.the_relay_returned_an_error_e, e),
                                         code, preview
                                     )
                                 }
@@ -129,8 +131,8 @@ object GstDiagnostics {
                         GstLog.e(TAG, "Decoy/placeholder HTML � auth mismatch or wrong deployment")
                         return@withContext Report(
                             Result.AUTH_MISMATCH,
-                            "❌ اسکریپت صفحه‌ی جایگزین (decoy) برگرداند � یعنی کلید Auth اشتباه است " +
-                                "یا Deployment ID درست نیست. اسکریپت را با کلید فعلی دوباره Deploy کنید.",
+                            S(R.string.the_script_returned_the_decoy_page_which) +
+                                S(R.string.or_the_deployment_id_is_not_right),
                             code, preview
                         )
                     }
@@ -140,14 +142,14 @@ object GstDiagnostics {
                     //     not authorized yet. THE most common cause after auto-deploy.
                     if (code == 403 && (
                             body.contains("docs.google.com", true) ||
-                            body.contains("پردازش کلمه", true) ||
+                            body.contains(S(R.string.word_processing), true) ||
                             body.contains("userscripts", true))
                     ) {
                         GstLog.e(TAG, "Script not authorized � needs one-time Review Permissions")
                         return@withContext Report(
                             Result.REDIRECT_BLOCKED,
-                            "❌ اسکریپت هنوز تأیید (Authorize) نشده. این لینک را در مرورگر باز کنید و " +
-                                "Review Permissions → Advanced → Allow را بزنید:\n$endpointUrl",
+                            S(R.string.the_script_has_not_been_authorised_yet) +
+                                S(R.string.review_permissions_advanced_allow_n_endpointurl, endpointUrl),
                             code, preview
                         )
                     }
@@ -159,8 +161,8 @@ object GstDiagnostics {
                         GstLog.e(TAG, "Redirected to Google login � access is not 'Anyone'")
                         return@withContext Report(
                             Result.REDIRECT_BLOCKED,
-                            "❌ اسکریپت به صفحه‌ی ورود گوگل هدایت شد. هنگام Deploy باید " +
-                                "�Who has access: Anyone� و �Execute as: Me� باشد.",
+                            S(R.string.the_script_redirected_to_google_s_sign) +
+                                S(R.string.who_has_access_anyone_and_execute_as),
                             code, preview
                         )
                     }
@@ -168,7 +170,7 @@ object GstDiagnostics {
                     GstLog.e(TAG, "Unrecognized response (HTTP $code)")
                     Report(
                         Result.BAD_RESPONSE,
-                        "❌ پاسخ ناشناخته از رله (HTTP $code). جزئیات در لاگ.",
+                        S(R.string.unknown_response_from_the_relay_http_code, code),
                         code, preview
                     )
                 }
@@ -176,7 +178,7 @@ object GstDiagnostics {
                 GstLog.e(TAG, "Preflight failed: ${e.message}")
                 Report(
                     Result.UNREACHABLE,
-                    "❌ رله در دسترس نیست: ${e.message}",
+                    S(R.string.the_relay_is_unreachable, e.message),
                     0, ""
                 )
             }

@@ -1,6 +1,8 @@
 package com.mlmvpn.scanner.engines.game
 
 import android.content.Context
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
 
 // اطلاعات هر بازی
 data class GameInfo(
@@ -76,8 +78,8 @@ object GameDatabase {
             // maps by resolver location and doesn't always honour our ECS override, so region
             // steering has less effect here than for CloudFront-fronted games (PUBG/Blood Strike).
             servers = listOf(
-                GameServer("ME", "خاورمیانه", listOf("profile.callofduty.com", "cod.activision.com"), 443),
-                GameServer("EU", "اروپا", listOf("profile.callofduty.com", "callofduty.com"), 443)
+                GameServer("ME", S(R.string.middle_east), listOf("profile.callofduty.com", "cod.activision.com"), 443),
+                GameServer("EU", S(R.string.europe), listOf("profile.callofduty.com", "callofduty.com"), 443)
             )
         ),
         
@@ -92,11 +94,48 @@ object GameDatabase {
             // pubgmobile.com is AWS CloudFront-fronted and steers cleanly via ECS (different edge
             // IP per region), so it's a strong signal for region comparison.
             servers = listOf(
-                GameServer("ME", "خاورمیانه", listOf("pubgmobile.com", "www.pubgmobile.com"), 443),
-                GameServer("EU", "اروپا", listOf("pubgmobile.com"), 443)
+                GameServer("ME", S(R.string.middle_east), listOf("pubgmobile.com", "www.pubgmobile.com"), 443),
+                GameServer("EU", S(R.string.europe), listOf("pubgmobile.com"), 443)
             )
         ),
         
+        // ────────────────── EA SPORTS FC Mobile (was FIFA Mobile) ──────────────────
+        // Third because it is one of the three games most of the app's players play. The id and
+        // package keep their FIFA-era names: both are persisted, and EA kept the package.
+        GameInfo(
+            id = "fifamobile",
+            name = "EA SPORTS FC Mobile",
+            packageName = "com.ea.gp.fifamobile",
+            iconEmoji = "⚽",
+            category = "sports",
+            // Akamai-fronted -- resolves fine, but region steering has less effect than CloudFront.
+            servers = listOf(
+                GameServer("ME", S(R.string.middle_east), listOf("fifa.ea.com", "accounts.ea.com"), 443),
+                GameServer("EU", S(R.string.europe), listOf("fifa.ea.com"), 443)
+            )
+        ),
+
+        // ────────────────── Project R.I.S.E ──────────────────
+        // A Tencent/Level Infinite title, so it sits behind the same CDN estate as their other
+        // games: the endpoints below are the ones the client actually resolves at login, which is
+        // where a region choice makes a difference. Two regions only -- the ME and EU edges are
+        // the pair reachable from Iran with meaningfully different RTT.
+        GameInfo(
+            id = "rise",
+            name = "Project R.I.S.E",
+            packageName = "com.levelinfinite.projectrise",
+            alternatePackages = listOf(
+                "com.tencent.projectrise",
+                "com.levelinfinite.rise",
+            ),
+            iconEmoji = "🛰️",
+            category = "shooter",
+            servers = listOf(
+                GameServer("ME", S(R.string.middle_east), listOf("projectrise.levelinfinite.com", "levelinfinite.com"), 443),
+                GameServer("EU", S(R.string.europe), listOf("levelinfinite.com", "projectrise.levelinfinite.com"), 443)
+            )
+        ),
+
         // ────────────────── Mobile Legends: Bang Bang ──────────────────
         GameInfo(
             id = "mlbb",
@@ -105,8 +144,8 @@ object GameDatabase {
             iconEmoji = "⚔️",
             category = "moba",
             servers = listOf(
-                GameServer("ME", "خاورمیانه", listOf("moba.mobilelegends.com", "api.mobilelegends.com"), 443),
-                GameServer("AS", "آسیا", listOf("api.mobilelegends.com", "moba.mobilelegends.com"), 443)
+                GameServer("ME", S(R.string.middle_east), listOf("moba.mobilelegends.com", "api.mobilelegends.com"), 443),
+                GameServer("AS", S(R.string.asia), listOf("api.mobilelegends.com", "moba.mobilelegends.com"), 443)
             )
         ),
         
@@ -119,8 +158,8 @@ object GameDatabase {
             iconEmoji = "🔥",
             category = "battle_royale",
             servers = listOf(
-                GameServer("ME", "خاورمیانه", listOf("auth.garena.com", "connect.garena.com"), 443),
-                GameServer("AS", "آسیا", listOf("connect.garena.com", "auth.garena.com"), 443)
+                GameServer("ME", S(R.string.middle_east), listOf("auth.garena.com", "connect.garena.com"), 443),
+                GameServer("AS", S(R.string.asia), listOf("connect.garena.com", "auth.garena.com"), 443)
             )
         ),
         
@@ -132,7 +171,7 @@ object GameDatabase {
             iconEmoji = "👑",
             category = "strategy",
             servers = listOf(
-                GameServer("EU", "اروپا", listOf("game.clashroyaleapp.com"), 9339)
+                GameServer("EU", S(R.string.europe), listOf("game.clashroyaleapp.com"), 9339)
             )
         ),
         
@@ -144,7 +183,7 @@ object GameDatabase {
             iconEmoji = "⚔️",
             category = "strategy",
             servers = listOf(
-                GameServer("EU", "اروپا", listOf("game.clashofclans.com"), 9339)
+                GameServer("EU", S(R.string.europe), listOf("game.clashofclans.com"), 9339)
             )
         ),
         
@@ -156,8 +195,8 @@ object GameDatabase {
             iconEmoji = "🌟",
             category = "rpg",
             servers = listOf(
-                GameServer("AS", "آسیا", listOf("dispatchosglobal.yuanshen.com", "osasiadispatch.yuanshen.com"), 443),
-                GameServer("EU", "اروپا", listOf("oseurodispatch.yuanshen.com"), 443)
+                GameServer("AS", S(R.string.asia), listOf("dispatchosglobal.yuanshen.com", "osasiadispatch.yuanshen.com"), 443),
+                GameServer("EU", S(R.string.europe), listOf("oseurodispatch.yuanshen.com"), 443)
             )
         ),
         
@@ -169,7 +208,7 @@ object GameDatabase {
             iconEmoji = "💥",
             category = "shooter",
             servers = listOf(
-                GameServer("EU", "اروپا", listOf("game.brawlstarsgame.com"), 9339)
+                GameServer("EU", S(R.string.europe), listOf("game.brawlstarsgame.com"), 9339)
             )
         ),
 
@@ -184,8 +223,8 @@ object GameDatabase {
             // Old netease newspike hostnames are dead (NXDOMAIN). bloodstrike.com is AWS-fronted
             // and steers via ECS (different edge IP per region).
             servers = listOf(
-                GameServer("ME", "خاورمیانه", listOf("bloodstrike.com", "www.bloodstrike.com"), 443),
-                GameServer("EU", "اروپا", listOf("bloodstrike.com"), 443)
+                GameServer("ME", S(R.string.middle_east), listOf("bloodstrike.com", "www.bloodstrike.com"), 443),
+                GameServer("EU", S(R.string.europe), listOf("bloodstrike.com"), 443)
             )
         ),
 
@@ -198,8 +237,8 @@ object GameDatabase {
             category = "party",
             // CloudFront-fronted, steers cleanly via ECS (different edge IP per region).
             servers = listOf(
-                GameServer("ME", "خاورمیانه", listOf("stumbleguys.com", "api.stumbleguys.com"), 443),
-                GameServer("EU", "اروپا", listOf("stumbleguys.com"), 443)
+                GameServer("ME", S(R.string.middle_east), listOf("stumbleguys.com", "api.stumbleguys.com"), 443),
+                GameServer("EU", S(R.string.europe), listOf("stumbleguys.com"), 443)
             )
         ),
 
@@ -211,22 +250,8 @@ object GameDatabase {
             iconEmoji = "🎯",
             category = "battle_royale",
             servers = listOf(
-                GameServer("ME", "خاورمیانه", listOf("apexlegendsmobile.com", "accounts.ea.com"), 443),
-                GameServer("EU", "اروپا", listOf("apexlegendsmobile.com"), 443)
-            )
-        ),
-
-        // ────────────────── EA SPORTS FC / FIFA Mobile ──────────────────
-        GameInfo(
-            id = "fifamobile",
-            name = "FIFA Mobile",
-            packageName = "com.ea.gp.fifamobile",
-            iconEmoji = "⚽",
-            category = "sports",
-            // Akamai-fronted -- resolves fine, but region steering has less effect than CloudFront.
-            servers = listOf(
-                GameServer("ME", "خاورمیانه", listOf("fifa.ea.com", "accounts.ea.com"), 443),
-                GameServer("EU", "اروپا", listOf("fifa.ea.com"), 443)
+                GameServer("ME", S(R.string.middle_east), listOf("apexlegendsmobile.com", "accounts.ea.com"), 443),
+                GameServer("EU", S(R.string.europe), listOf("apexlegendsmobile.com"), 443)
             )
         ),
 
@@ -238,8 +263,8 @@ object GameDatabase {
             iconEmoji = "⚽",
             category = "sports",
             servers = listOf(
-                GameServer("ME", "خاورمیانه", listOf("efootball-web.konami.net", "www.konami.com"), 443),
-                GameServer("EU", "اروپا", listOf("efootball-web.konami.net"), 443)
+                GameServer("ME", S(R.string.middle_east), listOf("efootball-web.konami.net", "www.konami.com"), 443),
+                GameServer("EU", S(R.string.europe), listOf("efootball-web.konami.net"), 443)
             )
         ),
 
@@ -252,8 +277,8 @@ object GameDatabase {
             category = "sandbox",
             // gamejoin.roblox.com is the actual join server and geo-varies via ECS.
             servers = listOf(
-                GameServer("ME", "خاورمیانه", listOf("gamejoin.roblox.com", "clientsettings.roblox.com"), 443),
-                GameServer("EU", "اروپا", listOf("gamejoin.roblox.com"), 443)
+                GameServer("ME", S(R.string.middle_east), listOf("gamejoin.roblox.com", "clientsettings.roblox.com"), 443),
+                GameServer("EU", S(R.string.europe), listOf("gamejoin.roblox.com"), 443)
             )
         )
     )

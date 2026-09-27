@@ -15,6 +15,8 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
 
 /**
  * Handles Google sign-in and minting an OAuth2 access token for the Apps Script REST
@@ -112,8 +114,8 @@ object GoogleAuthManager {
                     if (!hasScriptScope(token)) {
                         GstLog.e(TAG, "Scope STILL missing after refresh � consent did not grant script.projects")
                         return@withContext TokenResult.Error(
-                            "دسترسی لازم (script.projects) به اپ داده نشده است. در تنظیمات حساب گوگل، " +
-                                "دسترسی این اپ را حذف کنید و دوباره لاگین کنید تا صفحه‌ی رضایت کامل نمایش داده شود."
+                            S(R.string.the_app_was_not_granted_the_required) +
+                                S(R.string.remove_this_app_s_access_and_sign)
                         )
                     }
                 }

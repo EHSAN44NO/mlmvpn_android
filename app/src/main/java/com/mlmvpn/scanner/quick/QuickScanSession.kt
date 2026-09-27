@@ -9,6 +9,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
 
 /**
  * A sweep that outlives the screen that started it.
@@ -84,7 +86,7 @@ object QuickScanSession {
                     onFound = { addResult(it) },
                 )
             } catch (e: Exception) {
-                _error.value = e.message ?: "جست‌وجو ناموفق بود"
+                _error.value = e.message ?: S(R.string.the_search_failed)
                 _progress.value = QuickScanner.Progress(QuickScanner.Stage.IDLE)
             } finally {
                 end()
@@ -106,7 +108,7 @@ object QuickScanSession {
                     onFound = { addResult(it) },
                 )
             } catch (e: Exception) {
-                _error.value = e.message ?: "جست‌وجو ناموفق بود"
+                _error.value = e.message ?: S(R.string.the_search_failed)
                 _progress.value = QuickScanner.Progress(QuickScanner.Stage.IDLE)
             } finally {
                 end()

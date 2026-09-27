@@ -1,0 +1,11 @@
+# MSN-GUARD: intentionally contains no ranges.
+#
+# ExitNodes {cc} was verified to be honoured with the IPv4 database alone, both
+# with IPv6 disabled (FR DE NL RO SE, 5/5) and with the app's real settings of
+# ClientUseIPv6 1 + ClientPreferIPv6ORPort auto (FR DE NL SE, 4/4). A relay's
+# country comes from its IPv4 address, and every relay has one, so an empty IPv6
+# database cannot shrink the candidate set.
+#
+# This file exists because Tor warns on every start about a missing GeoIPv6File
+# and that warning repeats into a 100-line in-app log. Shipping the real 16 MB
+# IPv6 database to silence a log line is not a trade worth making.

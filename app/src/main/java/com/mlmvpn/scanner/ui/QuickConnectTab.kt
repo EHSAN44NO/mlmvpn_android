@@ -1,29 +1,31 @@
 package com.mlmvpn.scanner.ui
 
-// Deliberately in the `ui` package, like VpnGateTab: it reuses stopVpnSafely() and the shared
-// insets locals without an import, and there is no second copy of either here.
-
 import android.app.Activity
 import android.content.Intent
 import android.net.VpnService
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.*
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,360 +43,385 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.preference.PreferenceManager
 import com.mlmvpn.scanner.MyVpnService
 import com.mlmvpn.scanner.quick.*
-import com.mlmvpn.scanner.ui.theme.*
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
+import com.mlmvpn.scanner.ui.settings.Ios
+import com.mlmvpn.scanner.ui.settings.IosAlert
+import com.mlmvpn.scanner.ui.settings.IosAlertAction
+import com.mlmvpn.scanner.ui.settings.IosScreen
+import com.mlmvpn.scanner.ui.settings.SettingsActionRow
+import com.mlmvpn.scanner.ui.settings.SettingsFooter
+import com.mlmvpn.scanner.ui.settings.SettingsGroup
+import com.mlmvpn.scanner.ui.settings.SettingsSectionHeader
+import com.mlmvpn.scanner.ui.theme.PanelShape
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
 
-/**
- * «اتصال سریع» — the app's home surface.
- *
- * One big button that means the same thing at every moment: press it and you end up online, or
- * offline. With no server chosen it finds one itself; with a saved list it uses the fastest
- * proven entry. The four states (idle, working, connected, disconnecting) each get their own
- * colour, motion and label, because the single most common complaint about a VPN button is not
- * knowing whether it is doing anything.
- *
- * The panel does not own the connection. The chosen node is handed to MyVpnService exactly the
- * way the nodes tab does it, so only one code path can ever say whether the phone is protected.
- */
+// =================================================================================================
+// Quick connect: one button that finds a working server and connects to it.
+//
+// Two lists feed it. The shared MLMVPN pool holds servers other people on the SAME operator have
+// proven within the hour -- see MlmPoolClient -- and the user's own saved list is the fallback for
+// when the pool cannot be reached. The button races whichever it gets and connects to the first
+// server that answers.
+//
+// Everything visual here is the app's shared language: grouped rows, section headers, footers,
+// tinted panels. The ring is the one bespoke element, because on this screen it IS the screen.
+// =================================================================================================
 
-/** What the big button is currently expressing. */
 enum class QuickState { IDLE, SEARCHING, CONNECTING, CONNECTED, DISCONNECTING }
 
 @Composable
-fun QuickConnectTab() {
+fun QuickConnectTab(onBack: () -> Unit = {}) {
+    val hostContext = LocalContext.current
+    var savedRevision by remember { mutableStateOf(0) }
+    var showServers by remember { mutableStateOf(false) }
+
+    // A pushed page, not a child of the frame below: it carries its own navigation bar, and two
+    // bars stacked is what happens if it renders inside this screen's content instead of in
+    // place of it.
+    if (showServers) {
+        QuickServersScreen(
+            onDismiss = {
+                showServers = false
+                savedRevision++
+            },
+            onAdopt = { nodes ->
+                val added = QuickSavedStore.addAll(hostContext, nodes)
+                savedRevision++
+                showServers = false
+                Toast.makeText(
+                    hostContext,
+                    faCount(added) + S(R.string.servers_added_to_the_connection_page),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            },
+        )
+        return
+    }
+
+    IosScreen(
+        title = S(R.string.quick_connect),
+        onBack = onBack,
+        backLabel = S(R.string.home),
+        scrollable = false,
+    ) {
+
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val bottomPadding = LocalSystemBottomPadding.current
-    val topPadding = LocalSystemTopPadding.current
 
-    val isRunning by MyVpnService.isRunningFlow.collectAsState()
+    val phase by MyVpnService.connectionPhaseFlow.collectAsState()
     val connectedNodeId by MyVpnService.connectedNodeIdFlow.collectAsState()
 
     var saved by remember { mutableStateOf(QuickSavedStore.all(context).toList()) }
     fun reloadSaved() { saved = QuickSavedStore.all(context).toList() }
+    // Adopting servers on the pushed page writes straight to the store; this is what tells the
+    // list to read it again once the page pops.
+    LaunchedEffect(savedRevision) { reloadSaved() }
 
-    var busy by remember { mutableStateOf<QuickState?>(null) }   // overrides the derived state
     var statusLine by remember { mutableStateOf("") }
     var egress by remember { mutableStateOf<EgressResult?>(null) }
-
-    var showServers by remember { mutableStateOf(false) }
     var testingAll by remember { mutableStateOf(false) }
     var testProgress by remember { mutableStateOf(0 to 0) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var searching by remember { mutableStateOf(false) }
+    var pendingUri by remember { mutableStateOf<String?>(null) }
+    var pendingId by remember { mutableStateOf<String?>(null) }
+    var searchJob by remember { mutableStateOf<Job?>(null) }
+    // Pool servers live here and nowhere else -- never in QuickSavedStore, never on disk.
+    var poolNodes by remember { mutableStateOf<List<QuickNode>>(emptyList()) }
+    var connectedFromPool by remember { mutableStateOf(false) }
 
-    val state = busy ?: if (isRunning) QuickState.CONNECTED else QuickState.IDLE
+    // Only a node this screen started counts as connected. A tunnel raised from the V2Ray tab or
+    // a transport screen must not light this button up.
+    val isOurs = connectedNodeId != null &&
+        (saved.any { it.id == connectedNodeId } || poolNodes.any { it.id == connectedNodeId })
+    val state = when {
+        isOurs && phase == MyVpnService.Phase.CONNECTED -> QuickState.CONNECTED
+        isOurs && phase == MyVpnService.Phase.CONNECTING -> QuickState.CONNECTING
+        pendingUri != null -> QuickState.CONNECTING
+        searching -> QuickState.SEARCHING
+        else -> QuickState.IDLE
+    }
 
-    // Clear the "new" marks once the user has actually looked at the list.
     LaunchedEffect(Unit) {
         QuickSavedStore.markSeen(context)
         reloadSaved()
     }
 
-    // Learn this phone's own public address while nothing is connected. That baseline is what
-    // later lets a trace prove it went THROUGH the tunnel rather than around it -- without it,
-    // an Iranian exit and a leak are the same reading. Re-taken whenever we are disconnected,
-    // so changing network does not leave a stale baseline behind.
-    LaunchedEffect(isRunning) {
-        if (!isRunning) {
-            EgressTracer.forgetBaseline()
-            runCatching { EgressTracer.traceDirect() }
-        }
-    }
-
-    // ── connecting ──────────────────────────────────────────────────────────────────────
-
-    var pendingUri by remember { mutableStateOf<Pair<String, String>?>(null) }   // id to uri
-
-    fun launchService(id: String, uri: String) {
-        val prefs = PreferenceManager.getDefaultSharedPreferences(context)
-        val intent = Intent(context, MyVpnService::class.java).apply {
-            putExtra("NODE_URI", uri)
-            putExtra("NODE_ID", id)
-            putExtra("PROXY_MODE", prefs.getBoolean("proxy_mode", false))
-            putExtra("LOCAL_PORT", com.mlmvpn.scanner.utils.LocalPort.getString(context))
-        }
-        context.startService(intent)
-        MyVpnService.isRunning = true
-        MyVpnService.connectedNodeId = id
-    }
-
-    /**
-     * After the tunnel is up, ask Cloudflare where the traffic really came out, and file the
-     * server under that country for good when the reading can be trusted.
-     */
-    fun verifyEgress(id: String) {
-        scope.launch {
-            // Must be the same port the tunnel was started on, or the trace describes whatever
-            // else happens to be listening rather than the connection we just made. And it
-            // retries until the reading actually comes out of the tunnel: a fixed wait was
-            // sometimes measuring a core that had not finished binding, which reads as the
-            // user's own country and was being recorded as the server's.
-            val res = EgressTracer.traceWhenReady(com.mlmvpn.scanner.utils.LocalPort.get(context))
-            egress = res
-            if (res.ok && res.tunnelled && res.countryTrusted && res.loc != null) {
-                val outcome = QuickVerifiedStore.record(context, id, res.loc)
-                val movedInPool = QuickConnectRepository.applyMeasured(id, res.loc)
-                // The saved list is its own store, so correcting only the catalog left the
-                // connect screen showing the old flag -- the one list the user is looking at.
-                val movedInSaved = QuickSavedStore.applyMeasuredCountry(context, id, res.loc)
-                if (movedInSaved) reloadSaved()
-                if (outcome.ok && (movedInPool || movedInSaved)) {
-                    val country = GeoLabel.countryFromCode(res.loc)
-                    Toast.makeText(
-                        context,
-                        "این سرور در واقع از ${country?.label ?: res.loc} خارج می‌شود و به همان کشور منتقل شد.",
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
+    fun startService(id: String, uri: String) {
+        val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(context)
+        val isProxyMode = com.mlmvpn.scanner.utils.NetworkSettings.proxyMode(context)
+        val localPort = com.mlmvpn.scanner.utils.LocalPort.getString(context)
+        context.startService(
+            Intent(context, MyVpnService::class.java).apply {
+                putExtra("NODE_URI", uri)
+                putExtra("NODE_ID", id)
+                putExtra("MTU_PROFILE", com.mlmvpn.scanner.utils.NetworkSettings.Method.QUICK_CONNECT.id)
+                putExtra("PROXY_MODE", isProxyMode)
+                putExtra("LOCAL_PORT", localPort)
             }
-        }
+        )
     }
 
-    fun finishConnect(id: String, uri: String) {
-        busy = QuickState.CONNECTING
-        statusLine = "در حال برقراری اتصال…"
-        launchService(id, uri)
-        scope.launch {
-            // Held briefly so the connecting state is actually seen; the service flips
-            // isRunning immediately, which would otherwise skip the animation entirely.
-            delay(1_200)
-            busy = null
-            statusLine = ""
-            verifyEgress(id)
-        }
-    }
-
-    val vpnLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val target = pendingUri
-        pendingUri = null
-        if (result.resultCode == Activity.RESULT_OK && target != null) {
-            finishConnect(target.first, target.second)
+    val vpnLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { res ->
+        val uri = pendingUri
+        val id = pendingId
+        if (res.resultCode == Activity.RESULT_OK && uri != null && id != null) {
+            startService(id, uri)
         } else {
-            busy = null
             statusLine = ""
-            Toast.makeText(context, "اجازه‌ی VPN داده نشد", Toast.LENGTH_SHORT).show()
         }
+        pendingUri = null
+        pendingId = null
     }
 
-    /**
-     * Connect, stopping whatever is already running first.
-     *
-     * Tapping a different server while connected used to call startService straight away, so
-     * two cores briefly existed at once and the second could not bind the local port the first
-     * still held. That surfaced as a proxy warning from the core and, worse, left the status
-     * probe and the egress trace talking to the OLD tunnel on that port -- which is how a
-     * freshly connected server could report the wrong country.
-     */
-    fun connectTo(id: String, uri: String) {
-        scope.launch {
-            if (MyVpnService.isRunning) {
-                busy = QuickState.DISCONNECTING
-                statusLine = "قطع اتصال قبلی…"
-                withContext(Dispatchers.IO) { stopVpnSafely(context) }
-                MyVpnService.isRunning = false
-                egress = null
-                // Long enough for the previous core to release its inbound. Starting before it
-                // has is the whole bug above.
-                delay(1_200)
-            }
-            val prepare = VpnService.prepare(context)
-            if (prepare != null) {
-                pendingUri = id to uri
-                vpnLauncher.launch(prepare)
-            } else {
-                finishConnect(id, uri)
-            }
+    fun connectTo(id: String, uri: String) = com.mlmvpn.scanner.data.ScanGuard.run(
+        // A tunnel steals the default route from a running IP scan; the guard asks first.
+        com.mlmvpn.scanner.data.ScanGuard.Reason.CONNECT_VPN
+    ) {
+        pendingId = id
+        pendingUri = uri
+        // Claim the tunnel before it exists, so the home screen's lamp is right from the first
+        // frame -- and so a pool server, which is in no list on disk, is still recognisably ours.
+        QuickSavedStore.markConnected(context, id)
+        statusLine = S(R.string.connecting)
+        egress = null
+        val prep = try { VpnService.prepare(context) } catch (e: Exception) { null }
+        if (prep != null) {
+            vpnLauncher.launch(prep)
+        } else {
+            startService(id, uri)
+            pendingUri = null
+            pendingId = null
         }
     }
 
     fun disconnect() {
-        busy = QuickState.DISCONNECTING
-        statusLine = "در حال قطع اتصال…"
+        statusLine = ""
         egress = null
-        scope.launch {
-            // stopVpnSafely, not a bare STOP: if the WireGuard trial is what is running, the
-            // process must be relaunched or the Go runtime exits by itself seconds later.
-            withContext(Dispatchers.IO) { stopVpnSafely(context) }
-            MyVpnService.isRunning = false
-            delay(900)
-            busy = null
-            statusLine = ""
-        }
+        context.startService(Intent(context, MyVpnService::class.java).apply { action = "STOP" })
     }
 
     /**
-     * The one button, with no server chosen: find one and connect to it.
+     * The one button.
      *
-     * Preference order is the point. A saved server that already proved itself is instant, so
-     * it wins; only when there is nothing saved (or nothing saved still works) does this fall
-     * back to sweeping the pool, which takes seconds and should not be the everyday path.
+     * Connected, it disconnects. Otherwise it asks the shared pool for servers other people on
+     * this same operator have just proven, races them all at once, and connects to the first that
+     * answers -- falling back to the user's own saved list if the pool is unreachable.
+     *
+     * Racing rather than walking is the whole reason this reaches a usable success rate. Public
+     * free configs are individually unreliable: measured on the live catalogue, about one in a
+     * hundred works at any moment, and even a pool-vetted config can die between being verified
+     * and being tried. Twenty at once turns twenty independent coin flips into one that almost
+     * always lands, and it costs no more wall-clock time than testing one slow server.
      */
-    fun quickConnect() {
-        scope.launch {
-            busy = QuickState.SEARCHING
-
-            // ── the user already has servers: use those, and only those ──────────────────
-            //
-            // Re-tested rather than trusted: a saved delay can be hours old and the server may
-            // have died since. Testing a handful in parallel costs a couple of seconds and is
-            // still far faster than sweeping a pool of thousands, so this path stays the
-            // everyday one for anyone who has connected before.
-            if (saved.isNotEmpty()) {
-                statusLine = "بررسی سرورهای شما…"
-                val live = java.util.Collections.synchronizedList(ArrayList<Pair<String, Int>>())
-                try {
-                    QuickScanner.measureAll(
-                        context = context,
-                        uris = saved.map { it.id to it.uri },
-                        onResult = { id, ms ->
-                            QuickSavedStore.updateResult(context, id, ms)
-                            if (ms > 0) live.add(id to ms)
-                        },
-                        onProgress = { done, total -> statusLine = "بررسی سرورهای شما… $done از $total" },
-                    )
-                } catch (e: Exception) {
-                    // Fall through to the pool sweep below.
-                }
-                QuickSavedStore.resort(context)
-                reloadSaved()
-                val best = live.minByOrNull { it.second }
-                if (best != null) {
-                    val row = QuickSavedStore.all(context).firstOrNull { it.id == best.first }
-                    if (row != null) {
-                        connectTo(row.id, row.uri)
-                        return@launch
-                    }
-                }
-                statusLine = "هیچ‌کدام از سرورهای شما جواب نداد — جست‌وجوی سرور تازه…"
-            }
-
-            // ── nothing saved, or nothing saved still works: sweep the pool ──────────────
-            statusLine = "در حال یافتن سرور…"
-            try {
-                val candidates = withContext(Dispatchers.IO) {
-                    QuickConnectRepository.nodesFor(context, "all")
-                }
-                // Returns at the first server that is actually good, not the first that merely
-                // answers -- see QuickScanner.quickest.
-                val best = QuickScanner.quickest(
-                    context = context,
-                    candidates = candidates,
-                    // One line, both stages: they run concurrently, so reporting only whichever
-                    // spoke last is what made the browse screen's single bar jump about.
-                    onProgress = { p ->
-                        statusLine = "جست‌وجو… ${p.reachable} پاسخ‌گو · ${p.realTested} تست‌شده"
-                    },
-                )
-                if (best == null) {
-                    busy = null
-                    statusLine = ""
-                    Toast.makeText(context, "سرور سالمی پیدا نشد — دوباره تلاش کنید.", Toast.LENGTH_LONG).show()
-                    return@launch
-                }
-                QuickSavedStore.addAll(context, listOf(best))
-                reloadSaved()
-                connectTo(best.id, best.uri)
-            } catch (e: Exception) {
-                busy = null
-                statusLine = ""
-                Toast.makeText(context, e.message ?: "جست‌وجو ناموفق بود", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
     fun onBigButton() {
         when (state) {
-            QuickState.CONNECTED -> disconnect()
-            QuickState.IDLE -> quickConnect()
-            else -> {
-                // A press while working is a request to abandon, not a second connect.
-                if (state == QuickState.SEARCHING) {
-                    QuickScanner.stop()
-                    statusLine = "لغو شد"
-                }
+            QuickState.CONNECTED -> { disconnect(); return }
+            QuickState.SEARCHING -> {
+                QuickScanner.stopMeasuring()
+                searchJob?.cancel()
+                searchJob = null
+                searching = false
+                statusLine = ""
+                return
             }
+            QuickState.CONNECTING, QuickState.DISCONNECTING -> return
+            QuickState.IDLE -> Unit
         }
-    }
 
-    // ── re-testing the saved list ───────────────────────────────────────────────────────
+        searching = true
+        statusLine = S(R.string.fetching_fresh_servers)
+        searchJob = scope.launch {
+            val pooled = MlmPoolClient.fetch(context)
+            if (!searching) return@launch
 
-    fun testAllSaved() {
-        if (testingAll || saved.isEmpty()) return
-        scope.launch {
-            testingAll = true
-            testProgress = 0 to saved.size
-            try {
-                QuickScanner.measureAll(
-                    context = context,
-                    uris = saved.map { it.id to it.uri },
-                    onResult = { id, ms -> QuickSavedStore.updateResult(context, id, ms) },
-                    onProgress = { done, total -> testProgress = done to total },
+            // The user's own list is the fallback, ordered fastest-first: a server already known
+            // to be quick is worth trying before anything unproven.
+            val fallback = saved.sortedWith(
+                compareBy(
+                    { if (it.delay in 1..QuickScanner.GOOD_ENOUGH_MS) 0 else 1 },
+                    { if (it.delay > 0) it.delay else Int.MAX_VALUE },
                 )
-            } finally {
-                QuickSavedStore.resort(context)
-                reloadSaved()
-                testingAll = false
+            ).map { it.id to it.uri }
+
+            val candidates = if (pooled.isNotEmpty()) {
+                poolNodes = pooled
+                // Pool servers, plus a few of the user's own that the pool has never seen.
+                // Without those the race is a closed loop -- it only ever tries what the pool
+                // sent, so the only configs that can ever be reported back are the ones already
+                // in it, and the list can never grow past whatever seeded it. The extra probes
+                // are free: they run in the same parallel round, and the first answer still wins.
+                val known = pooled.mapTo(HashSet()) { it.uri }
+                pooled.map { it.id to it.uri } + fallback.filter { it.second !in known }.take(6)
+            } else fallback
+
+            if (candidates.isEmpty()) {
+                searching = false
+                statusLine = ""
+                showServers = true
+                return@launch
+            }
+
+            statusLine = S(R.string.testing) + faCount(candidates.size) + S(R.string.servers_at_once)
+
+            // Everything at once, and the first real answer wins. `measure` is a full proxied
+            // request, so a winner here is a server that actually carried traffic a second ago.
+            val winner = java.util.concurrent.atomic.AtomicReference<Pair<String, String>?>(null)
+            coroutineScope {
+                val jobs = candidates.map { (id, uri) ->
+                    async(kotlinx.coroutines.Dispatchers.IO) {
+                        if (winner.get() != null) return@async
+                        // Nothing is reported here any more: `measure` itself tells the pool, so
+                        // a result counts no matter which screen measured it.
+                        if (QuickScanner.measure(context, uri) > 0) {
+                            winner.compareAndSet(null, id to uri)
+                        }
+                    }
+                }
+                // Stop as soon as one lands; the rest are no longer interesting.
+                while (jobs.any { it.isActive } && winner.get() == null && searching) {
+                    kotlinx.coroutines.delay(120)
+                }
+                jobs.forEach { it.cancel() }
+            }
+
+            searching = false
+            val won = winner.get()
+            if (won == null) {
+                statusLine = S(R.string.no_server_answered_try_again)
+            } else {
+                connectedFromPool = poolNodes.any { it.id == won.first }
+                connectTo(won.first, won.second)
             }
         }
     }
 
     fun testOne(row: SavedServer) {
         scope.launch {
-            QuickSavedStore.updateResult(context, row.id, 0)   // 0 == in flight
+            QuickSavedStore.updateResult(context, row.id, SavedServer.TESTING)
             reloadSaved()
             val ms = QuickScanner.measure(context, row.uri)
             QuickSavedStore.updateResult(context, row.id, ms)
-            QuickSavedStore.resort(context)
             reloadSaved()
         }
     }
 
-    // ── layout ──────────────────────────────────────────────────────────────────────────
+    fun testAllSaved() {
+        if (testingAll) return
+        val batch = saved.map { it.id to it.uri }
+        if (batch.isEmpty()) return
+        testingAll = true
+        testProgress = 0 to batch.size
+        scope.launch {
+            try {
+                QuickScanner.measureAll(
+                    context = context,
+                    uris = batch,
+                    onResult = { id, delay ->
+                        QuickSavedStore.updateResult(context, id, delay)
+                        reloadSaved()
+                    },
+                    onProgress = { done, total -> testProgress = done to total },
+                )
+            } finally {
+                QuickSavedStore.clearTestingMarkers(context)
+                QuickSavedStore.resort(context)
+                testingAll = false
+                reloadSaved()
+            }
+        }
+    }
 
-    Box(modifier = Modifier.fillMaxSize().background(BgDark)) {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(top = topPadding),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = bottomPadding + 90.dp)
-        ) {
-            item {
-                Spacer(Modifier.height(8.dp))
-                Text("اتصال سریع", color = TextPrimary, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(24.dp))
+    // Once the tunnel is up, prove where it actually comes out. A reading that matches the
+    // phone's own address means the request never entered the tunnel, and the banner says so
+    // rather than claiming a country it cannot support.
+    LaunchedEffect(state) {
+        if (state == QuickState.CONNECTED) {
+            statusLine = S(R.string.connected)
+            val port = com.mlmvpn.scanner.utils.LocalPort.get(context)
+            val trace = EgressTracer.traceWhenReady(port)
+            egress = trace
+
+            // The trace is evidence; the feed's flag is only a claim. Where they disagree the
+            // evidence wins, and it has to win HERE -- on the row the user is looking at -- not
+            // just in the catalogue some later refresh rebuilds. Both halves of this were
+            // written months ago and never called, which is why a server that plainly exits in
+            // Germany kept flying an American flag and stayed filed under the wrong country.
+            //
+            // WARP paths are excluded by `countryTrusted`: they report the USER's country by
+            // design, so trusting one would file every node under Iran. See [EgressTracer].
+            val measured = trace.takeIf { it.ok && it.countryTrusted }?.country?.code
+            val id = connectedNodeId
+            if (measured != null && !id.isNullOrBlank()) {
+                QuickVerifiedStore.record(context, id, measured)
+                if (QuickSavedStore.applyMeasuredCountry(context, id, measured)) reloadSaved()
+                poolNodes.firstOrNull { it.id == id }?.let { node ->
+                    node.applyVerified(measured)
+                    poolNodes = poolNodes.toList()   // a new list, so the row actually redraws
+                }
             }
 
+            // Ask for the minute-later second opinion, and carry the measured country with it
+            // so everyone else gets the corrected flag rather than the feed's claim. Handed to
+            // the client rather than awaited here: leaving this screen must not cancel it, and
+            // leaving this screen is what people do the moment they are connected.
+            if (connectedFromPool && !id.isNullOrBlank()) {
+                poolNodes.firstOrNull { it.id == id }?.let { node ->
+                    MlmPoolClient.confirmIfStillUp(context, id, node.uri, measured)
+                }
+            }
+        } else if (state == QuickState.IDLE) {
+            egress = null
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(
+                top = 8.dp,
+                bottom = LocalSystemBottomPadding.current + 24.dp,
+            )
+        ) {
             item {
+                // The navigation bar already carries the screen's name; this is the breathing
+                // room the removed 22sp title used to provide.
+                Spacer(Modifier.height(28.dp))
                 Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                     ConnectOrb(state = state, onClick = { onBigButton() })
                 }
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(18.dp))
             }
 
             item {
                 Text(
                     text = statusLine.ifBlank {
                         when (state) {
-                            QuickState.IDLE -> if (saved.any { it.delay > 0 }) "آماده‌ی اتصال" else "برای اتصال خودکار لمس کنید"
-                            QuickState.CONNECTED -> "متصل"
+                            QuickState.IDLE ->
+                                if (saved.any { it.delay > 0 }) S(R.string.ready_to_connect)
+                                else S(R.string.tap_to_connect_automatically)
+                            QuickState.CONNECTED -> S(R.string.connected)
                             else -> ""
                         }
                     },
                     color = when (state) {
-                        QuickState.CONNECTED -> GreenOk
-                        QuickState.DISCONNECTING -> RedError
-                        QuickState.IDLE -> TextMuted
-                        else -> Primary
+                        QuickState.CONNECTED -> Ios.Green
+                        QuickState.DISCONNECTING -> Ios.Destructive
+                        else -> Ios.SecondaryLabel
                     },
                     fontSize = 14.sp,
                     textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp)
                 )
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(14.dp))
             }
 
             egress?.let {
@@ -404,155 +431,166 @@ fun QuickConnectTab() {
                 }
             }
 
-            // Saved list header + actions
             item {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("سرورهای من", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.width(8.dp))
-                    Text("(${saved.size})", color = TextMuted, fontSize = 13.sp)
-                    Spacer(Modifier.weight(1f))
+                // Above the list, not below it: three rows under a list of twenty servers are
+                // three rows nobody scrolls to, and "browse the catalogue" is the first thing a
+                // new user needs -- their list is empty, so there is nothing above it to read.
+                SettingsGroup {
+                    SettingsActionRow(
+                        label = S(R.string.server_list_and_country_scan),
+                        icon = Icons.Default.Dns,
+                        tint = Ios.Gray,
+                    ) { showServers = true }
                     if (saved.isNotEmpty()) {
-                        IconButton(onClick = { if (testingAll) QuickScanner.stop() else testAllSaved() }) {
-                            Icon(
-                                if (testingAll) Icons.Default.Stop else Icons.Default.NetworkCheck,
-                                contentDescription = "تست همه",
-                                tint = if (testingAll) YellowWarn else Primary
-                            )
-                        }
-                        IconButton(onClick = { confirmDelete = true }) {
-                            Icon(Icons.Default.DeleteSweep, contentDescription = "حذف", tint = RedError)
-                        }
+                        Separator()
+                        SettingsActionRow(
+                            label = if (testingAll) S(R.string.stop_testing) else S(R.string.test_all_my_servers),
+                            icon = if (testingAll) Icons.Default.Stop else Icons.Default.NetworkCheck,
+                            tint = if (testingAll) Ios.Orange else Ios.Gray,
+                            labelColor = Ios.Label,
+                        ) { if (testingAll) QuickScanner.stopMeasuring() else testAllSaved() }
+                        Separator()
+                        SettingsActionRow(
+                            label = S(R.string.clear_list),
+                            icon = Icons.Default.DeleteSweep,
+                            tint = Ios.Destructive,
+                        ) { confirmDelete = true }
                     }
                 }
-                if (testingAll) {
-                    val (done, total) = testProgress
-                    Text("در حال تست: $done از $total", color = TextMuted, fontSize = 12.sp)
-                    Spacer(Modifier.height(4.dp))
-                    LinearProgressIndicator(
-                        progress = if (total > 0) done.toFloat() / total else 0f,
-                        color = Primary, trackColor = BorderDark,
-                        modifier = Modifier.fillMaxWidth().height(3.dp).clip(CircleShape)
+                Spacer(Modifier.height(4.dp))
+            }
+
+            if (poolNodes.isNotEmpty()) {
+                item {
+                    SettingsSectionHeader(S(R.string.mlmvpn_private_list) + faCount(poolNodes.size))
+                    SettingsGroup {
+                        poolNodes.forEachIndexed { i, node ->
+                            if (i > 0) Separator()
+                            PoolRow(
+                                node = node,
+                                connected = state == QuickState.CONNECTED && connectedNodeId == node.id,
+                            )
+                        }
+                    }
+                    SettingsFooter(
+                        S(R.string.other_people_on_this_same_carrier_have) +
+                            S(R.string.they_are_never_saved_on_your_phone) +
+                            S(R.string.connect_button)
                     )
-                    Spacer(Modifier.height(8.dp))
                 }
             }
 
-            if (saved.isEmpty()) {
-                item {
-                    Surface(color = SurfaceDark, shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Text(
-                                "هنوز سروری ذخیره نشده. دکمه‌ی بالا خودش یک سرور سالم پیدا می‌کند و وصل می‌شود، " +
-                                    "یا از «فهرست سرورها» کشور دلخواهتان را بررسی کنید و نتیجه‌ها را به اینجا بیاورید.",
-                                color = TextMuted, fontSize = 13.sp
-                            )
-                        }
+            item {
+                SettingsSectionHeader(
+                    if (saved.isEmpty()) S(R.string.my_servers)
+                    else S(R.string.my_servers_2) + faCount(saved.size)
+                )
+                if (testingAll) {
+                    val (done, total) = testProgress
+                    Column(modifier = Modifier.padding(horizontal = 20.dp)) {
+                        Text(
+                            S(R.string.testing_2) + faCount(done) + S(R.string.of) + faCount(total),
+                            color = Ios.SecondaryLabel,
+                            fontSize = 12.sp,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        LinearProgressIndicator(
+                            progress = if (total > 0) done.toFloat() / total else 0f,
+                            color = Ios.Blue,
+                            trackColor = Color.White.copy(alpha = 0.12f),
+                            modifier = Modifier.fillMaxWidth().height(3.dp).clip(CircleShape)
+                        )
                     }
                     Spacer(Modifier.height(10.dp))
                 }
             }
 
-            items(saved, key = { it.id }) { row ->
-                SavedRow(
-                    row = row,
-                    connected = isRunning && connectedNodeId == row.id,
-                    onConnect = { if (isRunning && connectedNodeId == row.id) disconnect() else connectTo(row.id, row.uri) },
-                    onTest = { testOne(row) },
-                    onDelete = {
-                        QuickSavedStore.remove(context, listOf(row.id))
-                        QuickConnectRepository.invalidate()
-                        reloadSaved()
-                    },
-                )
-                Spacer(Modifier.height(8.dp))
-            }
-
-            item {
-                Spacer(Modifier.height(10.dp))
-                OutlinedButton(
-                    onClick = { showServers = true },
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth().height(48.dp)
-                ) {
-                    Icon(Icons.Default.Dns, contentDescription = null, tint = Primary)
-                    Spacer(Modifier.width(8.dp))
-                    Text("فهرست سرورها و بررسی کشورها", color = Primary, fontSize = 15.sp)
+            if (saved.isEmpty()) {
+                item {
+                    SettingsFooter(
+                        S(R.string.no_servers_saved_yet_the_button_above) +
+                            S(R.string.on_its_own_or_open_server_list) +
+                            S(R.string.results_back_here)
+                    )
+                }
+            } else {
+                item {
+                    SettingsGroup {
+                        saved.forEachIndexed { i, row ->
+                            if (i > 0) Separator()
+                            SavedRow(
+                                row = row,
+                                connected = state == QuickState.CONNECTED && connectedNodeId == row.id,
+                                onConnect = {
+                                    if (state == QuickState.CONNECTED && connectedNodeId == row.id) disconnect()
+                                    else connectTo(row.id, row.uri)
+                                },
+                                onTest = { testOne(row) },
+                                onDelete = {
+                                    QuickSavedStore.remove(context, listOf(row.id))
+                                    QuickConnectRepository.invalidate()
+                                    reloadSaved()
+                                },
+                            )
+                        }
+                    }
                 }
             }
         }
     }
 
-    if (showServers) {
-        QuickServersScreen(
-            onDismiss = {
-                showServers = false
-                reloadSaved()
-            },
-            onAdopt = { nodes ->
-                val added = QuickSavedStore.addAll(context, nodes)
-                reloadSaved()
-                Toast.makeText(context, "$added سرور به صفحه‌ی اتصال اضافه شد.", Toast.LENGTH_SHORT).show()
-            },
-        )
-    }
-
     if (confirmDelete) {
         val deadCount = saved.count { it.isDead }
-        AlertDialog(
-            onDismissRequest = { confirmDelete = false },
-            containerColor = SurfaceDark,
-            icon = { Icon(Icons.Default.DeleteSweep, contentDescription = null, tint = RedError) },
-            title = { Text("حذف سرورها", color = TextPrimary, fontWeight = FontWeight.Bold) },
-            text = {
-                Text(
-                    "سرورهای حذف‌شده دیگر در به‌روزرسانی‌های بعدی فهرست هم دانلود نمی‌شوند.\n\n" +
-                        "قطع‌شده‌ها: $deadCount · همه: ${saved.size}",
-                    color = TextMuted, fontSize = 13.sp
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    QuickSavedStore.removeDead(context)
-                    QuickConnectRepository.invalidate()
-                    reloadSaved()
-                    confirmDelete = false
-                }) { Text("فقط قطع‌شده‌ها ($deadCount)", color = YellowWarn) }
-            },
-            dismissButton = {
-                Row {
-                    TextButton(onClick = { confirmDelete = false }) { Text("انصراف", color = TextMuted) }
-                    TextButton(onClick = {
+        IosAlert(
+            title = S(R.string.clear_list),
+            message = S(R.string.deleted_servers_are_not_downloaded_again_by) +
+                S(R.string.dead) + faCount(deadCount) + S(R.string.all) + faCount(saved.size),
+            onDismiss = { confirmDelete = false },
+            actions = listOf(
+                IosAlertAction(S(R.string.cancel), onClick = { confirmDelete = false }),
+                IosAlertAction(
+                    S(R.string.dead_only) + faCount(deadCount) + ")",
+                    onClick = {
+                        QuickSavedStore.removeDead(context)
+                        QuickConnectRepository.invalidate()
+                        reloadSaved()
+                        confirmDelete = false
+                    },
+                ),
+                IosAlertAction(
+                    S(R.string.all_2),
+                    onClick = {
                         QuickSavedStore.remove(context, saved.map { it.id })
                         QuickConnectRepository.invalidate()
                         reloadSaved()
                         confirmDelete = false
-                    }) { Text("همه", color = RedError) }
-                }
-            }
+                    },
+                    destructive = true,
+                ),
+            ),
         )
+    }
     }
 }
 
 /**
  * The connect button.
  *
- * Each state gets its own colour and its own motion, so the button reads at a glance without
- * the label: idle breathes slowly, working sweeps a rotating arc, connected is still (a solid
- * ring — motion on a settled state is noise), disconnecting sweeps red.
+ * Kept as a ring rather than folded into the shared EmergencyDial: this screen has exactly one
+ * control and the ring IS the screen, where the transport screens use the dial as one element
+ * among several. Each state gets its own motion, so the button reads at a glance without the
+ * label: idle breathes slowly, working sweeps a rotating arc, connected is still (a solid ring --
+ * motion on a settled state is noise), disconnecting sweeps.
  */
 @Composable
 private fun ConnectOrb(state: QuickState, onClick: () -> Unit) {
-    val working = state == QuickState.SEARCHING || state == QuickState.CONNECTING
-    val target = when (state) {
-        QuickState.CONNECTED -> GreenOk
-        QuickState.DISCONNECTING -> RedError
-        QuickState.SEARCHING, QuickState.CONNECTING -> Primary
-        QuickState.IDLE -> TextDim
+    val ringColor = when (state) {
+        QuickState.CONNECTED -> Ios.Green
+        QuickState.DISCONNECTING -> Ios.Destructive
+        QuickState.IDLE -> Ios.SecondaryLabel
+        else -> Ios.Blue
     }
-    val ringColor by animateColorAsState(target, animationSpec = tween(420), label = "orbColor")
+    val working = state == QuickState.SEARCHING || state == QuickState.CONNECTING
 
     val transition = rememberInfiniteTransition(label = "orb")
     val sweepAngle by transition.animateFloat(
@@ -560,7 +598,6 @@ private fun ConnectOrb(state: QuickState, onClick: () -> Unit) {
         animationSpec = infiniteRepeatable(tween(1400, easing = LinearEasing)),
         label = "sweep"
     )
-    // Idle breathes; every other state holds its size so only one thing is moving at a time.
     val breathe by transition.animateFloat(
         initialValue = 0.97f, targetValue = 1.03f,
         animationSpec = infiniteRepeatable(tween(2200, easing = FastOutSlowInEasing), RepeatMode.Reverse),
@@ -572,25 +609,28 @@ private fun ConnectOrb(state: QuickState, onClick: () -> Unit) {
         modifier = Modifier.size(210.dp).scale(pressScale),
         contentAlignment = Alignment.Center
     ) {
+        // Read outside the draw lambda: the palette is composable, and a DrawScope is not a
+        // composable context.
+        val trackColor = Color.White.copy(alpha = 0.10f)
         Canvas(modifier = Modifier.fillMaxSize()) {
             val stroke = 10.dp.toPx()
             val inset = stroke / 2 + 8.dp.toPx()
             val arcSize = Size(size.width - inset * 2, size.height - inset * 2)
             val topLeft = Offset(inset, inset)
 
-            // Halo — the soft outer field. Kept faint so it reads as depth, not decoration.
+            // Halo -- the soft outer field. Faint, so it reads as depth rather than decoration.
             drawCircle(
                 brush = Brush.radialGradient(
-                    listOf(ringColor.copy(alpha = 0.22f), Color.Transparent),
+                    listOf(ringColor.copy(alpha = 0.20f), Color.Transparent),
                     center = center,
                     radius = size.minDimension / 2f
                 ),
                 radius = size.minDimension / 2f
             )
 
-            // Track — always the full circle, so a partial arc reads as progress against it.
+            // Track -- always the full circle, so a partial arc reads as progress against it.
             drawArc(
-                color = BorderDark,
+                color = trackColor,
                 startAngle = 0f, sweepAngle = 360f, useCenter = false,
                 topLeft = topLeft, size = arcSize,
                 style = Stroke(width = stroke, cap = StrokeCap.Round)
@@ -616,7 +656,7 @@ private fun ConnectOrb(state: QuickState, onClick: () -> Unit) {
                     style = Stroke(width = stroke, cap = StrokeCap.Round)
                 )
                 else -> drawArc(
-                    color = ringColor.copy(alpha = 0.5f),
+                    color = ringColor.copy(alpha = 0.45f),
                     startAngle = -90f, sweepAngle = 120f, useCenter = false,
                     topLeft = topLeft, size = arcSize,
                     style = Stroke(width = stroke, cap = StrokeCap.Round)
@@ -624,37 +664,42 @@ private fun ConnectOrb(state: QuickState, onClick: () -> Unit) {
             }
         }
 
-        Surface(
-            color = SurfaceDark,
-            shape = CircleShape,
-            shadowElevation = 8.dp,
-            modifier = Modifier.size(150.dp).clip(CircleShape).clickable { onClick() }
+        Box(
+            modifier = Modifier
+                .size(150.dp)
+                .clip(CircleShape)
+                .background(
+                    if (state == QuickState.IDLE) Color.White.copy(alpha = 0.07f)
+                    else ringColor.copy(alpha = 0.16f)
+                )
+                .clickable { onClick() },
+            contentAlignment = Alignment.Center,
         ) {
             Column(
-                modifier = Modifier.fillMaxSize(),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
                 Icon(
                     imageVector = when (state) {
-                        QuickState.CONNECTED -> Icons.Default.PowerSettingsNew
                         QuickState.SEARCHING -> Icons.Default.Search
                         else -> Icons.Default.PowerSettingsNew
                     },
                     contentDescription = null,
-                    tint = ringColor,
-                    modifier = Modifier.size(46.dp)
+                    // White, not the accent: the ring already carries the state, and an accent
+                    // glyph inside an accent ring is the same word said twice.
+                    tint = Ios.Label,
+                    modifier = Modifier.size(44.dp)
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
                     when (state) {
-                        QuickState.IDLE -> "اتصال"
-                        QuickState.SEARCHING -> "جست‌وجو"
-                        QuickState.CONNECTING -> "اتصال…"
-                        QuickState.CONNECTED -> "قطع اتصال"
-                        QuickState.DISCONNECTING -> "قطع…"
+                        QuickState.IDLE -> S(R.string.connect)
+                        QuickState.SEARCHING -> S(R.string.searching)
+                        QuickState.CONNECTING -> S(R.string.connecting_2)
+                        QuickState.CONNECTED -> S(R.string.disconnect_2)
+                        QuickState.DISCONNECTING -> S(R.string.disconnecting)
                     },
-                    color = ringColor, fontSize = 14.sp, fontWeight = FontWeight.Bold
+                    color = Ios.Label, fontSize = 14.sp, fontWeight = FontWeight.SemiBold
                 )
             }
         }
@@ -665,19 +710,91 @@ private fun ConnectOrb(state: QuickState, onClick: () -> Unit) {
 @Composable
 private fun EgressBanner(res: EgressResult) {
     val (text, tint) = when {
-        !res.ok -> "خروجی بررسی نشد: ${res.error}" to YellowWarn
+        !res.ok -> S(R.string.egress_not_checked, res.error) to Ios.Orange
         // A reading whose IP matches the phone's own is not the exit; it is a request that
         // never entered the tunnel. Saying "verified" there would be a lie.
-        !res.tunnelled -> "اتصال برقرار است، ولی کشور خروج تأیید نشد — دوباره وصل شوید." to YellowWarn
+        !res.tunnelled ->
+            S(R.string.connected_but_the_exit_country_was_not) to Ios.Orange
         // WARP reports the USER's country by design, so this is transit, not location.
-        res.warp -> "مسیر تأیید شد (WARP · ${res.colo ?: "—"}) — کشور خروج از این راه قابل اثبات نیست." to GreenOk
-        else -> "خروج واقعی: ${res.country?.label ?: res.loc} · ${res.colo ?: "—"} · ${res.ip ?: ""}" to GreenOk
+        res.warp ->
+            S(R.string.route_verified_warp_the_exit_country_cannot, res.colo ?: "—") to Ios.Green
+        else ->
+            S(R.string.real_exit, res.country?.label ?: res.loc, res.colo ?: "—", res.ip ?: "") to Ios.Green
     }
-    Surface(color = tint.copy(alpha = 0.12f), shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
-        Text(text, color = tint, fontSize = 12.sp, modifier = Modifier.padding(10.dp))
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .clip(PanelShape)
+            .background(tint.copy(alpha = 0.13f))
+            .padding(12.dp),
+    ) {
+        Text(text, color = Ios.Label, fontSize = 12.sp, lineHeight = 20.sp)
     }
 }
 
+/**
+ * One server from the shared pool.
+ *
+ * Country, flag and latency, and nothing else. No test button, no delete, and above all no way to
+ * reach the URI: these are the app's own list, and the point of them is that they cannot be
+ * copied out. The padlock is there so it reads as deliberate rather than as a missing feature.
+ */
+@Composable
+private fun PoolRow(node: QuickNode, connected: Boolean) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 50.dp)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(node.flag ?: "🏳️", fontSize = 20.sp)
+        Spacer(Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (connected) {
+                    Icon(
+                        Icons.Default.CheckCircle,
+                        contentDescription = null,
+                        tint = Ios.Green,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Spacer(Modifier.width(5.dp))
+                }
+                Text(
+                    node.countryName ?: node.country ?: S(R.string.unknown),
+                    color = Ios.Label,
+                    fontSize = 15.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Text(node.protocol.uppercase(), color = Ios.SecondaryLabel, fontSize = 11.sp)
+        }
+        if (node.delay > 0) {
+            Text(
+                faCount(node.delay) + " ms",
+                color = if (node.delay < 400) Ios.Green else Ios.Orange,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.width(8.dp))
+        }
+        Icon(
+            Icons.Default.Lock,
+            contentDescription = null,
+            tint = Ios.SecondaryLabel.copy(alpha = 0.6f),
+            modifier = Modifier.size(14.dp),
+        )
+    }
+}
+
+/**
+ * One saved server.
+ *
+ * A grouped-list row, and "connected" is a tick rather than a border around the whole card.
+ */
 @Composable
 private fun SavedRow(
     row: SavedServer,
@@ -686,67 +803,97 @@ private fun SavedRow(
     onTest: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    val testing = row.delay == 0 && row.testedAt > 0
-    Surface(
-        color = SurfaceDark,
-        shape = RoundedCornerShape(12.dp),
+    val testing = row.isTesting
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (connected) Modifier.border(1.dp, GreenOk, RoundedCornerShape(12.dp)) else Modifier)
+            .heightIn(min = 54.dp)
+            .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
-            modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
+        Text(row.flag ?: "🏳️", fontSize = 20.sp)
+        Spacer(Modifier.width(10.dp))
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { onConnect() }
+                .padding(vertical = 4.dp)
         ) {
-            Text(row.flag ?: "🏳️", fontSize = 20.sp)
-            Spacer(Modifier.width(10.dp))
-            Column(
-                modifier = Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).clickable { onConnect() }.padding(vertical = 4.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(row.name, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                    if (row.isNew) {
-                        Spacer(Modifier.width(6.dp))
-                        Badge("جدید", Primary)
-                    }
-                    if (row.isDead) {
-                        Spacer(Modifier.width(6.dp))
-                        Badge("قطع", RedError)
-                    }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (connected) {
+                    Icon(
+                        Icons.Default.CheckCircle,
+                        contentDescription = null,
+                        tint = Ios.Green,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Spacer(Modifier.width(5.dp))
                 }
                 Text(
-                    listOfNotNull(row.countryName, row.protocol.uppercase()).joinToString(" · "),
-                    color = TextMuted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
+                    row.name,
+                    color = Ios.Label,
+                    fontSize = 15.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
                 )
+                if (row.isNew) {
+                    Spacer(Modifier.width(6.dp))
+                    Badge(S(R.string.new_str), Ios.Green)
+                }
+                if (row.isDead) {
+                    Spacer(Modifier.width(6.dp))
+                    Badge(S(R.string.dead_2), Ios.Destructive)
+                }
             }
             Text(
-                when {
-                    testing -> "…"
-                    row.delay > 0 -> "${row.delay} ms"
-                    row.testedAt > 0 -> "قطع"
-                    else -> "—"
-                },
-                color = when {
-                    row.delay in 1..399 -> GreenOk
-                    row.delay in 400..999 -> YellowWarn
-                    row.isDead -> RedError
-                    else -> TextDim
-                },
-                fontSize = 13.sp, fontWeight = FontWeight.Bold
+                listOfNotNull(row.countryName, row.protocol.uppercase()).joinToString(" · "),
+                color = Ios.SecondaryLabel,
+                fontSize = 11.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
-            IconButton(onClick = onTest, modifier = Modifier.size(38.dp)) {
-                Icon(Icons.Default.Refresh, contentDescription = "تست دوباره", tint = TextMuted, modifier = Modifier.size(18.dp))
-            }
-            IconButton(onClick = onDelete, modifier = Modifier.size(38.dp)) {
-                Icon(Icons.Default.Close, contentDescription = "حذف", tint = RedError, modifier = Modifier.size(18.dp))
-            }
         }
+        Spacer(Modifier.width(8.dp))
+        Text(
+            when {
+                testing -> "…"
+                row.delay > 0 -> faCount(row.delay) + " ms"
+                row.testedAt > 0 -> S(R.string.dead_2)
+                else -> "—"
+            },
+            color = when {
+                row.delay in 1..399 -> Ios.Green
+                row.delay in 400..999 -> Ios.Orange
+                row.isDead -> Ios.Destructive
+                else -> Ios.SecondaryLabel
+            },
+            fontSize = 13.sp, fontWeight = FontWeight.SemiBold
+        )
+        Icon(
+            Icons.Default.Refresh,
+            contentDescription = S(R.string.retest),
+            tint = Ios.SecondaryLabel,
+            modifier = Modifier.size(30.dp).clip(CircleShape).clickable(onClick = onTest).padding(7.dp),
+        )
+        Icon(
+            Icons.Default.Close,
+            contentDescription = S(R.string.delete),
+            tint = Ios.Destructive,
+            modifier = Modifier.size(30.dp).clip(CircleShape).clickable(onClick = onDelete).padding(7.dp),
+        )
     }
 }
 
 @Composable
 internal fun Badge(text: String, color: Color) {
-    Surface(color = color.copy(alpha = 0.18f), shape = RoundedCornerShape(6.dp)) {
-        Text(text, color = color, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp))
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(color.copy(alpha = 0.18f))
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+    ) {
+        Text(text, color = color, fontSize = 10.sp, fontWeight = FontWeight.Medium)
     }
 }

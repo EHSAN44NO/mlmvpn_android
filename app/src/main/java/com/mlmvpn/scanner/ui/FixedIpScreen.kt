@@ -1,5 +1,8 @@
 ﻿package com.mlmvpn.scanner.ui
 
+import androidx.compose.foundation.layout.height
+import com.mlmvpn.scanner.ui.home.frostedGlass
+import com.mlmvpn.scanner.ui.theme.*
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -32,6 +35,8 @@ import okhttp3.Request
 import java.net.InetAddress
 import java.util.concurrent.TimeUnit
 import java.util.Locale
+import com.mlmvpn.scanner.utils.S
+import com.mlmvpn.scanner.R
 
 data class CountryInfo(
     val code: String,
@@ -56,13 +61,13 @@ fun FixedIpScreen(onDismiss: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     
-    val bgColor = Color(0xFF121212)
-    val surfaceColor = Color(0xFF202124)
-    val primaryColor = Color(0xFF8AB4F8)
-    val textColor = Color(0xFFE8EAED)
-    val mutedColor = Color(0xFF9AA0A6)
+    val bgColor = BgDark
+    val surfaceColor = SurfaceDark
+    val primaryColor = Primary
+    val textColor = TextPrimary
+    val mutedColor = TextMuted
     val greenOk = Color(0xFF81C995)
-    val redError = Color(0xFFF28B82)
+    val redError = RedError
 
     var countries by remember { mutableStateOf<List<CountryInfo>>(emptyList()) }
     var selectedCountry by remember { mutableStateOf<CountryInfo?>(null) }
@@ -97,55 +102,52 @@ fun FixedIpScreen(onDismiss: () -> Unit) {
         }
     }
 
-    Scaffold(
-        modifier = Modifier.fillMaxSize(),
-        containerColor = bgColor,
-        topBar = {
-            Surface(color = surfaceColor, modifier = Modifier.fillMaxWidth()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(onClick = {
-                        if (selectedCountry != null) {
-                            testingJob?.cancel()
-                            testingJob = null
-                            selectedCountry = null
-                            proxyIps = emptyList()
-                            isTesting = false
-                        } else {
-                            testingJob?.cancel()
-                            onDismiss()
-                        }
-                    }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = textColor)
-                    }
-                    Spacer(modifier = Modifier.width(16.dp))
-                    Text(
-                        text = if (selectedCountry == null) androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.fixed_ip_select_country) else "${selectedCountry!!.flag} ${selectedCountry!!.name}",
-                        color = primaryColor,
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
+    // The app's own navigation bar. Back here is two-level: inside a country it returns to the
+    // country list, and only from the list does it leave the screen -- which is what the pushed
+    // pages elsewhere in the app do too.
+    com.mlmvpn.scanner.ui.settings.IosScreen(
+        title = if (selectedCountry == null) {
+            androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.fixed_ip_select_country)
+        } else {
+            "${selectedCountry!!.flag} ${selectedCountry!!.name}"
+        },
+        onBack = {
+            if (selectedCountry != null) {
+                testingJob?.cancel()
+                testingJob = null
+                selectedCountry = null
+                proxyIps = emptyList()
+                isTesting = false
+            } else {
+                testingJob?.cancel()
+                onDismiss()
             }
-        }
-    ) { paddingValues ->
-        Box(modifier = Modifier.padding(paddingValues).fillMaxSize()) {
+        },
+        backLabel = if (selectedCountry == null) S(R.string.home) else S(R.string.countries),
+        scrollable = false,
+    ) {
+        run { val topPad = 8.dp
+        Box(modifier = Modifier.fillMaxSize()) {
             if (selectedCountry == null) {
                 // Country List
                 LazyColumn(
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 100.dp),
+                    contentPadding = PaddingValues(
+                        start = 16.dp,
+                        end = 16.dp,
+                        top = topPad,
+                        bottom = com.mlmvpn.scanner.ui.LocalSystemBottomPadding.current + 24.dp,
+                    ),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(countries) { country ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(surfaceColor)
+                                // Real refraction rather than the flat card colour: these rows
+                                // sit directly on the wallpaper, so a solid fill reads as a
+                                // sticker on it while the rest of the app reads as glass.
+                                .frostedGlass(CardShape)
+                                .clip(CardShape)
                                 .clickable {
                                     selectedCountry = country
                                     loadIps(context, country.code) { ips ->
@@ -164,42 +166,18 @@ fun FixedIpScreen(onDismiss: () -> Unit) {
                     }
                 }
             } else {
-                // IP List
-                Column(modifier = Modifier.fillMaxSize()) {
-                    // Start test button
-                    Button(
-                        onClick = {
-                            if (!isTesting) {
-                                isTesting = true
-                                testingJob?.cancel()
-                                testingJob = scope.launch {
-                                    try {
-                                        startTesting(proxyIps, onUpdate = { updatedList ->
-                                            proxyIps = updatedList.toList()
-                                        })
-                                    } finally {
-                                        isTesting = false
-                                    }
-                                }
-                            }
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        enabled = !isTesting,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = primaryColor,
-                            contentColor = Color.Black
+                // IP list runs the full height of the Box; the test button floats over its
+                // bottom edge rather than being stacked above it in a Column. As a Column child it
+                // sat at the very top of the screen -- underneath the floating header, which is
+                // laid over the same space -- so it was both in the wrong place and half hidden.
+                LazyColumn(
+                        contentPadding = PaddingValues(
+                            start = 16.dp,
+                            end = 16.dp,
+                            top = topPad,
+                            // The last row has to clear the floating button, not slide under it.
+                            bottom = com.mlmvpn.scanner.ui.LocalSystemBottomPadding.current + 96.dp,
                         ),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(if (isTesting) Icons.Default.HourglassEmpty else Icons.Default.PlayArrow, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(if (isTesting) androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.fixed_ip_testing) else androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.fixed_ip_start_test), fontWeight = FontWeight.Bold)
-                    }
-
-                    LazyColumn(
-                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 100.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         items(proxyIps) { model ->
@@ -219,8 +197,8 @@ fun FixedIpScreen(onDismiss: () -> Unit) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(surfaceColor)
+                                    .frostedGlass(CardShape)
+                                    .clip(CardShape)
                                     .padding(12.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
@@ -238,7 +216,7 @@ fun FixedIpScreen(onDismiss: () -> Unit) {
                                             clipboard.setPrimaryClip(clip)
                                             android.widget.Toast.makeText(context, context.getString(com.mlmvpn.scanner.R.string.fixed_ip_copied), android.widget.Toast.LENGTH_SHORT).show()
                                         },
-                                        modifier = Modifier.background(Color(0xFF2D2E31), RoundedCornerShape(8.dp))
+                                        modifier = Modifier.frostedGlass(RoundedCornerShape(8.dp))
                                     ) {
                                         Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = greenOk)
                                     }
@@ -246,9 +224,54 @@ fun FixedIpScreen(onDismiss: () -> Unit) {
                             }
                         }
                     }
+
+                Button(
+                    onClick = {
+                        if (!isTesting) {
+                            isTesting = true
+                            testingJob?.cancel()
+                            testingJob = scope.launch {
+                                try {
+                                    startTesting(proxyIps, onUpdate = { updatedList ->
+                                        proxyIps = updatedList.toList()
+                                    })
+                                } finally {
+                                    isTesting = false
+                                }
+                            }
+                        }
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .padding(
+                            start = 16.dp,
+                            end = 16.dp,
+                            bottom = com.mlmvpn.scanner.ui.LocalSystemBottomPadding.current + 16.dp,
+                        )
+                        .height(52.dp),
+                    enabled = !isTesting,
+                    // Tinted glass with an accent rim and accent text -- the same primary action
+                    // treatment as Save and Connect. It was a solid accent slab with BLACK text.
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = primaryColor.copy(alpha = 0.22f),
+                        contentColor = primaryColor,
+                        disabledContainerColor = primaryColor.copy(alpha = 0.08f),
+                        disabledContentColor = mutedColor,
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(
+                        width = 1.5.dp,
+                        color = if (isTesting) BorderDark else primaryColor,
+                    ),
+                    shape = ControlShape
+                ) {
+                    Icon(if (isTesting) Icons.Default.HourglassEmpty else Icons.Default.PlayArrow, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(if (isTesting) androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.fixed_ip_testing) else androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.fixed_ip_start_test), fontWeight = FontWeight.Bold)
                 }
             }
         }
+    }
     }
 }
 
@@ -368,3 +391,4 @@ private fun getFlagEmoji(countryCode: String): String {
     val secondChar = Character.codePointAt(code, 1) - asciiOffset + flagOffset
     return String(Character.toChars(firstChar)) + String(Character.toChars(secondChar))
 }
+

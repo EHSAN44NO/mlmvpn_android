@@ -10,6 +10,8 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
 
 /**
  * Fully-automatic Google Apps Script relay deployment via the Apps Script REST API.
@@ -72,12 +74,12 @@ object GstAutoDeployer {
         }
         try {
             // 0. Read the script source and inject the auth key (same as the manual dialog).
-            onProgress(5, "آماده‌سازی اسکریپت...")
+            onProgress(5, S(R.string.preparing_the_script))
             val codeSource = try {
                 context.assets.open("gst/Code.gs").bufferedReader().use { it.readText() }
                     .replace("CHANGE_ME_TO_A_STRONG_SECRET", authKey)
             } catch (e: Exception) {
-                return@withContext DeployResult(false, "خطا در خواندن اسکریپت: ${e.message}")
+                return@withContext DeployResult(false, S(R.string.could_not_read_the_script, e.message))
             }
 
             // Diagnostic: log the scopes actually granted to this token + its project.
@@ -86,7 +88,7 @@ object GstAutoDeployer {
             logTokenInfo(accessToken)
 
             // 1. Create the project.
-            onProgress(20, "ساخت پروژه گوگل اسکریپت...")
+            onProgress(20, S(R.string.creating_the_google_script_project))
             val title = "sys-svc-${System.currentTimeMillis().toString(36)}"
             val createBody = JSONObject().put("title", title).toString()
             val scriptId = apiCall("POST", "$API/projects", accessToken, createBody, relayUrl, relayAuthKey).let { resp ->
@@ -94,12 +96,12 @@ object GstAutoDeployer {
                 JSONObject(resp.body).optString("scriptId", "")
             }
             if (scriptId.isEmpty()) {
-                return@withContext DeployResult(false, "شناسه‌ی پروژه دریافت نشد")
+                return@withContext DeployResult(false, S(R.string.no_project_id_was_returned))
             }
             GstLog.i(TAG, "Project created: ${GstLog.redact(scriptId)}")
 
             // 2. Push content (manifest + Code.gs).
-            onProgress(45, "آپلود کد...")
+            onProgress(45, S(R.string.uploading_the_code))
             val manifest = JSONObject().apply {
                 put("timeZone", "Etc/GMT")
                 put("exceptionLogging", "STACKDRIVER")
@@ -126,7 +128,7 @@ object GstAutoDeployer {
             GstLog.i(TAG, "Content pushed")
 
             // 3. Create a version.
-            onProgress(70, "ساخت نسخه...")
+            onProgress(70, S(R.string.creating_a_version))
             val versionBody = JSONObject().put("description", "auto").toString()
             val versionNumber = apiCall("POST", "$API/projects/$scriptId/versions", accessToken, versionBody, relayUrl, relayAuthKey).let { resp ->
                 if (!resp.ok) return@withContext resp.toDeployError()
@@ -135,7 +137,7 @@ object GstAutoDeployer {
             GstLog.i(TAG, "Version created: $versionNumber")
 
             // 4. Create the web-app deployment.
-            onProgress(90, "استقرار وب‌اپ...")
+            onProgress(90, S(R.string.deploying_the_web_app))
             val deployBody = JSONObject().apply {
                 put("versionNumber", versionNumber)
                 put("manifestFileName", "appsscript")
@@ -146,7 +148,7 @@ object GstAutoDeployer {
                 JSONObject(resp.body).optString("deploymentId", "")
             }
             if (deploymentId.isEmpty()) {
-                return@withContext DeployResult(false, "شناسه‌ی استقرار (Deployment ID) دریافت نشد")
+                return@withContext DeployResult(false, S(R.string.no_deployment_id_was_returned))
             }
             GstLog.i(TAG, "Deployment created: ${GstLog.redact(deploymentId)}")
 
@@ -169,11 +171,11 @@ object GstAutoDeployer {
                 GstConfigManager.saveRelays(context, existing)
             }
 
-            onProgress(100, "انجام شد!")
-            DeployResult(true, "استقرار خودکار موفق بود ✅", deploymentId)
+            onProgress(100, S(R.string.done_3))
+            DeployResult(true, S(R.string.automatic_deployment_succeeded), deploymentId)
         } catch (e: Exception) {
             GstLog.e(TAG, "Deploy failed: ${e.message}")
-            DeployResult(false, "خطا: ${e.message}")
+            DeployResult(false, S(R.string.error_2, e.message))
         }
     }
 
@@ -196,31 +198,31 @@ object GstAutoDeployer {
                 GstLog.e(TAG, "403 HTML edge block → likely geo/sanctions block on Google Cloud APIs")
                 DeployResult(
                     false,
-                    "دسترسی به سرویس گوگل از شبکه‌ی شما مسدود است (تحریم/جغرافیایی). برای حل، سوییچ " +
-                        "«شتاب Cloudflare� را روشن کنید تا استقرار از طریق کلادفلر انجام شود، سپس دوباره �Deploy� را بزنید.",
+                    S(R.string.google_s_service_is_blocked_from_your) +
+                        S(R.string.cloudflare_acceleration_switch_so_the_deployment_goes),
                     geoBlocked = true
                 )
             }
             code == 403 -> DeployResult(
                 false,
-                "خطای ۴۰۳: Apps Script API فعال نیست. با همان حساب گوگلی که لاگین کردید، آن را در " +
-                    "script.google.com/home/usersettings روشن کنید. سپس ۱–۲ دقیقه صبر و دوباره تلاش کنید.",
+                S(R.string.s_403_the_apps_script_api_is_not) +
+                    S(R.string.script_google_com_home_usersettings_then_wait),
                 needsApiEnable = true
             )
-            code == 401 -> DeployResult(false, "توکن نامعتبر شد؛ دوباره وارد شوید.")
+            code == 401 -> DeployResult(false, S(R.string.the_token_became_invalid_sign_in_again))
             body.contains("1042", true) -> DeployResult(
                 false,
-                "پروکسی Cloudflare نتوانست به گوگل وصل شود (خطای 1042). سوییچ «شتاب Cloudflare� را یک‌بار " +
-                    "خاموش و روشن کنید تا Worker جدید با تنظیمات درست ساخته شود، سپس دوباره Deploy بزنید. " +
-                    "اگر باز نشد، به‌جای CF یک VPN روشن کنید و بدون CF مستقیم Deploy کنید."
+                S(R.string.the_cloudflare_proxy_could_not_reach_google) +
+                    S(R.string.off_and_on_again_so_a_new) +
+                    S(R.string.if_it_still_fails_turn_on_a)
             )
             code == 502 && (body.contains("did not return anything", true) || body.contains("<title>Web App</title>", true)) ->
                 DeployResult(
                     false,
-                    "پروکسی Cloudflare درخواست را رد کرد (کلید Worker قدیمی است). سوییچ «شتاب Cloudflare� را " +
-                        "یک‌بار خاموش و دوباره روشن کنید تا Worker با کلید جدید ساخته شود، سپس دوباره Deploy بزنید."
+                    S(R.string.the_cloudflare_proxy_rejected_the_request_the) +
+                        S(R.string.off_and_on_again_so_the_worker)
                 )
-            else -> DeployResult(false, "خطای گوگل (HTTP $code): ${body.take(150)}")
+            else -> DeployResult(false, S(R.string.google_error_http_code, code, body.take(150)))
         }
     }
 

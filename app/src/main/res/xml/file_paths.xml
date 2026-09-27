@@ -2,4 +2,7 @@
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- UpdateChecker downloads the new APK into cacheDir/updates/ -->
     <cache-path name="updates" path="updates/" />
+    <!-- Config Studio writes an export here, shares it, and overwrites it next time.
+         See ui/configstudio/parts/StudioShare.kt -->
+    <cache-path name="studio" path="studio-export/" />
 </paths>

@@ -7,6 +7,8 @@ import okhttp3.Request
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.util.concurrent.TimeUnit
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
 
 /**
  * Where traffic actually leaves.
@@ -99,7 +101,7 @@ object EgressTracer {
             // A leaked reading is not the exit either. Either way, say so rather than letting
             // the UI print a wrong flag or the store record one.
             countryTrusted = res.countryTrusted && !leaked,
-            error = if (leaked) "ترافیک از تونل رد نشد" else res.error,
+            error = if (leaked) S(R.string.no_traffic_passed_through_the_tunnel) else res.error,
         )
     }
 
@@ -115,7 +117,7 @@ object EgressTracer {
         attempts: Int = 5,
         gapMs: Long = 1_800,
     ): EgressResult {
-        var last = EgressResult(ok = false, error = "بررسی نشد")
+        var last = EgressResult(ok = false, error = S(R.string.not_checked))
         repeat(attempts) { index ->
             if (index > 0) kotlinx.coroutines.delay(gapMs)
             last = trace(socksPort)
@@ -134,7 +136,7 @@ object EgressTracer {
                 .build()
 
             client.newCall(request).execute().use { res ->
-                if (!res.isSuccessful) return EgressResult(ok = false, error = "پاسخ ${res.code}")
+                if (!res.isSuccessful) return EgressResult(ok = false, error = S(R.string.response, res.code))
                 val body = res.body?.string().orEmpty().take(4096)
                 val fields = HashMap<String, String>()
                 for (line in body.split('\n')) {
@@ -153,9 +155,9 @@ object EgressTracer {
                 )
             }
         } catch (e: java.net.SocketTimeoutException) {
-            EgressResult(ok = false, error = "پاسخی نرسید (تایم‌اوت)")
+            EgressResult(ok = false, error = S(R.string.no_response_timed_out))
         } catch (e: Exception) {
-            EgressResult(ok = false, error = e.message ?: "خطای نامشخص")
+            EgressResult(ok = false, error = e.message ?: S(R.string.unknown_error_2))
         }
     }
 }

@@ -23,6 +23,20 @@ import java.util.Locale
  *     the tombstone. What this class contributes there is a *marker*: the last thing the app
  *     was doing is logged under a single tag, so the logcat line right before the `F/libc`
  *     abort names the screen and action instead of leaving it to guesswork.
+ *
+ * ## Where a report goes after this class
+ *
+ * Nowhere, until the user says so. [upload] is called from one dialog on the home screen, offered
+ * once per crash on the launch that follows it, and it posts to the pool Worker's `/crash`, which
+ * files it as an issue in the **private** `mlmvpn/crashes` repository and stores a row in D1.
+ *
+ * There is no silent upload and adding one would not be a bug fix -- it is a different decision
+ * about somebody else's data.
+ *
+ * The whole path across the app, the Worker, D1, KV and that second repository is written down in
+ * `docs/CRASH-REPORTS.md`, including how to test it end to end against a connected phone. Read
+ * that before changing anything here that the Worker also depends on -- [signatureOf] in
+ * particular, which decides what counts as "the same bug" and is recomputed server-side to match.
  */
 object CrashReporter {
 
@@ -51,7 +65,7 @@ object CrashReporter {
                 // Logcat first: if writing the file fails for any reason, the report is still
                 // in the buffer the stress test is being watched through.
                 Log.e(TAG, text)
-                File(logDir, "crash-${stamp.format(Date())}.txt").writeText(text)
+                writeReport(text)
             } catch (t: Throwable) {
                 Log.e(TAG, "failed to record crash: ${t.message}")
             }
@@ -84,6 +98,157 @@ object CrashReporter {
         reportPreviousExit(app)
 
         Log.i(TAG, "crash reporter installed; reports in ${logDir.absolutePath}")
+    }
+
+    /** Distinguishes reports written inside the same second. See [writeReport]. */
+    private val reportSequence = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /**
+     * Write one crash report, safely against the case that matters most: several threads dying
+     * at once.
+     *
+     * The first version formatted a filename from [stamp] alone, which has one-second
+     * resolution, and wrote straight to it. A relay bug in this app killed six threads inside
+     * three milliseconds; all six handlers built the same path, all six truncated it, and the
+     * file that survived was **zero bytes** — the report was destroyed by exactly the kind of
+     * crash it was there to explain. [stamp] is also a `SimpleDateFormat`, which is not
+     * thread-safe, so the six were racing on its internal calendar as well.
+     *
+     * So: the name carries a counter and the thread, formatting is serialised, and the bytes go
+     * to a temporary file that is renamed into place only once it is complete. A half-written
+     * report is worse than none, because it looks like a report.
+     */
+    @Synchronized
+    private fun writeReport(text: String) {
+        val name = "crash-${stamp.format(Date())}-${reportSequence.incrementAndGet()}" +
+            "-${Thread.currentThread().name.take(24).replace(Regex("[^A-Za-z0-9_-]"), "_")}.txt"
+        val target = File(logDir, name)
+        val temp = File(logDir, "$name.part")
+        temp.writeText(text)
+        if (!temp.renameTo(target)) {
+            // A rename can only fail here for something like a full disk. Falling back to a
+            // direct write is still better than losing the report.
+            target.writeText(text)
+            temp.delete()
+        }
+    }
+
+    /**
+     * Every report on disk, newest first, for the "send crash report" flow.
+     *
+     * Partial writes are excluded: a `.part` file is one that never finished, and handing a
+     * truncated stack to someone reading it wastes the one chance the report had.
+     */
+    fun reports(): List<File> =
+        if (!this::logDir.isInitialized) emptyList()
+        else logDir.listFiles { f -> f.isFile && f.name.endsWith(".txt") }
+            .orEmpty()
+            .sortedByDescending { it.lastModified() }
+
+    /**
+     * One text blob of the most recent reports, ready to be shared.
+     *
+     * Newest first and capped, because this is going into a message box: the newest report is
+     * the one being asked about, and no one pastes half a megabyte into Telegram.
+     */
+    fun collect(limit: Int = 3, maxChars: Int = 60_000): String {
+        val files = reports().take(limit)
+        if (files.isEmpty()) return ""
+        val body = buildString {
+            appendLine("MLM VPN crash reports")
+            appendLine("app     : $appVersion")
+            appendLine("device  : ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}, " +
+                "Android ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})")
+            lastExitSummary?.let { appendLine("last exit: $it") }
+            appendLine()
+            files.forEach { f ->
+                appendLine("========== ${f.name} ==========")
+                appendLine(runCatching { f.readText() }.getOrElse { "(unreadable: ${it.message})" })
+                appendLine()
+            }
+        }
+        return if (body.length <= maxChars) body else body.take(maxChars) + "\n… (truncated)"
+    }
+
+    /**
+     * The one line that identifies a crash: the exception, its message, and the first frame of
+     * ours.
+     *
+     * "Ours" matters. The top frame of a Compose crash is nearly always inside the Compose
+     * runtime and identical across completely unrelated bugs, so grouping on it would file every
+     * UI crash in the app under one heading. The first `com.mlmvpn` frame is the line a developer
+     * would actually open.
+     */
+    fun signatureOf(text: String): String {
+        val cause = text.lineSequence()
+            .firstOrNull { it.startsWith("error") || it.contains("Exception") || it.contains("Error") }
+            ?.trim()
+            .orEmpty()
+        val frame = text.lineSequence()
+            .map { it.trim() }
+            .firstOrNull { it.startsWith("at com.mlmvpn") }
+            .orEmpty()
+        return listOf(cause, frame).filter { it.isNotBlank() }.joinToString("  |  ").take(300)
+    }
+
+    /**
+     * Send the newest report to the pool worker, silently, and say whether it landed.
+     *
+     * Automatic rather than "please describe what happened": the stack, the breadcrumb trail of
+     * screens, the device and the app version already say more than any user could type, and
+     * asking for prose is what makes people close the dialog.
+     */
+    suspend fun upload(context: android.content.Context): Boolean {
+        val file = reports().firstOrNull { it.name.startsWith("crash-") } ?: return false
+        val text = runCatching { file.readText() }.getOrNull()?.takeIf { it.isNotBlank() }
+            ?: return false
+        return com.mlmvpn.scanner.quick.MlmPoolClient.reportCrash(
+            context,
+            summary = signatureOf(text),
+            body = text,
+        )
+    }
+
+    /**
+     * Hand the newest reports to whatever the user wants to send them with.
+     *
+     * Plain text in an ACTION_SEND rather than a file attachment: the destination is almost
+     * always Telegram, where a pasted stack is readable in the chat and a .txt is one more tap
+     * and a download for whoever has to read it. A FileProvider would also need a manifest entry
+     * and a grant for every target app, which is a lot of moving parts for a support message.
+     */
+    fun share(context: android.content.Context) {
+        val text = collect()
+        if (text.isBlank()) return
+        val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(android.content.Intent.EXTRA_SUBJECT, "MLM VPN crash report")
+            putExtra(android.content.Intent.EXTRA_TEXT, text)
+        }
+        runCatching {
+            context.startActivity(
+                android.content.Intent.createChooser(send, null)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }
+    }
+
+    /**
+     * The newest report the user has not been offered yet, or null.
+     *
+     * Tracked by timestamp rather than by a "shown" flag per file so that a burst of reports from
+     * one crash prompts once, and so that clearing the marker cannot resurrect old prompts.
+     */
+    fun unreportedCrash(context: android.content.Context): File? {
+        val newest = reports().firstOrNull { it.name.startsWith("crash-") } ?: return null
+        val prefs = context.getSharedPreferences("crash_diag", android.content.Context.MODE_PRIVATE)
+        return if (newest.lastModified() > prefs.getLong("offered_up_to", 0L)) newest else null
+    }
+
+    /** Remember that the user has been shown everything up to now, whatever they chose. */
+    fun markOffered(context: android.content.Context) {
+        context.getSharedPreferences("crash_diag", android.content.Context.MODE_PRIVATE)
+            .edit().putLong("offered_up_to", System.currentTimeMillis()).apply()
     }
 
     /**

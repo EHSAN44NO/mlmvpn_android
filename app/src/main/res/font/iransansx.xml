@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    IRANSansX, the app's typeface.
+
+    The Latin-numeral cut of the family, deliberately, not the FaNum one. FaNum renders Latin
+    digits with Persian glyphs, which reads beautifully in prose and is wrong here: this app is
+    full of IP addresses, ports, latencies and byte counts, and those have to stay legible as the
+    numbers they are.
+
+    Four weights out of the eleven shipped. Regular, Medium, DemiBold and Bold are the ones the
+    UI actually asks for; each is roughly 100 KB, so carrying the rest would cost most of a
+    megabyte for weights nothing uses.
+-->
+<font-family xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <font
+        android:font="@font/iransansx_regular"
+        android:fontStyle="normal"
+        android:fontWeight="400"
+        app:font="@font/iransansx_regular"
+        app:fontStyle="normal"
+        app:fontWeight="400" />
+
+    <font
+        android:font="@font/iransansx_medium"
+        android:fontStyle="normal"
+        android:fontWeight="500"
+        app:font="@font/iransansx_medium"
+        app:fontStyle="normal"
+        app:fontWeight="500" />
+
+    <font
+        android:font="@font/iransansx_demibold"
+        android:fontStyle="normal"
+        android:fontWeight="600"
+        app:font="@font/iransansx_demibold"
+        app:fontStyle="normal"
+        app:fontWeight="600" />
+
+    <font
+        android:font="@font/iransansx_bold"
+        android:fontStyle="normal"
+        android:fontWeight="700"
+        app:font="@font/iransansx_bold"
+        app:fontStyle="normal"
+        app:fontWeight="700" />
+
+</font-family>

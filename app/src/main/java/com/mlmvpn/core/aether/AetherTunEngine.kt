@@ -82,7 +82,15 @@ class AetherTunEngine(private val openTun: () -> Int, private val mtu: Int) : IV
         val eng = AetherEngine.get(context)
         engine = eng
 
-        if (!eng.start(opts) { msg -> android.util.Log.e(TAG, "engine start failed: $msg") }) {
+        // ADOPT an engine that is already connected with exactly these options -- the game
+        // booster starts one to measure WARP before deciding, and when WARP wins, restarting it
+        // here would throw away a validated gateway and make the user sit through a second scan.
+        // Anything else (different options, not connected) goes through the normal start, which
+        // refuses a second process the same way it always has.
+        val adopt = eng.state.value.connected && eng.runningOptions == opts && eng.isSocksAlive()
+        if (adopt) {
+            android.util.Log.i(TAG, "adopting the running Aether engine (same options, already connected)")
+        } else if (!eng.start(opts) { msg -> android.util.Log.e(TAG, "engine start failed: $msg") }) {
             return false
         }
 
@@ -91,7 +99,7 @@ class AetherTunEngine(private val openTun: () -> Int, private val mtu: Int) : IV
         // ~2000 candidates on a 120s budget. Establishing the interface up front means every
         // app on the device is routed into a tunnel with nothing on the far end for that
         // whole window — total loss of connectivity that reads as "it never connects".
-        if (!awaitSocks(eng, opts.scan)) {
+        if (!adopt && !awaitSocks(eng, opts.scan)) {
             android.util.Log.e(TAG, "Aether never reached a connected state — aborting tunnel")
             // Only speak up if the engine hasn't already explained itself. When the Rust
             // side reported its own failure, overwriting it with a generic timeout message
@@ -278,31 +286,38 @@ class AetherTunEngine(private val openTun: () -> Int, private val mtu: Int) : IV
         android.util.Log.i(TAG, "Aether full-tunnel engine stopped")
     }
 
-    private fun parseConfig(config: String): AetherOptions {
-        val o = JSONObject(config)
-        return AetherOptions(
-            protocol = AetherProtocol.valueOf(o.optString("protocol", "MASQUE")),
-            scan = AetherScan.valueOf(o.optString("scan", "TURBO")),
-            ipFamily = AetherIp.valueOf(o.optString("ip", "V4")),
-            transport = o.optString("transport", "h3"),
-            ech = o.optString("ech", ""),
-            fragment = o.optBoolean("fragment", false),
-            fragmentSize = if (o.has("fragmentSize")) o.optInt("fragmentSize") else null,
-            fragmentDelay = if (o.has("fragmentDelay")) o.optInt("fragmentDelay") else null,
-            // Empty default, NOT "firewall": that name only exists in MASQUE's profile table.
-            // Forcing it on a WireGuard run made aethernoize fall through to balanced and
-            // silently discard whatever the user actually picked. Empty lets AetherOptions
-            // resolve the right default for the protocol.
-            noize = o.optString("noize", ""),
-            keepalive = o.optInt("keepalive", 5),
-            noProfileRetry = o.optBoolean("noProfileRetry", false),
-            quickReconnect = o.optBoolean("quickReconnect", true),
-            verbose = o.optBoolean("verbose", false),
-            noDataCheck = o.optBoolean("noDataCheck", false),
-        )
-    }
+    private fun parseConfig(config: String): AetherOptions = optionsOf(config)
 
     companion object {
+        /**
+         * The options a config string describes. Pure, so the game booster can start the engine
+         * with exactly the options a tunnel built from the same config will compare equal to --
+         * which is what lets [start] adopt that engine instead of scanning again.
+         */
+        fun optionsOf(config: String): AetherOptions {
+            val o = JSONObject(config)
+            return AetherOptions(
+                protocol = AetherProtocol.valueOf(o.optString("protocol", "MASQUE")),
+                scan = AetherScan.valueOf(o.optString("scan", "TURBO")),
+                ipFamily = AetherIp.valueOf(o.optString("ip", "V4")),
+                transport = o.optString("transport", "h3"),
+                ech = o.optString("ech", ""),
+                fragment = o.optBoolean("fragment", false),
+                fragmentSize = if (o.has("fragmentSize")) o.optInt("fragmentSize") else null,
+                fragmentDelay = if (o.has("fragmentDelay")) o.optInt("fragmentDelay") else null,
+                // Empty default, NOT "firewall": that name only exists in MASQUE's profile table.
+                // Forcing it on a WireGuard run made aethernoize fall through to balanced and
+                // silently discard whatever the user actually picked. Empty lets AetherOptions
+                // resolve the right default for the protocol.
+                noize = o.optString("noize", ""),
+                keepalive = o.optInt("keepalive", 5),
+                noProfileRetry = o.optBoolean("noProfileRetry", false),
+                quickReconnect = o.optBoolean("quickReconnect", true),
+                verbose = o.optBoolean("verbose", false),
+                noDataCheck = o.optBoolean("noDataCheck", false),
+            )
+        }
+
         private const val TAG = "AetherTunEngine"
 
         /**
@@ -396,11 +411,15 @@ class AetherTunEngine(private val openTun: () -> Int, private val mtu: Int) : IV
         fun buildGameConfig(
             protocol: AetherProtocol = AetherProtocol.MASQUE,
             scan: AetherScan = AetherScan.TURBO,
+            // h3 (QUIC) by default. h2 rides TCP, so it survives carriers that block UDP but
+            // suffers head-of-line blocking under loss -- the game booster only uses it when the
+            // direct line reaches nothing at all.
+            transport: String = "h3",
         ): String = buildConfig(
             AetherOptions(
                 protocol = protocol,
                 scan = scan,
-                transport = "h3",
+                transport = transport,
                 noize = "light",
                 keepalive = 5,
                 ipFamily = AetherIp.V4,

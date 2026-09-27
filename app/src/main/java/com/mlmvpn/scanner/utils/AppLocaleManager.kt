@@ -31,7 +31,18 @@ object AppLocaleManager {
         val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit().putString(KEY_LANGUAGE, languageCode).apply()
         _currentLanguage.value = languageCode
+        // Loc caches a Resources pinned to the old locale; without this the activity would be
+        // recreated correctly and every non-composable string would still be in the old language.
+        Loc.bind(context)
     }
+
+    /**
+     * Whether the app is currently showing Persian.
+     *
+     * "auto" resolves through [Locale.getDefault], which is the device's language -- that is what
+     * "auto" means. Anything else is the user's explicit choice and overrides the device.
+     */
+    fun isFarsi(): Boolean = getResolvedLocale().language == "fa"
 
     fun getResolvedLocale(): Locale {
         val selected = _currentLanguage.value

@@ -1,5 +1,6 @@
 package com.mlmvpn.scanner.ui
 
+import com.mlmvpn.scanner.ui.theme.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -58,7 +59,7 @@ fun BpbSettingsModal(
 
     var cleanIp by remember { mutableStateOf(initialSettings?.optJSONArray("cleanIPs")?.let { if (it.length() > 0) it.optString(0) else "" } ?: "") }
 
-    val primaryColor = Color(0xFF8AB4F8)
+    val primaryColor = Primary
     val switchColors = SwitchDefaults.colors(
         checkedThumbColor = primaryColor,
         checkedTrackColor = primaryColor.copy(alpha = 0.5f),
@@ -66,12 +67,17 @@ fun BpbSettingsModal(
         uncheckedTrackColor = Color.DarkGray
     )
 
+    // Transparent over the wallpaper, like every other surface. The inset is applied here
+    // because the Cloud tab that hosts this stopped padding its children once its own list
+    // started scrolling under the status bar.
     Surface(
-            shape = RoundedCornerShape(0.dp),
-            color = Color(0xFF202124),
+            color = Color.Transparent,
             modifier = Modifier.fillMaxSize()
         ) {
-            Column(modifier = Modifier.fillMaxSize()) {
+            Column(modifier = Modifier.fillMaxSize().padding(
+                top = com.mlmvpn.scanner.ui.LocalContentTopInset.current,
+                bottom = com.mlmvpn.scanner.ui.LocalSystemBottomPadding.current,
+            )) {
                 // Header
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -91,7 +97,7 @@ fun BpbSettingsModal(
                         .fillMaxWidth()
                         .weight(1f)
                         .verticalScroll(rememberScrollState())
-                        .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 100.dp),
+                        .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     // Common
@@ -140,15 +146,10 @@ fun BpbSettingsModal(
                         value = cleanIp,
                         onValueChange = { cleanIp = it },
                         label = { Text(stringResource(R.string.bpb_clean_ip_label)) },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedTextColor = Color.White, 
-                            focusedTextColor = Color.White,
-                            focusedBorderColor = primaryColor,
-                            focusedLabelColor = primaryColor,
-                            cursorColor = primaryColor
-                        ),
+                        colors = iosFieldColors(),
                         modifier = Modifier.fillMaxWidth()
-                    )
+                    ,
+        shape = ControlShape,)
 
                     Divider(color = Color.DarkGray)
 
@@ -192,8 +193,8 @@ fun BpbSettingsModal(
                         onConfirm(json)
                     },
                     modifier = Modifier.fillMaxWidth().padding(16.dp).padding(bottom = 80.dp).height(48.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8AB4F8), contentColor = Color(0xFF202124))
-                ) {
+                    colors = iosButtonColors(Primary),
+                    border = iosButtonBorder(Primary)) {
                     Text(stringResource(R.string.bpb_save_and_get_node), fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 }
             }
@@ -202,7 +203,7 @@ fun BpbSettingsModal(
 
 @Composable
 fun SectionTitle(title: String) {
-    Text(title, color = Color(0xFF8AB4F8), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+    Text(title, color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -218,11 +219,11 @@ fun PortsGrid(ports: List<String>, selected: Set<String>, onSelectionChange: (St
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
-                    .background(if (isSelected) Color(0xFF8AB4F8).copy(alpha = 0.2f) else Color.DarkGray)
+                    .background(if (isSelected) Primary.copy(alpha = 0.2f) else Color.DarkGray)
                     .clickable { onSelectionChange(port, !isSelected) }
                     .padding(horizontal = 12.dp, vertical = 6.dp)
             ) {
-                Text(port, color = if (isSelected) Color(0xFF8AB4F8) else Color.White, fontSize = 12.sp)
+                Text(port, color = if (isSelected) Primary else Color.White, fontSize = 12.sp)
             }
         }
     }

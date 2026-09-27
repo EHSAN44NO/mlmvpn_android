@@ -1,5 +1,6 @@
 package com.mlmvpn.scanner.ui
 
+import com.mlmvpn.scanner.ui.theme.*
 import androidx.compose.ui.graphics.Color
 import android.app.Activity
 import android.content.Context
@@ -44,6 +45,8 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
 
 // ── Trial Engine (singleton) ──
 object UaeTrialEngine {
@@ -134,9 +137,9 @@ object UaeTrialEngine {
 
             if (!response.isSuccessful) {
                 val errorMsg = when (json.optString("error")) {
-                    "trial_used" -> "شما قبلاً از تست رایگان استفاده کرده‌اید"
-                    "no_ips" -> "سرور پر است. لطفاً بعداً تلاش کنید"
-                    else -> json.optString("message", "خطای سرور")
+                    "trial_used" -> S(R.string.you_have_already_used_the_free_trial)
+                    "no_ips" -> S(R.string.the_server_is_full_please_try_again)
+                    else -> json.optString("message", S(R.string.server_error))
                 }
                 _error.value = errorMsg
                 _state.value = TrialState.ERROR
@@ -184,7 +187,7 @@ object UaeTrialEngine {
             // SECURITY: never surface e.message here -- for a ConnectException it embeds the server
             // IP:port ("Failed to connect to /1.2.3.4:3000"), which must never be shown to the user.
             android.util.Log.d("UaeTrial", "createTrial network error (${e.javaClass.simpleName})")
-            _error.value = "اتصال به سرور برقرار نشد. اینترنت خود را بررسی کنید و دوباره تلاش کنید."
+            _error.value = S(R.string.could_not_reach_the_server_check_your)
             _state.value = TrialState.ERROR
             Result.failure(e)
         }
@@ -505,7 +508,7 @@ fun WireguardTab() {
         modifier = Modifier
             .fillMaxSize()
             .background(AppColors.BgDark)
-            .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 100.dp)
+            .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 24.dp)
     ) {
         Column(
             modifier = Modifier
@@ -515,14 +518,14 @@ fun WireguardTab() {
         ) {
             // Title
             Text(
-                "🔐 وایرگارد",
+                S(R.string.wireguard),
                 color = AppColors.TextPrimary,
                 fontSize = 26.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(bottom = 4.dp)
             )
             Text(
-                "اتصال سریع و امن با پروتکل وایرگارد",
+                S(R.string.a_fast_secure_connection_over_the_wireguard),
                 color = AppColors.TextMuted,
                 fontSize = 13.sp,
                 textAlign = TextAlign.Center,
@@ -533,7 +536,7 @@ fun WireguardTab() {
             // ══  سرور اول — امارات
             // ═══════════════════════════════════════════════
             Text(
-                "🇦🇪 سرور اول — امارات",
+                S(R.string.first_server_uae),
                 color = AppColors.Primary,
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
@@ -562,10 +565,10 @@ fun WireguardTab() {
                                 modifier = Modifier.size(48.dp)
                             )
                             Spacer(Modifier.height(12.dp))
-                            Text("تست ۳ ساعته سرور امارات", color = AppColors.TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                            Text(S(R.string.s_3_hour_trial_of_the_uae_server), color = AppColors.TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                             Spacer(Modifier.height(8.dp))
                             Text(
-                                "سرور اختصاصی امارات با پینگ پایین برای بازی. ۳ ساعت زمان استفاده دارید.",
+                                S(R.string.a_dedicated_uae_server_with_low_ping),
                                 color = AppColors.TextMuted,
                                 fontSize = 12.sp,
                                 textAlign = TextAlign.Center,
@@ -576,22 +579,18 @@ fun WireguardTab() {
                             OutlinedTextField(
                                 value = nickname,
                                 onValueChange = { nickname = it },
-                                label = { Text("نام شما در بازی (اختیاری)", color = AppColors.TextMuted) },
+                                label = { Text(S(R.string.your_in_game_name_optional), color = AppColors.TextMuted) },
                                 modifier = Modifier.fillMaxWidth(),
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = AppColors.Primary,
-                                    unfocusedBorderColor = AppColors.BorderDark,
-                                    focusedTextColor = AppColors.TextPrimary,
-                                    unfocusedTextColor = AppColors.TextPrimary
-                                ),
+                                colors = iosFieldColors(),
                                 singleLine = true
-                            )
+                            ,
+        shape = ControlShape,)
                         }
 
                         UaeTrialEngine.TrialState.LOADING -> {
                             CircularProgressIndicator(color = AppColors.Primary, modifier = Modifier.size(48.dp))
                             Spacer(Modifier.height(12.dp))
-                            Text("در حال دریافت کانفیگ...", color = AppColors.TextMuted, fontSize = 14.sp)
+                            Text(S(R.string.fetching_the_config), color = AppColors.TextMuted, fontSize = 14.sp)
                         }
 
                         UaeTrialEngine.TrialState.ACTIVE -> {
@@ -646,13 +645,16 @@ fun WireguardTab() {
                                 
                                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth(0.8f)) {
                                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                        Text("حجم باقیمانده: ${String.format("%.1f", (totalBytes - usedBytes) / 1048576f)} MB", color = AppColors.TextMuted, fontSize = 11.sp)
+                                        Text(
+                                            S(R.string.data_left_mb, String.format("%.1f", (totalBytes - usedBytes) / 1048576f)),
+                                            color = AppColors.TextMuted, fontSize = 11.sp,
+                                        )
                                         Text("$usedMb / $totalMb MB", color = AppColors.TextMuted, fontSize = 11.sp)
                                     }
                                     Spacer(Modifier.height(4.dp))
                                     LinearProgressIndicator(
                                         progress = progress,
-                                        modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
+                                        modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(8.dp)),
                                         color = pbColor,
                                         trackColor = AppColors.SurfaceVariant
                                     )
@@ -661,14 +663,14 @@ fun WireguardTab() {
                             
                             if (connected) {
                                 Text(
-                                    "زمان استفاده در حال کسر شدن است...",
+                                    S(R.string.your_time_is_counting_down),
                                     color = AppColors.Primary,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold
                                 )
                             } else {
                                 Text(
-                                    "زمان استفاده متوقف است (فقط زمان روشن بودن محاسبه می‌شود)",
+                                    S(R.string.the_clock_is_paused_only_time_spent),
                                     color = AppColors.TextMuted,
                                     fontSize = 11.sp,
                                     textAlign = TextAlign.Center
@@ -679,16 +681,16 @@ fun WireguardTab() {
                         UaeTrialEngine.TrialState.EXPIRED -> {
                             Text("⏰", fontSize = 48.sp)
                             Spacer(Modifier.height(12.dp))
-                            Text("زمان تست سرور اول به پایان رسید", color = AppColors.Error, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            Text(S(R.string.the_first_server_s_trial_time_has), color = AppColors.Error, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                         }
 
                         UaeTrialEngine.TrialState.ERROR -> {
                             Text("⚠️", fontSize = 48.sp)
                             Spacer(Modifier.height(12.dp))
-                            Text(trialError ?: "خطای ناشناخته", color = AppColors.Error, fontSize = 14.sp, textAlign = TextAlign.Center)
+                            Text(trialError ?: S(R.string.unknown_error), color = AppColors.Error, fontSize = 14.sp, textAlign = TextAlign.Center)
                             Spacer(Modifier.height(16.dp))
                             Button(onClick = { UaeTrialEngine.reset() }) {
-                                Text("تلاش مجدد")
+                                Text(S(R.string.try_again_3))
                             }
                         }
                     }
@@ -724,7 +726,7 @@ fun WireguardTab() {
                     ) {
                         Icon(Icons.Rounded.SportsEsports, contentDescription = null, modifier = Modifier.size(22.dp))
                         Spacer(Modifier.width(12.dp))
-                        Text("شروع سرور اول", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        Text(S(R.string.start_the_first_server), fontSize = 16.sp, fontWeight = FontWeight.Bold)
                     }
                 }
 
@@ -751,7 +753,7 @@ fun WireguardTab() {
                     ) {
                         Icon(Icons.Rounded.Speed, contentDescription = null, modifier = Modifier.size(22.dp))
                         Spacer(Modifier.width(12.dp))
-                        Text("روشن کردن سرور اول", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        Text(S(R.string.turn_on_the_first_server), fontSize = 16.sp, fontWeight = FontWeight.Bold)
                     }
                 }
 
@@ -772,7 +774,7 @@ fun WireguardTab() {
                     ) {
                         CircularProgressIndicator(color = AppColors.PrimaryBlue, strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
                         Spacer(Modifier.width(12.dp))
-                        Text("در حال اتصال...", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        Text(S(R.string.connecting_3), fontSize = 16.sp, fontWeight = FontWeight.Bold)
                     }
                 }
 
@@ -790,7 +792,7 @@ fun WireguardTab() {
                     ) {
                         Icon(Icons.Rounded.PowerSettingsNew, contentDescription = null, modifier = Modifier.size(22.dp))
                         Spacer(Modifier.width(12.dp))
-                        Text("توقف سرور اول", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        Text(S(R.string.stop_the_first_server), fontSize = 16.sp, fontWeight = FontWeight.Bold)
                     }
                 }
 
@@ -804,13 +806,13 @@ fun WireguardTab() {
                 Spacer(Modifier.height(16.dp))
                 Card(
                     colors = CardDefaults.cardColors(containerColor = AppColors.SurfaceDark),
-                    shape = RoundedCornerShape(12.dp),
+                    shape = CardShape,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(Modifier.padding(16.dp)) {
-                        FeatureRow("🚀", "سرور اول — امارات", "پینگ بهینه برای بازی‌ها")
-                        FeatureRow("⏳", "۳ ساعت استفاده", "زمان فقط در زمان اتصال کسر می‌شود")
-                        FeatureRow("🔒", "امن و سریع", "پروتکل AmneziaWG")
+                        FeatureRow("🚀", S(R.string.first_server_uae_2), S(R.string.ping_tuned_for_games))
+                        FeatureRow("⏳", S(R.string.s_3_hours_of_use), S(R.string.time_is_only_deducted_while_connected))
+                        FeatureRow("🔒", S(R.string.secure_and_fast), S(R.string.amneziawg_protocol))
                     }
                 }
             }
@@ -836,9 +838,9 @@ private fun FeatureRow(emoji: String, title: String, desc: String) {
 }
 
 private fun startGameVpn(context: Context, config: UaeTrialEngine.TrialConfig) {
-    val vpnPrefs = context.getSharedPreferences("vpn_routing_prefs", Context.MODE_PRIVATE)
-    val userMtu = vpnPrefs.getInt("vpn_mtu", -1)
-    val finalMtu = if (userMtu > 0) userMtu else config.mtu
+    // Through NetworkSettings like every other MTU reader, so the clamp and the "unset" rule are
+    // the same here as on the tun. The server-supplied value stays the default.
+    val finalMtu = com.mlmvpn.scanner.utils.NetworkSettings.mtuOr(context, config.mtu)
 
     val jsonConfig = com.mlmvpn.scanner.utils.AmneziaWgConfigGenerator.generateAmneziaWgConfig(
         privateKey = config.privateKey,

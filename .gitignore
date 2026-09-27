@@ -12,3 +12,11 @@
 local.properties
 *.apk
 *.aab
+
+# Store channel build output (scripts/store-channel.js)
+/dist/
+
+# OpenVPN sources: pinned by URL + SHA-256 in source-lock.json, fetched by the scripts
+third_party/openvpn3/*
+!third_party/openvpn3/README.md
+!third_party/openvpn3/source-lock.json

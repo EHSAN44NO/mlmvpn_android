@@ -1,5 +1,6 @@
 package com.mlmvpn.scanner.engines.mlm
 
+import com.mlmvpn.scanner.ui.home.frostedGlass
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
@@ -32,6 +33,7 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.mlmvpn.scanner.utils.S
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -70,7 +72,7 @@ fun MlmUsersScreen(
             if (fetchedUsers != null) {
                 users = fetchedUsers
             } else {
-                Toast.makeText(context, "Error fetching users: ${apiManager.lastGetUsersError}", Toast.LENGTH_LONG).show()
+                Toast.makeText(context, S(R.string.error_fetching_users, apiManager.lastGetUsersError), Toast.LENGTH_LONG).show()
             }
             isLoading = false
         }
@@ -82,9 +84,13 @@ fun MlmUsersScreen(
 
     Surface(
         modifier = Modifier.fillMaxSize(),
-        color = BgDark
+        // Transparent over the wallpaper; the Cloud tab that hosts this no longer pads it.
+        color = Color.Transparent
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize().padding(
+                top = com.mlmvpn.scanner.ui.LocalContentTopInset.current,
+                bottom = com.mlmvpn.scanner.ui.LocalSystemBottomPadding.current,
+            )) {
             // Header
             Row(
                 modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -94,7 +100,7 @@ fun MlmUsersScreen(
                 IconButton(onClick = onDismiss) {
                     Icon(Icons.Default.Close, contentDescription = "Close", tint = TextPrimary)
                 }
-                Text("مدیریت کاربران (MLM)", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Text(S(R.string.user_management_mlm), color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                 IconButton(onClick = { loadUsers() }) {
                     Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = Primary)
                 }
@@ -111,7 +117,7 @@ fun MlmUsersScreen(
                 LazyColumn(
                     modifier = Modifier.weight(1f).padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
-                    contentPadding = PaddingValues(bottom = 100.dp)
+                    contentPadding = PaddingValues(bottom = 24.dp)
                 ) {
                     items(users) { user ->
                         MlmUserCard(
@@ -135,7 +141,7 @@ fun MlmUsersScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(16.dp)
-                    .padding(bottom = 100.dp),
+                    .padding(bottom = 24.dp),
                 contentAlignment = Alignment.CenterEnd
             ) {
                 FloatingActionButton(
@@ -189,9 +195,7 @@ fun MlmUserCard(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(SurfaceDark, RoundedCornerShape(16.dp))
-            .border(1.dp, BorderDark, RoundedCornerShape(16.dp))
-            .clip(RoundedCornerShape(16.dp))
+            .frostedGlass(RoundedCornerShape(16.dp))
             .clickable { isExpanded = !isExpanded }
     ) {
         Row(
@@ -213,16 +217,19 @@ fun MlmUserCard(
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(user.username, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                val usedMb = ((user.usedGb ?: 0f) * 1024).toInt()
-                val limitStr = if (user.limitGb != null) "${user.limitGb} گیگابایت" else "نامحدود"
-                Text("مصرف کاربر تا کنون: $usedMb مگابایت از $limitStr", color = TextMuted, fontSize = 12.sp)
+                // The byte counter where the engine has one, rounded: `used_gb` is a float mirror,
+                // and truncating it to whole megabytes showed a third figure beside the two others.
+                val usedMb = user.usedBytes?.takeIf { it > 0 }?.let { Math.round(it / 1048576.0).toInt() }
+                    ?: Math.round((user.usedGb ?: 0f) * 1024).toInt()
+                val limitStr = if (user.limitGb != null) S(R.string.gb, user.limitGb) else S(R.string.unlimited)
+                Text(S(R.string.used_so_far_usedmb_mb_of_limitstr, usedMb, limitStr), color = TextMuted, fontSize = 12.sp)
                 if (user.limitGb != null && user.limitGb > 0f) {
                     val progress = ((user.usedGb ?: 0f) / user.limitGb).coerceIn(0f, 1f)
                     val progColor = if (progress > 0.9f) RedError else if (progress > 0.7f) YellowWarn else GreenOk
                     Spacer(modifier = Modifier.height(6.dp))
                     LinearProgressIndicator(
                         progress = progress,
-                        modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
+                        modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(8.dp)),
                         color = progColor,
                         trackColor = BorderDark
                     )
@@ -239,7 +246,7 @@ fun MlmUserCard(
                         if (success) {
                             onRefresh()
                         } else {
-                            Toast.makeText(context, "خطا در تغییر وضعیت کاربر", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, S(R.string.could_not_change_the_user_s_state), Toast.LENGTH_SHORT).show()
                         }
                     }
                 }) {
@@ -255,13 +262,13 @@ fun MlmUserCard(
         AnimatedVisibility(visible = isExpanded) {
             Column(modifier = Modifier.fillMaxWidth().background(BgDark.copy(alpha = 0.5f)).padding(16.dp)) {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    InfoItem("پورت", user.port.toString())
-                    InfoItem("اعتبار", if (user.expiryDays != null) "${user.expiryDays} روز" else "∞")
-                    InfoItem("پروتکل", (user.connectionType ?: "xhttp").uppercase())
+                    InfoItem(S(R.string.port), user.port.toString())
+                    InfoItem(S(R.string.validity), if (user.expiryDays != null) S(R.string.days, user.expiryDays) else "∞")
+                    InfoItem(S(R.string.protocol), (user.connectionType ?: "xhttp").uppercase())
                 }
                 Spacer(modifier = Modifier.height(16.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    ActionBtn(Icons.Default.Download, "دریافت کانفیگ") {
+                    ActionBtn(Icons.Default.Download, S(R.string.get_config)) {
                         isBusy = true
                         scope.launch {
                             val configs = apiManager.getUserConfigs(account, user.username)
@@ -280,42 +287,42 @@ fun MlmUserCard(
                                     id = "mlm_${account.id}_${user.username}_${System.currentTimeMillis()}",
                                     accountId = account.id,
                                     date = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).format(java.util.Date()),
-                                    title = "کانفیگ‌های کاربر: ${user.username}",
+                                    title = S(R.string.configs_for, user.username),
                                     nodes = engineNodes
                                 )
                                 groupManager.cloudGroups.add(0, newGroup)
                                 groupManager.saveCloudGroups()
                                 onGroupsUpdated()
-                                Toast.makeText(context, "کانفیگ‌ها به تب ابری افزوده شدند", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, S(R.string.the_configs_were_added_to_the_cloud), Toast.LENGTH_SHORT).show()
                             } else {
-                                Toast.makeText(context, "کانفیگی یافت نشد", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, S(R.string.no_config_found), Toast.LENGTH_SHORT).show()
                             }
                             isBusy = false
                         }
                     }
-                    ActionBtn(Icons.Default.Language, "وضعیت") {
+                    ActionBtn(Icons.Default.Language, S(R.string.status)) {
                         val statusLink = "${account.mlmWorkerUrl?.trimEnd('/')}/status/${user.username}"
                         val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                         val clip = android.content.ClipData.newPlainText("status", statusLink)
                         clipboard.setPrimaryClip(clip)
-                        Toast.makeText(context, "لینک صفحه وضعیت کپی شد", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, S(R.string.status_page_link_copied), Toast.LENGTH_SHORT).show()
                     }
-                    ActionBtn(Icons.Default.Speed, "اسکن IP") {
+                    ActionBtn(Icons.Default.Speed, S(R.string.ip_scan)) {
                         isBusy = true
                         scope.launch {
                             val configs = apiManager.getUserConfigs(account, user.username)
                             if (configs.isNotEmpty()) {
                                 onScanUser(configs.first())
                             } else {
-                                Toast.makeText(context, "کانفیگی یافت نشد", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, S(R.string.no_config_found), Toast.LENGTH_SHORT).show()
                             }
                             isBusy = false
                         }
                     }
-                    ActionBtn(Icons.Default.Edit, "ویرایش") {
+                    ActionBtn(Icons.Default.Edit, S(R.string.edit)) {
                         onEditUser()
                     }
-                    ActionBtn(Icons.Default.Delete, "حذف", RedError) {
+                    ActionBtn(Icons.Default.Delete, S(R.string.delete), RedError) {
                         showDeleteConfirm = true
                     }
                 }
@@ -326,8 +333,8 @@ fun MlmUserCard(
     if (showDeleteConfirm) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
-            title = { Text("حذف کاربر", color = TextPrimary, fontWeight = FontWeight.Bold) },
-            text = { Text("آیا از حذف کاربر ${user.username} اطمینان دارید؟\nبا حذف این کاربر تمام کانفیگ‌های مرتبط با آن قطع و از دسترس خارج خواهند شد!", color = TextMuted) },
+            title = { Text(S(R.string.delete_user), color = TextPrimary, fontWeight = FontWeight.Bold) },
+            text = { Text(S(R.string.are_you_sure_you_want_to_delete, user.username), color = TextMuted) },
             confirmButton = {
                 TextButton(onClick = {
                     showDeleteConfirm = false
@@ -338,16 +345,16 @@ fun MlmUserCard(
                         if (success) {
                             onRefresh()
                         } else {
-                            Toast.makeText(context, "خطا در حذف کاربر", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, S(R.string.could_not_delete_the_user), Toast.LENGTH_SHORT).show()
                         }
                     }
                 }) {
-                    Text("بله، حذف شود", color = RedError, fontWeight = FontWeight.Bold)
+                    Text(S(R.string.yes_delete), color = RedError, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteConfirm = false }) {
-                    Text("انصراف", color = Primary)
+                    Text(S(R.string.cancel), color = TextPrimary)
                 }
             },
             containerColor = SurfaceDark
@@ -405,50 +412,60 @@ fun AddMlmUserDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = SurfaceDark,
-        title = { Text(if (isEditMode) "ویرایش کاربر" else "کاربر جدید", color = TextPrimary) },
+        containerColor = DialogSurface,
+        modifier = androidx.compose.ui.Modifier.border(
+            0.7.dp,
+            androidx.compose.ui.graphics.Color.White.copy(alpha = 0.15f),
+            CardShape,
+        ),
+                shape = CardShape,
+        title = { Text(if (isEditMode) S(R.string.edit_user) else S(R.string.new_user), color = TextPrimary) },
         text = {
             Column(modifier = Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState())) {
                 OutlinedTextField(
                     value = username,
                     onValueChange = { username = it },
-                    label = { Text("نام کاربری", color = TextMuted) },
+                    label = { Text(S(R.string.username), color = TextMuted) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     readOnly = isEditMode, // Cannot change username when editing
-                    colors = OutlinedTextFieldDefaults.colors(focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary)
-                )
+                    colors = iosFieldColors()
+                ,
+        shape = ControlShape,)
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
                     value = limitGb,
                     onValueChange = { limitGb = it },
-                    label = { Text("محدودیت کل (GB) - خالی: نامحدود", color = TextMuted) },
+                    label = { Text(S(R.string.total_limit_gb_empty_unlimited), color = TextMuted) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary)
-                )
+                    colors = iosFieldColors()
+                ,
+        shape = ControlShape,)
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
                     value = dailyLimitGb,
                     onValueChange = { dailyLimitGb = it },
-                    label = { Text("محدودیت روزانه (GB) - خالی: نامحدود", color = TextMuted) },
+                    label = { Text(S(R.string.daily_limit_gb_empty_unlimited), color = TextMuted) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary)
-                )
+                    colors = iosFieldColors()
+                ,
+        shape = ControlShape,)
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
                     value = expiryDays,
                     onValueChange = { expiryDays = it },
-                    label = { Text("اعتبار (روز) - خالی: نامحدود", color = TextMuted) },
+                    label = { Text(S(R.string.validity_days_empty_unlimited), color = TextMuted) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary)
-                )
+                    colors = iosFieldColors()
+                ,
+        shape = ControlShape,)
                 Spacer(modifier = Modifier.height(16.dp))
                 
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                    Text("نوع پورت:", color = TextMuted, modifier = Modifier.weight(1f), fontSize = 14.sp)
+                    Text(S(R.string.port_type), color = TextMuted, modifier = Modifier.weight(1f), fontSize = 14.sp)
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { 
                         isSecure = true
                         selectedPorts = selectedPorts.filter { it in securePorts }.toSet().ifEmpty { setOf("443") }
@@ -461,7 +478,7 @@ fun AddMlmUserDialog(
                             }, 
                             colors = RadioButtonDefaults.colors(selectedColor = Primary)
                         )
-                        Text("امن (TLS)", color = TextPrimary, fontSize = 12.sp)
+                        Text(S(R.string.secure_tls), color = TextPrimary, fontSize = 12.sp)
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { 
@@ -476,7 +493,7 @@ fun AddMlmUserDialog(
                             }, 
                             colors = RadioButtonDefaults.colors(selectedColor = Primary)
                         )
-                        Text("معمولی", color = TextPrimary, fontSize = 12.sp)
+                        Text(S(R.string.plain), color = TextPrimary, fontSize = 12.sp)
                     }
                 }
                 Spacer(modifier = Modifier.height(8.dp))
@@ -489,14 +506,16 @@ fun AddMlmUserDialog(
                         value = selectedPorts.joinToString(", "),
                         onValueChange = {},
                         readOnly = true,
-                        label = { Text("انتخاب پورت", color = TextMuted) },
+                        label = { Text(S(R.string.choose_a_port), color = TextMuted) },
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = portExpanded) },
                         modifier = Modifier.fillMaxWidth().menuAnchor(),
-                        colors = OutlinedTextFieldDefaults.colors(focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary)
-                    )
+                        colors = iosFieldColors()
+                    ,
+        shape = ControlShape,)
                     ExposedDropdownMenu(
                         expanded = portExpanded,
-                        onDismissRequest = { portExpanded = false }
+                        onDismissRequest = { portExpanded = false },
+                        modifier = Modifier.iosMenu(),
                     ) {
                         currentPorts.forEach { p ->
                             DropdownMenuItem(
@@ -527,27 +546,29 @@ fun AddMlmUserDialog(
                 OutlinedTextField(
                     value = fingerprint,
                     onValueChange = { fingerprint = it },
-                    label = { Text("فرگمنت (Fingerprint)", color = TextMuted) },
+                    label = { Text(S(R.string.fingerprint), color = TextMuted) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary)
-                )
+                    colors = iosFieldColors()
+                ,
+        shape = ControlShape,)
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
                     value = proxyIp,
                     onValueChange = { proxyIp = it },
-                    label = { Text("پروکسی اختصاصی (IP)", color = TextMuted) },
+                    label = { Text(S(R.string.dedicated_proxy_ip), color = TextMuted) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary)
-                )
+                    colors = iosFieldColors()
+                ,
+        shape = ControlShape,)
             }
         },
         confirmButton = {
             Button(
                 onClick = {
                     if (username.isBlank()) {
-                        Toast.makeText(context, "نام کاربری الزامی است", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, S(R.string.a_username_is_required), Toast.LENGTH_SHORT).show()
                         return@Button
                     }
                     isBusy = true
@@ -579,22 +600,22 @@ fun AddMlmUserDialog(
                         }
                         isBusy = false
                         if (success) {
-                            Toast.makeText(context, if (isEditMode) "کاربر با موفقیت ویرایش شد" else "کاربر با موفقیت ایجاد شد", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, if (isEditMode) S(R.string.user_edited_successfully) else S(R.string.user_created_successfully), Toast.LENGTH_SHORT).show()
                             onUserAdded()
                         } else {
-                            Toast.makeText(context, if (isEditMode) "خطا در ویرایش کاربر" else "خطا در ایجاد کاربر", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, if (isEditMode) S(R.string.could_not_edit_the_user) else S(R.string.could_not_create_the_user), Toast.LENGTH_SHORT).show()
                         }
                     }
                 },
                 enabled = !isBusy
             ) {
                 if (isBusy) CircularProgressIndicator(modifier = Modifier.size(16.dp), color = BgDark)
-                else Text(if (isEditMode) "ذخیره" else "ایجاد", color = BgDark)
+                else Text(if (isEditMode) S(R.string.save) else S(R.string.create), color = BgDark)
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss, enabled = !isBusy) {
-                Text("انصراف", color = TextMuted)
+                Text(S(R.string.cancel), color = TextMuted)
             }
         }
     )

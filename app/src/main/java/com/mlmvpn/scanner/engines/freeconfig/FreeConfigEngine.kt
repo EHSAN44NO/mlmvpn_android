@@ -20,6 +20,8 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.coroutineContext
 import kotlin.random.Random
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
 
 /**
  * Fetches free public VLESS/VMess/Trojan/Shadowsocks configs, tests them for a real proxied
@@ -33,6 +35,9 @@ object FreeConfigEngine {
 
     private const val TAG = "FreeConfigEngine"
 
+    // Deliberately NOT localised: this is the folder's identity on disk, not a label. Groups are
+    // matched by name, so a value that changes with the language would orphan every folder a
+    // user already has and quietly build a second one beside it.
     const val GROUP_NAME = "کانفیگ های رایگان"
 
     /** (url, isBase64Encoded) */
@@ -49,6 +54,158 @@ object FreeConfigEngine {
         .build()
 
     private val URI_PREFIXES = listOf("vless://", "vmess://", "trojan://", "ss://")
+
+    // ── the @Raydikalx aggregator's own categories ──────────────────────────────────────
+    //
+    // The aggregator merges ~19 public sources every 15 minutes and publishes them already
+    // sorted by how each config did in its own testing. Its labels are worth surfacing
+    // verbatim rather than flattening everything into one list: someone who picks "verified"
+    // starts from configs that passed a real proxied request minutes ago, so their own test
+    // finds working ones far sooner than it would from the raw set.
+    //
+    // The same pools back the desktop app's free-config panel, so a category means the same
+    // thing on both.
+
+    private const val INDEX_URL = "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/index.json"
+    private const val INDEX_MIRROR = "https://cdn.jsdelivr.net/gh/0xRadikal/Free-v2ray-Configs@main/index.json"
+
+    /** The pool the user picked, or where its entries came from. */
+    data class Pool(
+        val id: String,
+        val title: String,
+        /** One line on why this category exists -- shown under its title. */
+        val why: String,
+        /** How many unique configs it holds right now, straight from the aggregator's index. */
+        val count: Int,
+        val url: String = "",
+        val mirror: String = "",
+    )
+
+    data class Catalog(
+        val pools: List<Pool>,
+        /** When the aggregator last rebuilt, ISO-8601, or null. */
+        val updatedAt: String?,
+        val intervalMinutes: Int?,
+        val healthySources: Int?,
+        val totalSources: Int?,
+    )
+
+    /** Our own aggregate of the four lists this app has always used. */
+    const val POOL_LEGACY = "legacy"
+
+    private data class PoolSpec(val id: String, val title: String, val why: String, val path: String)
+
+    // Best-first: the order they are offered in.
+    private val POOL_SPECS = listOf(
+        PoolSpec("verified", S(R.string.verified), S(R.string.a_real_request_passed_through_them_in), "verified/configs.txt"),
+        PoolSpec("fast", S(R.string.fast), S(R.string.verified_with_a_median_latency_under_the), "fast/configs.txt"),
+        PoolSpec("secure", S(R.string.secure), S(R.string.verified_with_forward_secrecy_and_without_disabling), "secure/configs.txt"),
+        PoolSpec("all", S(R.string.all_4), S(R.string.the_whole_set_with_no_pre_testing), "all/configs.txt"),
+    )
+
+    private var catalogCache: Catalog? = null
+    private var catalogAt = 0L
+    private const val CATALOG_TTL_MS = 5 * 60 * 1000L
+
+    /** Fetch text, primary first then the jsDelivr mirror -- raw.githubusercontent is filtered. */
+    private suspend fun fetchText(url: String, mirror: String?): String = withContext(Dispatchers.IO) {
+        var lastErr: String? = null
+        for (target in listOfNotNull(url, mirror)) {
+            try {
+                client.newCall(Request.Builder().url(target).get().build()).execute().use { res ->
+                    if (!res.isSuccessful) {
+                        lastErr = "HTTP ${res.code}"
+                        return@use
+                    }
+                    return@withContext res.body?.string().orEmpty()
+                }
+            } catch (e: Exception) {
+                lastErr = e.message
+            }
+        }
+        throw IllegalStateException(lastErr ?: S(R.string.not_fetched))
+    }
+
+    /**
+     * What is on offer right now: category sizes, freshness, and how many sources are healthy.
+     *
+     * Read from the aggregator's own `index.json` rather than hard-coded, so the counts the
+     * user sees are the counts they will actually get. A category the index reports as empty
+     * is dropped rather than offered and then found to be nothing.
+     *
+     * The legacy aggregate is always appended, because it is this app's own set of sources and
+     * does not depend on the aggregator being reachable at all.
+     */
+    suspend fun fetchCatalog(force: Boolean = false): Catalog = withContext(Dispatchers.IO) {
+        val cached = catalogCache
+        if (!force && cached != null && System.currentTimeMillis() - catalogAt < CATALOG_TTL_MS) {
+            return@withContext cached
+        }
+
+        val legacy = Pool(
+            id = POOL_LEGACY,
+            title = S(R.string.extra_sources),
+            why = S(R.string.the_four_public_lists_this_app_has),
+            count = -1,   // unknown until fetched; the UI shows it as "?" rather than "0"
+        )
+
+        val catalog = try {
+            val idx = org.json.JSONObject(fetchText(INDEX_URL, INDEX_MIRROR))
+            val base = idx.optString("raw_base").ifBlank { "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main" }
+            val mirrorBase = idx.optString("cdn_base").ifBlank { "https://cdn.jsdelivr.net/gh/0xRadikal/Free-v2ray-Configs@main" }
+
+            // Counts live in two objects: the cascade ones (verified/fast/secure) and the plain
+            // categories (all/heavy/light). Merge both so one lookup covers every pool.
+            val counts = HashMap<String, Int>()
+            for (key in listOf("cascade_categories", "categories")) {
+                val obj = idx.optJSONObject(key) ?: continue
+                for (name in obj.keys()) {
+                    obj.optJSONObject(name)?.optInt("unique")?.takeIf { it > 0 }?.let { counts[name] = it }
+                }
+            }
+
+            val pools = POOL_SPECS.mapNotNull { spec ->
+                val count = counts[spec.id] ?: return@mapNotNull null
+                Pool(
+                    id = spec.id, title = spec.title, why = spec.why, count = count,
+                    url = "$base/${spec.path}", mirror = "$mirrorBase/${spec.path}",
+                )
+            }
+
+            val sources = idx.optJSONObject("sources")
+            Catalog(
+                pools = pools + legacy,
+                updatedAt = idx.optString("updated_at").ifBlank { null },
+                intervalMinutes = idx.optInt("update_interval_minutes").takeIf { it > 0 },
+                healthySources = sources?.optInt("healthy"),
+                totalSources = sources?.optInt("total_count"),
+            )
+        } catch (e: Exception) {
+            // The aggregator being unreachable must not take the whole feature down -- the
+            // app's own sources still work, so offer those alone rather than an error screen.
+            Log.w(TAG, "catalog failed: ${e.message}")
+            Catalog(listOf(legacy), null, null, null, null)
+        }
+
+        catalogCache = catalog
+        catalogAt = System.currentTimeMillis()
+        catalog
+    }
+
+    /**
+     * Every candidate URI in one pool, deduplicated by real server identity.
+     *
+     * [POOL_LEGACY] falls through to this app's own four sources; anything else is one of the
+     * aggregator's category files.
+     */
+    suspend fun fetchCandidates(pool: Pool): List<String> {
+        if (pool.id == POOL_LEGACY) return fetchCandidates()
+        val text = fetchText(pool.url, pool.mirror)
+        return text.lines()
+            .map { it.trim() }
+            .filter { line -> URI_PREFIXES.any { prefix -> line.startsWith(prefix, ignoreCase = true) } }
+            .distinctBy { dedupeKey(it) }
+    }
 
     /**
      * Downloads every source and returns the deduplicated list of raw candidate config URIs
@@ -120,7 +277,24 @@ object FreeConfigEngine {
     private const val DELAY_TEST_URL = "https://clients3.google.com/generate_204"
 
     /** Also used by the quick-connect scanner, which runs the same real-delay primitive. */
+    @Volatile
+    private var xrayEnvReady = false
+    private val xrayEnvLock = Any()
+
     suspend fun ensureXrayEnv(context: Context) = withContext(Dispatchers.IO) {
+        // Once per process, and never again.
+        //
+        // This used to run on every call, and the quick-connect scanner calls it once per
+        // config. `initCoreEnv` sets up the core's shared global state and mints a new
+        // xudpBaseKey each time, so re-running it while a dozen measurement cores are mid-flight
+        // was re-initialising the ground under them -- servers that were perfectly alive came
+        // back as failures, in numbers large enough to look like the internet was down. The
+        // asset copy is also pure I/O that only matters the first time.
+        if (xrayEnvReady) return@withContext
+        synchronized(xrayEnvLock) {
+            if (xrayEnvReady) return@withContext
+            xrayEnvReady = true
+        }
         try {
             for (filename in listOf("geosite.dat", "geoip.dat")) {
                 val destFile = java.io.File(context.filesDir, filename)

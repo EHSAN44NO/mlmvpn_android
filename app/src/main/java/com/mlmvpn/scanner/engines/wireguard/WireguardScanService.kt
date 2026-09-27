@@ -25,6 +25,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import com.mlmvpn.scanner.utils.S
 
 class WireguardScanService : Service() {
 
@@ -51,7 +52,7 @@ class WireguardScanService : Service() {
         ServiceCompat.startForeground(
             this,
             NOTIFICATION_ID,
-            buildNotification("در حال آماده‌سازی...", null),
+            buildNotification(S(R.string.preparing_2), null),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
         )
         acquireWakeLock()
@@ -120,10 +121,10 @@ class WireguardScanService : Service() {
 
                 val (text, progress) = when (state) {
                     WireguardScannerEngine.EngineState.SCANNING ->
-                        "جستجو: $scanned از $total تست شد ($endpoints سالم)" to Pair(scanned, total)
+                        S(R.string.searching_scanned_of_total_tested_endpoints_healthy, scanned, total, endpoints) to Pair(scanned, total)
                     WireguardScannerEngine.EngineState.TESTING ->
-                        "تست واقعی (۱۰۰٪): $scanned از $total" to Pair(scanned, total)
-                    else -> "آماده‌سازی..." to null
+                        S(R.string.real_test_100_scanned_of_total, scanned, total) to Pair(scanned, total)
+                    else -> S(R.string.preparing_3) to null
                 }
                 
                 try {
@@ -161,11 +162,11 @@ class WireguardScanService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "اسکن وایرگارد",
+                S(R.string.wireguard_scan),
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
                 setShowBadge(false)
-                description = "پیشرفت اسکن اندپوینت‌های وایرگارد"
+                description = S(R.string.wireguard_endpoint_scan_progress)
             }
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.createNotificationChannel(channel)
@@ -178,7 +179,7 @@ class WireguardScanService : Service() {
             PendingIntent.getActivity(this, 0, it, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         }
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("اسکنر هوشمند وایرگارد")
+            .setContentTitle(S(R.string.smart_wireguard_scanner))
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_scanner)
             .setOngoing(true)

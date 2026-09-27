@@ -6,6 +6,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import java.util.concurrent.atomic.AtomicInteger
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
 
 /**
  * Progress of whichever bulk test — ping or real handshake — is currently running.
@@ -21,7 +23,7 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 object VpnGateSweep {
 
-    enum class Kind(val labelFa: String) { PING("پینگ"), PROBE("تست واقعی") }
+    enum class Kind(val labelFa: String) { PING(S(R.string.ping_2)), PROBE(S(R.string.real_test_2)) }
 
     data class State(val kind: Kind, val done: Int, val total: Int) {
         val percent: Int get() = if (total > 0) done * 100 / total else 0

@@ -21,12 +21,24 @@ class MlmDeployer(private val context: Context) {
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .writeTimeout(20, TimeUnit.SECONDS)
-        .addInterceptor(com.mlmvpn.scanner.emergency.EmergencyInterceptor(context))
         .build()
 
     suspend fun deployMlm(account: CloudAccount, onProgress: (Int, String) -> Unit): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        // One engine, one installer. On an account Config Studio manages, the upload below would
+        // replace the Worker's settings with this short list -- dropping Config Studio's route (and
+        // with it every subscription link it handed out), the Durable Object that enforces device
+        // limits, and the key the app talks to it with. So the Cloud tab's install and update go
+        // through Config Studio's own installer there, which keeps all of them.
+        if (account.isStudioManaged) {
+            return@withContext when (val r = com.mlmvpn.scanner.data.studio.StudioDeployer(context).install(account, onProgress = onProgress)) {
+                is com.mlmvpn.scanner.data.studio.StudioDeployer.Result.Ready -> Pair(true, r.workerUrl)
+                is com.mlmvpn.scanner.data.studio.StudioDeployer.Result.WouldDowngrade ->
+                    Pair(false, context.getString(com.mlmvpn.scanner.R.string.studio_downgrade_body))
+                is com.mlmvpn.scanner.data.studio.StudioDeployer.Result.Failed -> Pair(false, r.message)
+            }
+        }
         try {
-            val isCfat = account.token.startsWith("cfat_") || account.email.isEmpty()
+            val isCfat = com.mlmvpn.scanner.data.CloudAuth.useBearer(account)
             val authHeaders = Headers.Builder().apply {
                 if (isCfat) add("Authorization", "Bearer ${account.token}")
                 else {
@@ -172,7 +184,7 @@ class MlmDeployer(private val context: Context) {
             onProgress(60, "Uploading MLM Worker...")
             var workerScript = ""
             try {
-                context.assets.open("mlm_worker.js").bufferedReader().use {
+                com.mlmvpn.scanner.store.StoreFiles.open(context, "mlm_worker.js").bufferedReader().use {
                     workerScript = it.readText()
                 }
             } catch (e: Exception) {
@@ -193,17 +205,16 @@ class MlmDeployer(private val context: Context) {
                         put("name", "DB")
                         put("id", databaseId)
                     })
-                    val adminPass = if (!account.mlmAdminPassword.isNullOrEmpty()) account.mlmAdminPassword!! else "admin"
+                    val adminPass = com.mlmvpn.scanner.utils.AdminPassword.ensure(account)
                     put(JSONObject().apply {
                         put("type", "plain_text")
                         put("name", "ADMIN_PASSWORD")
                         put("text", adminPass)
                     })
-                    put(JSONObject().apply {
-                        put("type", "plain_text")
-                        put("name", "DEBUG")
-                        put("text", "1")
-                    })
+                    // DEBUG is not sent. "1" made the engine write a database row for every
+                    // request, forever and never pruned -- the free plan's 100k daily writes spent
+                    // on logs nobody reads, and nothing left for recording usage. Config Studio's
+                    // installer stopped sending it for the same reason.
                 }
                 put("bindings", bindings)
             }
@@ -214,7 +225,8 @@ class MlmDeployer(private val context: Context) {
                 .addFormDataPart("worker.js", "worker.js", workerScript.toRequestBody("application/javascript+module".toMediaTypeOrNull()))
                 .build()
 
-            val workerName = AntiDpi.generateSafeWorkerName() + "-mlm"
+            val workerName = com.mlmvpn.scanner.data.PanelBuild.scriptName(account, "MLM")
+                ?: (AntiDpi.generateSafeWorkerName() + "-mlm")
             val uploadReq = Request.Builder()
                 .url("https://api.cloudflare.com/client/v4/accounts/${account.accountId}/workers/scripts/$workerName")
                 .headers(authHeaders)
@@ -243,9 +255,9 @@ class MlmDeployer(private val context: Context) {
             val finalUrl = "https://$workerName.$subdomain.workers.dev"
 
             account.mlmStatus = "deployed"
+            account.mlmVersion = com.mlmvpn.scanner.data.PanelBuild.MLM
             account.mlmWorkerUrl = finalUrl
             account.mlmDbId = databaseId
-            if (account.mlmAdminPassword.isNullOrEmpty()) account.mlmAdminPassword = "admin"
 
             Pair(true, "Deployment Successful! URL: $finalUrl")
 

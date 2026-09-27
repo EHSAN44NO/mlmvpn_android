@@ -4,6 +4,8 @@ import android.content.Context
 import com.mlmvpn.scanner.data.NodeManager
 import com.mlmvpn.scanner.engines.gst.GstLog
 import com.mlmvpn.scanner.models.VpnNode
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
 
 /**
  * Sets up the MITM domain-fronting profile: a server-less config from @patterniha's
@@ -25,10 +27,13 @@ import com.mlmvpn.scanner.models.VpnNode
 object MitmProfile {
 
     /** Its own folder in the connection tab, kept separate from the Iran defaults. */
+    // Deliberately NOT localised: this is the folder's identity on disk, not a label. Groups are
+    // matched by name, so a value that changes with the language would orphan every folder a
+    // user already has and quietly build a second one beside it.
     const val GROUP = "دامین‌فرانتینگ (بدون سرور)"
 
     const val NODE_ID = "mitm_domainfronting_v23"
-    const val NODE_NAME = "دامین‌فرانتینگ v23 — بدون سرور"
+    val NODE_NAME: String get() = S(R.string.domain_fronting_v23_no_server)
 
     private const val ASSET = "mitm_domainfronting_v23.json"
     private const val CERT_PLACEHOLDER = "__MLM_CERT_PATH__"
@@ -46,7 +51,7 @@ object MitmProfile {
      * the files.
      */
     fun buildConfig(context: Context): String? = try {
-        val raw = context.assets.open(ASSET).bufferedReader().use { it.readText() }
+        val raw = com.mlmvpn.scanner.store.StoreFiles.open(context, ASSET).bufferedReader().use { it.readText() }
         val withPaths = raw
             .replace(CERT_PLACEHOLDER, MitmCertManager.certFile(context).absolutePath)
             .replace(KEY_PLACEHOLDER, MitmCertManager.keyFile(context).absolutePath)

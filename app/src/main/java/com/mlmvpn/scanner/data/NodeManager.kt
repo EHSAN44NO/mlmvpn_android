@@ -7,6 +7,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 import kotlinx.coroutines.launch
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
 
 class NodeManager private constructor(context: Context) {
     companion object {
@@ -20,6 +22,9 @@ class NodeManager private constructor(context: Context) {
         }
 
         /** Group the built-in Iran default configs live in. */
+        // Deliberately NOT localised: this is the folder's identity on disk, not a label. Groups are
+        // matched by name, so a value that changes with the language would orphan every folder a
+        // user already has and quietly build a second one beside it.
         const val IRAN_GROUP = "کانفیگ‌های ایران"
 
         /** Built-in configs that must never be deletable by any UI path. */
@@ -62,19 +67,88 @@ class NodeManager private constructor(context: Context) {
                         countryCode = if (obj.has("countryCode") && !obj.isNull("countryCode")) obj.getString("countryCode") else null,
                         groupTitle = if (obj.has("groupTitle") && !obj.isNull("groupTitle")) {
                             val gt = obj.getString("groupTitle")
-                            if (gt == "پیش‌فرض") null else gt
+                            if (gt == S(R.string.default_str_2)) null else gt
                         } else null
                     )
                 )
             }
             synchronized(nodes) {
                 nodes.clear()
-                nodes.addAll(list)
+                // Deduplicated on the way in, because a shipped bug wrote duplicates to this file
+                // and they are still there. The delay/speed test used to write its result by list
+                // POSITION while the list was moving underneath it, so one node's result landed on
+                // another node's row and both rows ended up carrying the same id -- which
+                // LazyColumn throws on, crashing the V2Ray screen on every launch for anyone whose
+                // stored list had been corrupted. Fixing the writer stops it happening again; this
+                // is what repairs the users it already happened to, and the next save writes the
+                // repaired list back.
+                nodes.addAll(list.distinctBy { it.id })
                 injectDefaultConfigs()
             }
         } catch (e: Exception) {
             e.printStackTrace()
         }
+    }
+
+    /**
+     * Replace the whole list, atomically.
+     *
+     * The only correct way to do what a dozen call sites used to do by hand:
+     *
+     *     nodeManager.nodes.clear()
+     *     nodeManager.nodes.addAll(list)
+     *     nodeManager.saveNodes()
+     *
+     * `nodes` is a synchronized list, so each of those calls is individually safe and the PAIR is
+     * not. Two of them racing -- and they do race, because per-node measurement results, the bulk
+     * test's final write and the SNI auto-rename all write from IO threads while the screen writes
+     * from the main one -- interleave as clear, clear, addAll(A), addAll(B), and the list then
+     * holds every node TWICE with the same id. That is the crash that leads the fleet:
+     * `IllegalArgumentException: Key "<uuid>" was already used`, thrown by LazyColumn on its next
+     * measure pass, on 1.2.31 and 1.2.32 alike.
+     */
+    fun replaceAll(newNodes: List<VpnNode>) {
+        synchronized(nodes) {
+            nodes.clear()
+            nodes.addAll(newNodes)
+        }
+        saveNodes()
+    }
+
+    /**
+     * Write these rows back BY ID and leave every other row exactly as it is.
+     *
+     * What a measurement actually means. A delay test learns something about the configs it
+     * measured and nothing whatsoever about the rest, but the old code expressed the result by
+     * replacing the entire stored list with the screen's snapshot -- so anything added while the
+     * test was running was erased by it. A bulk test takes minutes, and building SNI configs on
+     * another screen takes seconds; the user built 180 of them, came back, and the connection
+     * screen's next write-back deleted the lot.
+     *
+     * An id that is not in the list is IGNORED rather than added. If a config was deleted while a
+     * measurement was in flight, its result must not bring it back from the dead.
+     */
+    fun mergeById(updated: List<VpnNode>) {
+        if (updated.isEmpty()) return
+        val byId = updated.associateBy { it.id }
+        var touched = false
+        synchronized(nodes) {
+            for (i in nodes.indices) {
+                val replacement = byId[nodes[i].id] ?: continue
+                nodes[i] = replacement
+                touched = true
+            }
+        }
+        if (touched) saveNodes()
+    }
+
+    /** Remove these ids, atomically. Built-in configs never go, whatever is asked. */
+    fun removeByIds(victims: Set<String>) {
+        if (victims.isEmpty()) return
+        val removed = synchronized(nodes) {
+            nodes.removeAll { it.id in victims && !isProtected(it) }
+        }
+        if (removed) saveNodes()
     }
 
     fun saveNodes() {
@@ -85,7 +159,23 @@ class NodeManager private constructor(context: Context) {
         // re-emitted on nodesFlow.
         val snapshot = synchronized(nodes) {
             injectDefaultConfigs()
-            nodes.toList()
+            // A duplicate id must never reach the disk.
+            //
+            // The writes above are atomic now, but this is the last gate and it is worth keeping:
+            // one duplicate is a crash the user cannot get past, because LazyColumn throws while
+            // MEASURING the list, so the screen that would let them fix it is the screen that
+            // will not open. It was also a silent data loss -- `loadNodes` de-duplicates by id, so
+            // whichever copy came second was quietly dropped on the next launch.
+            //
+            // Dropping the duplicate here rather than there means the list on disk is correct, so
+            // nothing has to be dropped on the way back in.
+            val seen = HashSet<String>(nodes.size)
+            val unique = nodes.filter { seen.add(it.id) }
+            if (unique.size != nodes.size) {
+                nodes.clear()
+                nodes.addAll(unique)
+            }
+            unique
         }
         for (node in snapshot) {
             val obj = JSONObject().apply {
@@ -112,6 +202,30 @@ class NodeManager private constructor(context: Context) {
             nodes.removeAll { it.engineType == "Manual" && it.groupTitle == groupId && !isProtected(it) }
         }
         saveNodes()
+    }
+
+    /**
+     * Put already-built nodes into a group, replacing nothing.
+     *
+     * [addConfigs] cannot serve a JSON subscription: it takes share LINKS and works out the type
+     * from the `vless://`-style prefix, and a JSON config has neither. The nodes are built by the
+     * importer that understands the document; this only files them.
+     */
+    fun addNodes(newNodes: List<VpnNode>, groupTitle: String? = null): Int {
+        if (newNodes.isEmpty()) return 0
+        val added: Int
+        synchronized(nodes) {
+            val existing = nodes.map { it.uri }.toSet()
+            val fresh = newNodes.filterNot { it.uri in existing }
+            fresh.forEach { it.groupTitle = groupTitle }
+            nodes.addAll(fresh)
+            // What was ADDED, not what was offered. The caller puts this number in front of the
+            // user ("added N configs"), and counting the input would report work that a duplicate
+            // check had just decided not to do.
+            added = fresh.size
+        }
+        if (added > 0) saveNodes()
+        return added
     }
 
     fun addConfigs(configs: List<String>, groupTitle: String? = null): Int {
@@ -165,78 +279,58 @@ class NodeManager private constructor(context: Context) {
     }
 
     // Caller must hold `synchronized(nodes)` already; not synchronized internally to avoid re-entrant lock churn.
+    /**
+     * The built-in «کانفیگ‌های ایران», from one generated asset.
+     *
+     * These reach the internet with NO server: they fragment the TLS ClientHello to defeat SNI
+     * inspection and resolve names over DoH. TWO things therefore decide whether one works on a
+     * given line, and they fail independently:
+     *
+     *   1. the RESOLVER — can this network reach that DoH endpoint at all? Measured on one
+     *      Iranian mobile line (2026-09-12): Google 8.8.8.8 answered in 493 ms and AdGuard in
+     *      1036 ms, while Cloudflare 1.1.1.1 was reset after 11 s and the upstream default
+     *      `cloudflare-dns.com` never answered. With no resolver NOT ONE NAME RESOLVES, so every
+     *      site fails and it reads as "the config does not connect" even when the rest is fine.
+     *   2. the FRAGMENT SHAPE — upstream ships four across two releases, and one that does not
+     *      suit the line does not merely fail to help: v50's profile could not open
+     *      www.cloudflare.com at all (22 s), while the same config without it answered in 3.9 s.
+     *
+     * So the list is every combination, and `assets/iran_profiles.json` is generated from the
+     * upstream files by `scripts/gen-iran-profiles.js` — the same generator the desktop app uses,
+     * so the two cannot drift. Its JSON surgery carries invariants that throw when upstream moves
+     * (exactly one no-filter-dns server, exactly one route for it, at least two catch-all
+     * fragment routes); re-doing that as Kotlin string replacement would be the same work with
+     * none of the checks.
+     *
+     * If the asset is missing or unreadable nothing is injected rather than half a list — a row
+     * that cannot connect is worse than a row that is not there.
+     */
     private fun injectDefaultConfigs() {
-        val default1 = """{"remarks":"Serverless-v44-low_delay","version":{"min":"26.6.1"},"log":{"loglevel":"debug","dnsLog":true,"access":""},"policy":{"levels":{"0":{"uplinkOnly":0,"downlinkOnly":0},"1":{"uplinkOnly":0,"downlinkOnly":0,"connIdle":12}}},"dns":{"hosts":{"cloudflare-dns.com":"challenges.cloudflare.com"},"servers":[{"address":"fakedns","domains":["domain:com","domain:net","domain:org","domain:co","domain:io","domain:tv","domain:info","domain:xyz","geosite:geolocation-!cn","geosite:telegram"]},{"tag":"no-filter-dns","address":"https://8.8.8.8/dns-query","timeoutMs":12000,"finalQuery":true},{"address":"8.8.8.8","domains":["domain:ir","geosite:category-ir"],"finalQuery":true}],"queryStrategy":"UseSystem","useSystemHosts":true,"serveStale":true},"inbounds":[{"tag":"mixed-in","port":10808,"protocol":"mixed","sniffing":{"enabled":true,"destOverride":["fakedns","tls","http","quic"],"routeOnly":false},"settings":{"udp":true,"ip":"127.0.0.1"},"streamSettings":{"sockopt":{"tcpKeepAliveInterval":1,"tcpKeepAliveIdle":11}}}],"outbounds":[{"tag":"block","protocol":"block"},{"tag":"tcp-direct","protocol":"direct","streamSettings":{"sockopt":{"domainStrategy":"ForceIP"}}},{"tag":"udp-direct","protocol":"direct","settings":{"targetStrategy":"ForceIPv4"}},{"tag":"dns-out","protocol":"dns","settings":{"userLevel":1}},{"tag":"tcp-fragment","protocol":"direct","streamSettings":{"finalmask":{"tcp":[{"type":"fragment","settings":{"packets":"1-3","length":"1-5","delay":"10","maxSplit":"163"}}]},"sockopt":{"domainStrategy":"ForceIP"}}},{"tag":"udp-noises","protocol":"direct","settings":{"targetStrategy":"ForceIPv4"},"streamSettings":{"finalmask":{"udp":[{"type":"noise","settings":{"reset":"28","noise":[{"rand":"1200-1230","delay":"10"},{"rand":"1200-1230","delay":"10"},{"rand":"1200-1230","delay":"10"}]}}]}}}],"routing":{"domainStrategy":"IPOnDemand","rules":[{"outboundTag":"tcp-fragment","inboundTag":["no-filter-dns"]},{"outboundTag":"dns-out","port":53},{"outboundTag":"tcp-direct","network":"tcp","domain":["domain:ir","geosite:category-ir"]},{"outboundTag":"udp-direct","network":"udp","domain":["domain:ir","geosite:category-ir"]},{"outboundTag":"tcp-direct","network":"tcp","ip":["geoip:private","geoip:ir"]},{"outboundTag":"udp-direct","network":"udp","ip":["geoip:private","geoip:ir"]},{"outboundTag":"udp-noises","network":"udp","protocol":["quic"],"domain":["geosite:youtube","domain:youtube.com","domain:googlevideo.com","domain:googleapis.com","domain:tiktokv.eu","domain:tiktok.com","domain:tiktokcdn.com"]},{"outboundTag":"block","network":"udp","protocol":["quic"]},{"outboundTag":"udp-direct","network":"udp","ip":["0.0.0.0/0","::/0"]},{"outboundTag":"tcp-fragment","network":"tcp","protocol":["tls","http"],"ip":["0.0.0.0/0","::/0"]},{"outboundTag":"tcp-fragment","network":"tcp","port":"443,80,5222,5228,8080","ip":["0.0.0.0/0","::/0"]},{"outboundTag":"tcp-fragment","network":"tcp","ip":["0.0.0.0/0","::/0"]},{"outboundTag":"block","port":"0-65535"}]}}"""
-        // Config #1 is the untouched baseline (`default1`). The other 5 are derived from the
-        // same base but each uses a DIFFERENT DPI-evasion strategy, so if one operator's DPI
-        // (Hamrah-e-Aval / Irancell / Shatel / …) blocks a given fingerprint, another config
-        // still connects. Two knobs are varied per profile:
-        //   - DNS resolver/method (Google DoH / Cloudflare DoH / Google DoT)
-        //   - TCP fragment profile: how the TLS ClientHello is chopped (packets/length/delay)
-        // `remarks` is set per profile so the active strategy shows up in the connection log.
-        data class IranProfile(
-            val remarks: String,
-            val name: String,
-            val dns: String,
-            val fragPackets: String,
-            val fragLength: String,
-            val fragDelay: String
-        )
-        // #1 mirrors the current baseline exactly (Google DoH, frag 1-3/1-5/delay 10).
-        val profiles = listOf(
-            IranProfile("Serverless-v44-low_delay",       "کانفیگ ایران ۱ — پیش‌فرض (Google DoH)",   "https://8.8.8.8/dns-query", "1-3", "1-5",   "10"),
-            IranProfile("iran2-google-doh-aggressive",     "کانفیگ ایران ۲ — تهاجمی ریز (Google DoH)", "https://8.8.8.8/dns-query", "1-5", "1-3",   "5"),
-            IranProfile("iran3-google-doh-light",          "کانفیگ ایران ۳ — سبک/سریع (Google DoH)",   "https://8.8.8.8/dns-query", "1-1", "40-80", "2"),
-            IranProfile("iran4-cloudflare-doh",            "کانفیگ ایران ۴ — Cloudflare DoH",          "https://1.1.1.1/dns-query", "1-3", "1-5",   "10"),
-            IranProfile("iran5-google-dot",                "کانفیگ ایران ۵ — Google DoT",              "tls://8.8.8.8:853",         "1-3", "2-8",   "8"),
-            IranProfile("iran6-cloudflare-aggressive",     "کانفیگ ایران ۶ — Cloudflare تهاجمی",       "https://1.1.1.1/dns-query", "1-5", "1-2",   "4")
-        )
-
         nodes.removeAll { it.id.startsWith("default_mlmvpn_") }
 
-        // Insert at index idx so the list ends up ordered 1..6 from the top.
-        profiles.forEachIndexed { idx, p ->
-            val uri = default1
-                .replace("\"remarks\":\"Serverless-v44-low_delay\"", "\"remarks\":\"${p.remarks}\"")
-                .replace("\"address\":\"https://8.8.8.8/dns-query\"", "\"address\":\"${p.dns}\"")
-                .replace(
-                    "\"packets\":\"1-3\",\"length\":\"1-5\",\"delay\":\"10\"",
-                    "\"packets\":\"${p.fragPackets}\",\"length\":\"${p.fragLength}\",\"delay\":\"${p.fragDelay}\""
-                )
-            nodes.add(idx, VpnNode(
-                id = "default_mlmvpn_${idx + 1}",
-                name = p.name,
-                uri = uri,
-                type = "JSON",
-                engineType = "Manual",
-                groupTitle = IRAN_GROUP
-            ))
+        val raw = try {
+            com.mlmvpn.scanner.store.StoreFiles.open(appContext, "iran_profiles.json").bufferedReader().use { it.readText() }
+        } catch (_: Exception) {
+            return
         }
 
-        // Configs #7/#8 are the upstream Serverless-for-Iran v48 files (@patterniha), shipped
-        // byte-for-byte as assets and injected untouched -- their whole value is in NOT being
-        // edited by us. They differ from the v44-derived profiles above in strategy, not just
-        // parameters: whitelisted geosites (github/openai/microsoft/...) go direct so
-        // sanctioned services still see an Iranian IP, DoH is domain-fronted via
-        // challenges.cloudflare.com, TLS gets a dedicated two-stage fragment outbound, QUIC is
-        // blocked outright instead of noised, and the filter-page ranges are blackholed.
-        // low vs high delay differ only in the inter-fragment `delays` array.
-        // If an asset ever fails to load we simply skip it, so #1-#6 stay intact as a fallback.
-        listOf(
-            Triple("serverless_v48_low_delay.json",  "کانفیگ ایران ۷ (جدید) — سرورلس v48 دیلی کم",  7),
-            Triple("serverless_v48_high_delay.json", "کانفیگ ایران ۸ (جدید) — سرورلس v48 دیلی بالا", 8)
-        ).forEach { (asset, label, num) ->
-            try {
-                val raw = appContext.assets.open(asset).bufferedReader().use { it.readText() }
-                nodes.add(num - 1, VpnNode(
-                    id = "default_mlmvpn_$num",
-                    name = label,
-                    uri = raw,
+        val arr = try { JSONArray(raw) } catch (_: Exception) { return }
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val config = o.optString("config", "")
+            if (config.isEmpty()) continue
+            nodes.add(
+                i,
+                VpnNode(
+                    id = "default_mlmvpn_${i + 1}",
+                    name = o.optString("name", "کانفیگ ایران ${i + 1}"),
+                    uri = config,
                     type = "JSON",
                     engineType = "Manual",
                     groupTitle = IRAN_GROUP
-                ))
-            } catch (_: Exception) { }
+                )
+            )
         }
     }
+
 }

@@ -1,0 +1,53 @@
+{
+  "workflow": {
+    "repoPath": ".github/workflows/mlmvpn-tunnel-v2.yml",
+    "file": "workflow-v2.yml",
+    "name": "mlmvpn-tunnel-v2.yml"
+  },
+  "agent": [
+    {
+      "repoPath": "agent/gt-agent.mjs",
+      "file": "agent/gt-agent.mjs"
+    },
+    {
+      "repoPath": "agent/seal.mjs",
+      "file": "agent/seal.mjs"
+    },
+    {
+      "repoPath": "agent/xray-config.mjs",
+      "file": "agent/xray-config.mjs"
+    },
+    {
+      "repoPath": "agent/exits.mjs",
+      "file": "agent/exits.mjs"
+    }
+  ],
+  "usableSessionMinutes": 325,
+  "workerVersion": 4,
+  "files": [
+    {
+      "file": "workflow-v2.yml",
+      "sha256": "dee1e840dd1998c3d8d38574b0aa99162fefd6dfa0ee7fd5c498c0f28d61d444"
+    },
+    {
+      "file": "agent/gt-agent.mjs",
+      "sha256": "beecddb995423f15c9f7972aa20cf78efcd8288f343c67cd19f98aa3baf3f2a8"
+    },
+    {
+      "file": "agent/seal.mjs",
+      "sha256": "bcd4a4710db9935905a745ee88dcb6a37bad3593431c3a2f6933089e72fb3033"
+    },
+    {
+      "file": "agent/xray-config.mjs",
+      "sha256": "fea39feef80cc8f8118f69d9651b07aa60d996b5f6bd4b911e9827e7deb6fcfc"
+    },
+    {
+      "file": "agent/exits.mjs",
+      "sha256": "2194eead6d77be308ccda9be27195d8ac7b0411f10487dc947d2f2e64fb1ee2d"
+    },
+    {
+      "file": "broker_worker.js",
+      "sha256": "e626c4e842baec7bede13ebf7116881364c481f98596d9489e47223cc781c69c"
+    }
+  ]
+}

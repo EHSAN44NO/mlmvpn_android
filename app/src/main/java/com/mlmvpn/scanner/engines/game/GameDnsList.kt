@@ -38,8 +38,12 @@ object GameDnsList {
         DnsServer("178.22.122.100", "Shecan-Classic-1", DnsCategory.BYPASS_IR),
         DnsServer("178.22.122.101", "Shecan-Alt-1", DnsCategory.BYPASS_IR),
         DnsServer("185.51.200.1", "Shecan-Alt-2", DnsCategory.BYPASS_IR),
-        DnsServer("10.202.10.202", "Begzar-1", DnsCategory.BYPASS_IR),
-        DnsServer("10.202.10.102", "Begzar-2", DnsCategory.BYPASS_IR),
+        // 10.202.10.202/102 are 403.online's (they were filed here as Begzar); Begzar's own pair
+        // is 185.55.226.26 / 185.55.225.25. Same list as the desktop's dns-manager.js.
+        DnsServer("10.202.10.202", "403-1", DnsCategory.BYPASS_IR),
+        DnsServer("10.202.10.102", "403-2", DnsCategory.BYPASS_IR),
+        DnsServer("185.55.226.26", "Begzar-1", DnsCategory.BYPASS_IR),
+        DnsServer("185.55.225.25", "Begzar-2", DnsCategory.BYPASS_IR),
 
         // ── DNSهای بین‌المللی عمومی (fallback با پایداری بالا) ──
         DnsServer("1.1.1.1", "Cloudflare", DnsCategory.PUBLIC_INTL),

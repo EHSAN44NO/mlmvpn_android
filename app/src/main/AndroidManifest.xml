@@ -8,6 +8,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Only to restore a tunnel the user had running before the reboot, and only when they
+         turned that on: BootReceiver returns immediately unless the preference is set. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- VPN Permission -->
     <uses-permission android:name="android.permission.BIND_VPN_SERVICE"
@@ -16,6 +19,24 @@
 
     <!-- In-app update: install the downloaded APK -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!-- Local network sharing: starting a local-only hotspot so a second device has an address
+         it can reach this phone's proxy on. Android gates WifiManager.startLocalOnlyHotspot()
+         behind a location permission because a Wi-Fi radio in AP mode is a location signal; the
+         app neither reads nor stores a location, and both are requested only at the moment the
+         user taps "turn on hotspot" on the Local Network screen, never at launch.
+
+         ACCESS_FINE_LOCATION is capped at API 32: from Android 13 NEARBY_WIFI_DEVICES covers
+         this on its own, and asking for location there would be asking for more than is used. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="tiramisu" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- The game booster's optional floating ping over the game. Granted by the player from the
+         booster's Advanced page ("display over other apps"); nothing is drawn without it. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!-- TV Support Features -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
@@ -92,6 +113,46 @@
         </service>
 
         <!--
+            IpScanService: keeps the clean-IP scan alive while the app is in the background.
+
+            The scan runs for minutes on a blocked network. Without a foreground service the
+            process is subject to every background restriction the platform has, and on many OEM
+            builds its threads are frozen and its sockets dropped the moment the user looks at
+            something else — after which the scan either stalls silently or resumes into a network
+            that is gone and marks the rest of the address space dead. Both read to the user as a
+            scan that simply found nothing.
+
+            Same specialUse + tools:targetApi shape as the services above, for the same reason.
+        -->
+        <service
+            android:name=".data.IpScanService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            tools:targetApi="34">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Continues the clean-IP scan while the app is in the background"
+                tools:targetApi="34" />
+        </service>
+
+        <!--
+            GameBoostService: measures the routes to a game's servers, applies the best one and
+            keeps measuring it while the user plays. The user leaves for the game the moment the
+            boost is done, and on the direct route there is no VPN service to keep the process
+            alive, so the live reading needs a foreground service of its own.
+        -->
+        <service
+            android:name=".engines.game.booster.session.GameBoostService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            tools:targetApi="34">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Measures and monitors the network route to a game server while the user plays"
+                tools:targetApi="34" />
+        </service>
+
+        <!--
             AetherScanService: foreground service that drives the Aether Rust binary
             (assets/aether/<abi>/aether), produces a SOCKS5 listener on 127.0.0.1:20810 and
             exposes state through androidx StateFlow's that AetherScreen renders live.
@@ -155,11 +216,105 @@
             android:name=".VpnTileService"
             android:exported="true"
             android:icon="@drawable/ic_vpn"
-            android:label="mlmvpn"
+            android:label="@string/tile_label_vpn"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
             </intent-filter>
+        </service>
+
+        <!-- The SECOND Quick Settings tile, and not a relapse into the pair described below.
+             Those two did the same job (start a tunnel) through different services, so the user
+             had to know which stack was running. This one does a different job: it does not
+             start or stop anything, it decides whether the tunnel already running is published
+             to the rest of the network. -->
+        <service
+            android:name=".lan.LanTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_vpn"
+            android:label="@string/tile_label_lan"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <!-- A THIRD tile, on the LAN tile's reasoning: a different job, not another way to start
+             a tunnel. It boosts the game last boosted (or stops the boost), and opens the booster
+             when the boost needs a screen (VPN permission, another connection on). -->
+        <service
+            android:name=".ui.game.GameBoostTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_notification"
+            android:label="@string/gb_tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <!-- The copy / stop buttons on the Local Network notification. Not exported: the only
+             sender is our own PendingIntent. -->
+        <receiver
+            android:name=".lan.LanNotificationReceiver"
+            android:exported="false" />
+
+        <!-- ==========================================================================
+             The five Cloudflare/censorship transports: MASQUE, WireGuard, WARP-on-WARP,
+             Psiphon and Tor. They share one service because only one VpnService may hold
+             the device tun at a time, and it is deliberately NOT MyVpnService: this stack
+             owns its own tun, its own netstack and its own kill switch, and folding it
+             into the Xray path would put two very different lifecycles behind one switch.
+             The two are mutually exclusive at runtime; see TunnelExclusion.
+             ========================================================================== -->
+        <service
+            android:name="com.mlmvpn.core.tunnel.TunnelVpnService"
+            android:exported="false"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Carrying the device's traffic through an encrypted tunnel." />
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
+
+        <!-- Brings that tunnel back after a reboot, when the user asked for it. Not
+             directBootAware and BOOT_COMPLETED only: the settings it reads live in
+             credential-encrypted storage, which does not exist until first unlock. -->
+        <receiver
+            android:name="com.mlmvpn.core.tunnel.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+            There is deliberately only ONE Quick Settings tile (.VpnTileService above).
+
+            There were two - one per VPN service - which asked the user to remember which of the
+            app's two stacks was carrying their traffic and pick the matching tile from the shade.
+            Picking the wrong one appeared to do nothing, because each reported the state of a
+            service the other was running. The single tile works it out from LastEngine instead.
+        -->
+
+        <!-- Exists only so a tile tap can collapse the Quick Settings shade; see the class. -->
+        <activity
+            android:name="com.mlmvpn.core.tunnel.ShadeCollapseActivity"
+            android:exported="false"
+            android:noHistory="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay" />
+
+        <service android:name=".openvpn.OpenVpnService"
+            android:exported="false" android:permission="android.permission.BIND_VPN_SERVICE"
+            android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Internal OpenVPN encrypted network tunnel" />
+            <intent-filter><action android:name="android.net.VpnService" /></intent-filter>
         </service>
 
         <!-- FileProvider: shares the downloaded update APK (in cache dir) with the system

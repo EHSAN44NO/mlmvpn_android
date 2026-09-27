@@ -17,6 +17,8 @@ import kotlinx.coroutines.withContext
 import kotlin.coroutines.coroutineContext
 import org.json.JSONArray
 import org.json.JSONObject
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
 
 class GameBoosterManager(private val context: Context) {
 
@@ -430,9 +432,9 @@ class GameBoosterManager(private val context: Context) {
             pingMs = if (avgPing > 0) avgPing else 0L,
             jitterMs = if (avgPing > 0) jitter else 0L,
             nodeId = "dedicated_dns_only",
-            nodeName = "DNS اختصاصی",
+            nodeName = S(R.string.dedicated_dns_2),
             nodeUri = cfg,
-            details = "DNS اختصاصی ($regionName)"
+            details = S(R.string.dedicated_dns_regionname, regionName)
         )
     }
 
@@ -467,7 +469,7 @@ class GameBoosterManager(private val context: Context) {
             nodeId = "game_aether",
             nodeName = "Aether",
             nodeUri = buildAetherConfig(),
-            details = "موتور Aether (تخمین RTT تا کلادفلر)"
+            details = S(R.string.aether_engine_estimated_rtt_to_cloudflare)
         )
     }
 
@@ -519,7 +521,7 @@ class GameBoosterManager(private val context: Context) {
         aetherWatchJob?.cancel()
         aetherWatchJob = kotlinx.coroutines.CoroutineScope(Dispatchers.Default).launch {
             val startedAt = System.currentTimeMillis()
-            boostProgress.value = "در حال راه‌اندازی موتور…"
+            boostProgress.value = S(R.string.starting_the_engine)
 
             // The engine has NOT started yet when this runs.
             //
@@ -547,7 +549,7 @@ class GameBoosterManager(private val context: Context) {
                         boosterState.value = BoosterState.FAILED
                         return@launch
                     }
-                    boostProgress.value = "در حال راه‌اندازی موتور…"
+                    boostProgress.value = S(R.string.starting_the_engine)
                     delay(250)
                     continue
                 }
@@ -628,7 +630,7 @@ class GameBoosterManager(private val context: Context) {
                         nodeId = "dedicated_dns_boost",
                         nodeName = "Dedicated DNS",
                         nodeUri = cfg,
-                        details = "Direct (DNS اختصاصی - $regionName)"
+                        details = S(R.string.direct_dedicated_dns_regionname, regionName)
                     )
                 }
                 Log.w("GameBoosterManager", "Dedicated DNS resolved ${ips.size} IPs but none pingable -- falling through")
@@ -650,7 +652,7 @@ class GameBoosterManager(private val context: Context) {
             // Ù¾ÛŒÙ†Ú¯ Ù‡Ù…Ù‡â€ŒÛŒ Ú©Ø§Ù†Ø¯ÛŒØ¯Ù‡Ø§ Ø±Ùˆ Ø§Ù…ØªØ­Ø§Ù† Ú©Ù† -- Ø§Ú¯Ù‡ ÛŒÚ©ÛŒ ÙˆØµÙ„ Ø´Ø¯ Ù†ÛŒØ§Ø²ÛŒ Ø¨Ù‡ Ø¨Ù‚ÛŒÙ‡â€ŒÛŒ Ø±ÙˆØ´â€ŒÙ‡Ø§ Ù†ÛŒØ³Øª
             val (avgPing, jitter) = GamePingTester.averagePing(udpIps, server.port, proxyPort = null)
             if (avgPing > 0) {
-                return BoostResult(mode = BoostMode.DIRECT, pingMs = avgPing, jitterMs = jitter, details = "Direct (DNS بهینه)")
+                return BoostResult(mode = BoostMode.DIRECT, pingMs = avgPing, jitterMs = jitter, details = S(R.string.direct_optimised_dns))
             }
             Log.w("GameBoosterManager", "Ù‡ÛŒÚ†â€ŒÚ©Ø¯ÙˆÙ… Ø§Ø² ${udpIps.size} IP resolve Ø´Ø¯Ù‡ Ø¨Ø§ UDP ÙˆØµÙ„ Ù†Ø´Ø¯Ù† -- ØªÙ„Ø§Ø´ Ø¨Ø§ DNS-over-HTTPS")
         } else {

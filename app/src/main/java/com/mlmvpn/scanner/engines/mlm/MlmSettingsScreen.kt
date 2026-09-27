@@ -1,5 +1,6 @@
 package com.mlmvpn.scanner.engines.mlm
 
+import androidx.compose.ui.graphics.Color
 import android.widget.Toast
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
@@ -17,6 +18,8 @@ import com.mlmvpn.scanner.ui.theme.*
 import kotlinx.coroutines.launch
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -43,7 +46,7 @@ fun MlmSettingsScreen(
             fragLen = settings.fragLen
             fragInt = settings.fragInt
         } else {
-            Toast.makeText(context, "خطا در دریافت تنظیمات", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, S(R.string.could_not_fetch_the_settings), Toast.LENGTH_SHORT).show()
             onDismiss()
         }
         isLoading = false
@@ -51,21 +54,27 @@ fun MlmSettingsScreen(
 
     Surface(
         modifier = Modifier.fillMaxSize(),
-        color = BgDark
+        // Transparent over the wallpaper; the Cloud tab that hosts this no longer pads it.
+        color = Color.Transparent
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(24.dp)
-                .padding(bottom = 100.dp)
+                .padding(
+                    start = 24.dp,
+                    end = 24.dp,
+                    top = com.mlmvpn.scanner.ui.LocalContentTopInset.current + 24.dp,
+                    bottom = com.mlmvpn.scanner.ui.LocalSystemBottomPadding.current + 24.dp,
+                )
+                .padding(bottom = 24.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onDismiss) {
                     Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = TextPrimary)
                 }
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("تنظیمات سراسری ورکر", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Text(S(R.string.global_worker_settings), color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             }
             Spacer(modifier = Modifier.height(16.dp))
 
@@ -77,54 +86,46 @@ fun MlmSettingsScreen(
             OutlinedTextField(
                 value = proxyIp,
                 onValueChange = { proxyIp = it },
-                label = { Text("Proxy IP", color = TextMuted) },
+                label = { Text(S(R.string.proxy_ip_label), color = TextMuted) },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = TextPrimary,
-                    unfocusedTextColor = TextPrimary
-                )
-            )
+                colors = iosFieldColors()
+            ,
+        shape = ControlShape,)
             Spacer(modifier = Modifier.height(8.dp))
             OutlinedTextField(
                 value = iata,
                 onValueChange = { iata = it },
-                label = { Text("موقعیت (IATA)", color = TextMuted) },
+                label = { Text(S(R.string.location_iata), color = TextMuted) },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = TextPrimary,
-                    unfocusedTextColor = TextPrimary
-                )
-            )
+                colors = iosFieldColors()
+            ,
+        shape = ControlShape,)
             Spacer(modifier = Modifier.height(8.dp))
             OutlinedTextField(
                 value = fragLen,
                 onValueChange = { fragLen = it },
-                label = { Text("Fragment Length (مثلا 20-30)", color = TextMuted) },
+                label = { Text(S(R.string.fragment_length_e_g_20_30), color = TextMuted) },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = TextPrimary,
-                    unfocusedTextColor = TextPrimary
-                )
-            )
+                colors = iosFieldColors()
+            ,
+        shape = ControlShape,)
             Spacer(modifier = Modifier.height(8.dp))
             OutlinedTextField(
                 value = fragInt,
                 onValueChange = { fragInt = it },
-                label = { Text("Fragment Interval (مثلا 1-2)", color = TextMuted) },
+                label = { Text(S(R.string.fragment_interval_e_g_1_2), color = TextMuted) },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = TextPrimary,
-                    unfocusedTextColor = TextPrimary
-                )
-            )
+                colors = iosFieldColors()
+            ,
+        shape = ControlShape,)
             Spacer(modifier = Modifier.height(24.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 TextButton(onClick = onDismiss, enabled = !isSaving) {
-                    Text("انصراف", color = TextMuted)
+                    Text(S(R.string.cancel_3), color = TextMuted)
                 }
                 Spacer(modifier = Modifier.width(8.dp))
                 Button(
@@ -140,17 +141,17 @@ fun MlmSettingsScreen(
                             val success = apiManager.updateProxySettings(account, req)
                             isSaving = false
                             if (success) {
-                                Toast.makeText(context, "تنظیمات ذخیره شد", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, S(R.string.settings_saved_2), Toast.LENGTH_SHORT).show()
                                 onDismiss()
                             } else {
-                                Toast.makeText(context, "خطا در ذخیره تنظیمات", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, S(R.string.could_not_save_the_settings), Toast.LENGTH_SHORT).show()
                             }
                         }
                     },
                     enabled = !isSaving
                 ) {
                     if (isSaving) CircularProgressIndicator(modifier = Modifier.size(16.dp), color = BgDark)
-                    else Text("ذخیره", color = BgDark)
+                    else Text(S(R.string.save_3), color = BgDark)
                 }
             }
         }

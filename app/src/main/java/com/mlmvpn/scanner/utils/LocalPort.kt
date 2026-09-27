@@ -2,6 +2,8 @@ package com.mlmvpn.scanner.utils
 
 import android.content.Context
 import androidx.preference.PreferenceManager
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
 
 /**
  * The app's Local Port setting, and the rules that make a value valid.
@@ -39,21 +41,33 @@ object LocalPort {
 
     private const val AETHER_PORT = 20810
 
+    /**
+     * How far above `port` the app's derived listeners reach.
+     *
+     * `+1` the Psiphon-over-WARP chain, `+2` Psiphon's HTTP proxy, `+3`
+     * [com.mlmvpn.scanner.lan.LanSetupServer], `+4` [com.mlmvpn.scanner.lan.LanRelay].
+     */
+    private const val LAN_BAND = 4
+
     /** Null when [raw] is usable; otherwise a Persian sentence naming the actual problem. */
     fun validate(raw: String?): String? {
         val text = raw?.trim().orEmpty()
-        if (text.isEmpty()) return "پورت محلی نمی‌تواند خالی باشد."
-        val port = text.toIntOrNull() ?: return "پورت باید فقط عدد باشد."
-        if (port < MIN) return "پورت باید $MIN یا بیشتر باشد (پورت‌های پایین‌تر مال سیستم است)."
-        if (port > MAX) return "پورت باید $MAX یا کمتر باشد، چون برنامه از پورت + $PROBE_OFFSET هم استفاده می‌کند."
-        if (port == AETHER_PORT) return "این پورت برای موتور Aether رزرو شده است."
+        if (text.isEmpty()) return S(R.string.the_local_port_cannot_be_empty)
+        val port = text.toIntOrNull() ?: return S(R.string.the_port_must_be_digits_only)
+        if (port < MIN) return S(R.string.the_port_must_be_min_or_higher, MIN)
+        if (port > MAX) return S(R.string.the_port_must_be_max_or_lower, MAX, PROBE_OFFSET)
+        if (port == AETHER_PORT) return S(R.string.this_port_is_reserved_for_the_aether)
         val probe = port + PROBE_OFFSET
         val testRange = XrayJsonGenerator.TEST_PORT_MIN..XrayJsonGenerator.TEST_PORT_MAX
-        if (port in testRange) {
-            return "این پورت در بازه‌ی ${XrayJsonGenerator.TEST_PORT_MIN}–${XrayJsonGenerator.TEST_PORT_MAX} است که برای تست سرورها استفاده می‌شود."
+        // The whole band, not just `port`. Local Network sharing derives two more listeners from
+        // this value -- `port + 3` for the setup page and `port + 4` for the relay that fronts
+        // the proxy -- so a value four below the tester's range puts one of them inside it, and
+        // the symptom is a share that binds and then fights the delay tester for a port.
+        if ((port..port + LAN_BAND).any { it in testRange }) {
+            return S(R.string.this_port_is_in_the_range_which, XrayJsonGenerator.TEST_PORT_MIN, XrayJsonGenerator.TEST_PORT_MAX)
         }
         if (probe in testRange) {
-            return "برنامه از پورت $probe هم استفاده می‌کند و آن در بازه‌ی تست سرورهاست. عدد دیگری انتخاب کنید."
+            return S(R.string.the_app_also_uses_port_probe_and, probe)
         }
         return null
     }

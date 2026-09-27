@@ -1,5 +1,11 @@
 package com.mlmvpn.scanner.ui
 
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.CheckCircle
+import com.mlmvpn.scanner.ui.home.frostedGlass
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
@@ -8,6 +14,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -34,10 +41,19 @@ import com.mlmvpn.scanner.ui.theme.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import com.mlmvpn.scanner.utils.S
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CloudTab(onNavigateToScanner: () -> Unit = {}) {
+fun CloudTab(
+    onBack: () -> Unit = {},
+    onNavigateToScanner: () -> Unit = {},
+    onOpenCloudflareResources: () -> Unit = {},
+    /** Opens the V2Ray node list. The cloud groups hand their configs over to it. */
+    onOpenV2Ray: () -> Unit = {},
+    /** Opens Config Studio -- where an account's MLM users live once Config Studio manages it. */
+    onOpenConfigStudio: () -> Unit = {},
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val cloudManager = remember { CloudManager(context) }
@@ -70,17 +86,237 @@ fun CloudTab(onNavigateToScanner: () -> Unit = {}) {
         accountToDelete = null
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier.fillMaxSize().padding(16.dp)
-        ) {
+    // One received group opens as a page: four actions of similar weight cannot live on a 40dp
+    // row, and the one that matters most -- combining for speed -- had nowhere to go at all.
+    var openGroupId by remember { mutableStateOf<String?>(null) }
+    val openGroup = cloudGroups.find { it.id == openGroupId }
+
+    // 720dp, the same threshold the rest of the app uses: the width at which a page fits BESIDE
+    // the list instead of on top of it.
+    val twoPane = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 720
+
+    // Each of the three full pages this screen can open is collected as a value rather than
+    // returned early. On a phone the effect is identical -- the page is shown and nothing else --
+    // but on a tablet or a television it can then be put in the second column, with the account
+    // list still visible beside it. Returning early made that impossible: the function was over
+    // before the list had been described.
+    val groupDetail: (@Composable () -> Unit)? = if (openGroup == null) null else ({
+        androidx.activity.compose.BackHandler(enabled = true) { openGroupId = null }
+        CloudGroupScreen(
+            group = openGroup,
+            onSendToV2Ray = {
+                val nm = com.mlmvpn.scanner.data.NodeManager(context)
+                val existing = nm.nodes.map { it.uri }.toSet()
+                openGroup.nodes.forEach { n ->
+                    if (n.uri !in existing) {
+                        nm.nodes.add(
+                            n.copy(
+                                id = java.util.UUID.randomUUID().toString(),
+                                groupTitle = openGroup.title,
+                            )
+                        )
+                    }
+                }
+                nm.saveNodes()
+            },
+            onOpenV2Ray = { openGroupId = null; onOpenV2Ray() },
+            onCombine = {
+                // The button IS the answer to "shall we combine?", so no offer dialog: hand the
+                // scanner its base config and let the coach take it from step 1.
+                com.mlmvpn.scanner.data.ScannerManager.globalBaseConfig.value =
+                    openGroup.nodes.firstOrNull()?.uri.orEmpty()
+                com.mlmvpn.scanner.data.ScannerManager.selectedSourceGroupId.value = openGroup.id
+                com.mlmvpn.scanner.ui.CombineCoach.start(
+                    context,
+                    openGroup.id,
+                    openGroup.nodes.firstOrNull()?.uri.orEmpty(),
+                )
+                openGroupId = null
+                onNavigateToScanner()
+            },
+            onDelete = {
+                groupManager.cloudGroups.remove(openGroup)
+                groupManager.saveCloudGroups()
+                cloudGroups = groupManager.cloudGroups.toList()
+            },
+            onBack = { openGroupId = null },
+        )
+    })
+
+    var isAdding by remember { mutableStateOf(false) }
+    var addError by remember { mutableStateOf<String?>(null) }
+    // Troubleshooting, in its two modes. An added account carries everything the probe asks about;
+    // a credential that would not add carries none of it, and is the case the wrench on the account
+    // card can never reach -- there is no card yet.
+    var troubleshootFor by remember { mutableStateOf<CloudAccount?>(null) }
+    var troubleshootCredential by remember { mutableStateOf<Pair<String, String>?>(null) }
+
+    // The cloud coach. Offered once, to someone opening an empty Cloud screen for the first time --
+    // which is exactly the person who cannot tell what this screen wants from them.
+    val cloudStep by CloudCoach.step.collectAsState()
+    val cloudWork by CloudCoach.work.collectAsState()
+    val cloudProgress by CloudCoach.workProgress.collectAsState()
+    val cloudFailure by CloudCoach.failure.collectAsState()
+    LaunchedEffect(accounts.size, cloudGroups.size) {
+        CloudCoach.init(context)
+        if (accounts.isEmpty() && cloudGroups.isEmpty()) CloudCoach.offerOnce(context)
+        // The account step completes itself the moment an account exists.
+        if (cloudStep == CloudCoach.Step.ACCOUNT && accounts.isNotEmpty()) {
+            CloudCoach.advance(CloudCoach.Step.INSTALL)
+        }
+    }
+
+    val troubleshootDetail: (@Composable () -> Unit)? =
+        if (troubleshootFor == null && troubleshootCredential == null) null else ({
+        androidx.activity.compose.BackHandler(enabled = true) {
+            troubleshootFor = null
+            troubleshootCredential = null
+        }
+        CloudTroubleshootScreen(
+            cloudManager = cloudManager,
+            account = troubleshootFor,
+            credential = troubleshootCredential,
+            backLabel = if (troubleshootCredential != null) S(R.string.add_cloudflare_account)
+                        else S(R.string.nav_cloud),
+            onBack = {
+                troubleshootFor = null
+                troubleshootCredential = null
+            },
+            onAccountChanged = { accounts = cloudManager.accounts.toList() },
+        )
+    })
+
+    val addDetail: (@Composable () -> Unit)? = if (!showAddModal) null else ({
+        androidx.activity.compose.BackHandler(enabled = !isAdding) { showAddModal = false }
+        CloudAddAccountScreen(
+            onTroubleshoot = { email, key -> troubleshootCredential = key to email },
+            isAdding = isAdding,
+            error = addError,
+            onAdd = { email, key ->
+                if (accounts.any { (email.isNotEmpty() && it.email == email) || it.token == key }) {
+                    addError = context.getString(R.string.cloud_account_already_added)
+                    return@CloudAddAccountScreen
+                }
+                isAdding = true
+                addError = null
+                scope.launch {
+                    val result = cloudManager.addAccount(key, email)
+                    isAdding = false
+                    if (result.first) {
+                        accounts = cloudManager.accounts.toList()
+                        addError = null
+                        showAddModal = false
+                    } else {
+                        addError = result.second
+                    }
+                }
+            },
+            onBack = { if (!isAdding) showAddModal = false },
+        )
+    })
+
+    val detail = groupDetail ?: troubleshootDetail ?: addDetail
+
+    // A phone shows the page and nothing else, exactly as it always did.
+    if (detail != null && !twoPane) {
+        detail()
+        return
+    }
+
+    val root: @Composable () -> Unit = {
+        // The app's own navigation bar rather than the generic feature chrome: this screen pushes
+    // full-screen settings sheets of its own, and two stacked bars is what that looked like.
+    com.mlmvpn.scanner.ui.settings.IosScreen(
+        title = stringResource(R.string.nav_cloud),
+        onBack = onBack,
+        backLabel = S(R.string.home),
+        scrollable = false,
+    ) {
+        run {
             LazyColumn(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    start = 10.dp,
+                    end = 10.dp,
+                    top = 8.dp,
+                    bottom = com.mlmvpn.scanner.ui.LocalSystemBottomPadding.current + 16.dp,
+                ),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
 
-                items(accounts) { account ->
+                // The coach rides at the top of the list, above the account it is talking about.
+                if (cloudStep != CloudCoach.Step.IDLE && cloudStep != CloudCoach.Step.OFFERED) {
+                    item {
+                        val failed = cloudStep == CloudCoach.Step.FAILED
+                        val installing = cloudStep == CloudCoach.Step.INSTALL && cloudWork.isNotEmpty()
+                        val fetching = cloudStep == CloudCoach.Step.FETCH && cloudWork.isNotEmpty()
+                        CloudCoachBar(
+                            step = cloudStep,
+                            onSkip = { CloudCoach.skip() },
+                            failed = failed,
+                            working = installing || fetching,
+                            workText = cloudWork,
+                            workProgress = cloudProgress,
+                            body = when {
+                                failed -> cloudFailure
+                                cloudStep == CloudCoach.Step.ACCOUNT ->
+                                    S(R.string.first_we_connect_a_free_cloudflare_account) +
+                                        S(R.string.on_it_and_nobody_but_you_can) +
+                                        S(R.string.if_you_already_have_an_account_enter)
+                                cloudStep == CloudCoach.Step.INSTALL && installing ->
+                                    S(R.string.installing_the_panel_on_your_account_this)
+                                cloudStep == CloudCoach.Step.INSTALL ->
+                                    S(R.string.account_connected_now_i_will_install_a) +
+                                        S(R.string.builds_your_configs_it_needs_nothing_from) +
+                                        S(R.string.tap_to_start)
+                                cloudStep == CloudCoach.Step.FETCH && fetching ->
+                                    S(R.string.fetching_the_configs_from_the_panel)
+                                else ->
+                                    S(R.string.panel_installed_now_i_will_fetch_the) +
+                                        S(R.string.on_to_combining_them_with_a_clean)
+                            },
+                            actionLabel = when {
+                                failed -> S(R.string.try_again)
+                                installing || fetching -> null
+                                cloudStep == CloudCoach.Step.ACCOUNT -> S(R.string.add_cloudflare_account)
+                                cloudStep == CloudCoach.Step.INSTALL -> S(R.string.install_the_panel)
+                                else -> S(R.string.fetch_the_configs)
+                            },
+                            onAction = when {
+                                installing || fetching -> null
+                                failed -> ({
+                                    // Back to the step that failed, not to the start: the account
+                                    // is still connected and re-doing that would be theatre.
+                                    CloudCoach.advance(
+                                        if (accounts.isEmpty()) CloudCoach.Step.ACCOUNT
+                                        else CloudCoach.Step.INSTALL
+                                    )
+                                })
+                                cloudStep == CloudCoach.Step.ACCOUNT -> ({ showAddModal = true })
+                                cloudStep == CloudCoach.Step.INSTALL ->
+                                    ({ CloudCoach.ask(CloudCoach.Request.INSTALL) })
+                                else -> ({ CloudCoach.ask(CloudCoach.Request.FETCH) })
+                            },
+                        )
+                    }
+                }
+
+                itemsIndexed(accounts) { accountIndex, account ->
+                    // With one account the card's own header is identity enough. With several,
+                    // four identical Cloudflare cards stack up and the only thing telling them
+                    // apart is an email in the middle of one of them -- so they get numbered, and
+                    // the coach says out loud which one it is working on.
+                    if (accounts.size > 1) {
+                        com.mlmvpn.scanner.ui.settings.SettingsSectionHeader(
+                            S(R.string.account_of, faCount(accountIndex + 1), faCount(accounts.size)) +
+                                if (accountIndex == 0 && cloudStep != CloudCoach.Step.IDLE) S(R.string.the_guide_is_working_on_this_account) else ""
+                        )
+                    }
                     AccountGroupCard(
+                        isPrimary = accountIndex == 0,
+                        onCoachHandOff = { _, _ -> onNavigateToScanner() },
+                        onOpenV2Ray = onOpenV2Ray,
+                        onOpenGroup = { openGroupId = it },
                         account = account,
                         cloudGroups = cloudGroups.filter { it.accountId == account.id },
                         groupManager = groupManager,
@@ -89,6 +325,7 @@ fun CloudTab(onNavigateToScanner: () -> Unit = {}) {
                         onShowNahanSettings = { showNahanSettingsFor = it },
                         onShowMlmUsers = { showMlmUsersFor = it },
                         onShowMlmSettings = { showMlmSettingsFor = it },
+                        onOpenConfigStudio = onOpenConfigStudio,
                         onShowBpbSettings = { settings, acc -> 
                             bpbInitialSettings = settings
                             showBpbSettingsFor = acc 
@@ -96,7 +333,8 @@ fun CloudTab(onNavigateToScanner: () -> Unit = {}) {
                         onShowEdgSettings = { showEdgSettingsFor = it },
                         onDelete = {
                             accountToDelete = account
-                        }
+                        },
+                        onTroubleshoot = { troubleshootFor = account },
                     )
                 }
                 if (accounts.isEmpty()) {
@@ -116,232 +354,225 @@ fun CloudTab(onNavigateToScanner: () -> Unit = {}) {
                         }
                     }
                 }
-                item { Spacer(modifier = Modifier.height(140.dp)) } // padding for FAB
-            }
-        }
-
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(start = 24.dp, bottom = 100.dp)
-        ) {
-            Surface(
-                modifier = Modifier
-                    .size(56.dp)
-                    .clickable { showAddModal = true },
-                shape = RoundedCornerShape(16.dp),
-                color = Primary,
-                shadowElevation = 8.dp
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(Icons.Default.Add, contentDescription = "Add Account", modifier = Modifier.size(28.dp), tint = BgDark)
-                }
-            }
-        }
-
-        if (accountToDelete != null) {
-            AlertDialog(
-                onDismissRequest = { accountToDelete = null },
-                containerColor = SurfaceDark,
-                title = { Text(stringResource(R.string.dialog_delete_account_title), color = TextPrimary) },
-                text = { Text(stringResource(R.string.dialog_delete_account_msg), color = TextMuted) },
-                confirmButton = {
-                    TextButton(onClick = {
-                        cloudManager.accounts.remove(accountToDelete!!)
-                        cloudManager.saveAccounts()
-                        accounts = cloudManager.accounts.toList()
-                        accountToDelete = null
-                    }) {
-                        Text(stringResource(R.string.nodes_confirm), color = RedError)
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { accountToDelete = null }) {
-                        Text(stringResource(R.string.nodes_cancel), color = TextMuted)
-                    }
-                }
-            )
-        }
-
-        var isAdding by remember { mutableStateOf(false) }
-
-        if (showAddModal) {
-            AlertDialog(
-                onDismissRequest = { if (!isAdding) showAddModal = false },
-                containerColor = SurfaceDark,
-                title = { Text(stringResource(R.string.cloud_add_account), color = TextPrimary) },
-                text = {
-                    Column {
-                        Text(stringResource(R.string.cloud_email_address), color = TextMuted, fontSize = 12.sp)
-                        var email by remember { mutableStateOf("") }
-                        var api by remember { mutableStateOf("") }
-                        
-                        OutlinedTextField(
-                            value = email,
-                            onValueChange = { email = it },
-                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                            singleLine = true,
-                            enabled = !isAdding,
-                            shape = RoundedCornerShape(12.dp),
-                            textStyle = androidx.compose.ui.text.TextStyle(color = TextPrimary),
-                            colors = TextFieldDefaults.colors(
-                                unfocusedContainerColor = Color.Transparent,
-                                focusedContainerColor = Color.Transparent,
-                                unfocusedIndicatorColor = BorderDark,
-                                focusedIndicatorColor = Primary,
-                                cursorColor = Primary,
-                                disabledContainerColor = Color.Transparent,
-                                disabledIndicatorColor = BorderDark,
-                                disabledTextColor = TextMuted
-                            )
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text("Global API Key", color = TextMuted, fontSize = 12.sp)
-                        OutlinedTextField(
-                            value = api,
-                            onValueChange = { api = it },
-                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                            singleLine = true,
-                            enabled = !isAdding,
-                            shape = RoundedCornerShape(12.dp),
-                            textStyle = androidx.compose.ui.text.TextStyle(color = TextPrimary),
-                            colors = TextFieldDefaults.colors(
-                                unfocusedContainerColor = Color.Transparent,
-                                focusedContainerColor = Color.Transparent,
-                                unfocusedIndicatorColor = BorderDark,
-                                focusedIndicatorColor = Primary,
-                                cursorColor = Primary,
-                                disabledContainerColor = Color.Transparent,
-                                disabledIndicatorColor = BorderDark,
-                                disabledTextColor = TextMuted
-                            )
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            stringResource(R.string.cloud_api_key_hint),
-                            color = TextMuted,
-                            fontSize = 11.sp
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Button(
-                            onClick = {
-                                val trimmedEmail = email.trim()
-                                val trimmedApi = api.trim()
-                                if (trimmedApi.isNotEmpty()) {
-                                    if (accounts.any { (trimmedEmail.isNotEmpty() && it.email == trimmedEmail) || it.token == trimmedApi }) {
-                                        android.widget.Toast.makeText(context, context.getString(R.string.cloud_account_already_added), android.widget.Toast.LENGTH_SHORT).show()
-                                        return@Button
-                                    }
-                                    isAdding = true
-                                    scope.launch {
-                                        val result = cloudManager.addAccount(trimmedApi, trimmedEmail)
-                                        isAdding = false
-                                        if (result.first) {
-                                            accounts = cloudManager.accounts.toList()
-                                            showAddModal = false
-                                        } else {
-                                            android.widget.Toast.makeText(context, result.second, android.widget.Toast.LENGTH_LONG).show()
-                                        }
-                                    }
-                                }
-                            },
-                            enabled = !isAdding && api.trim().isNotEmpty(),
-                            modifier = Modifier.fillMaxWidth().height(48.dp),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Primary, disabledContainerColor = Primary.copy(alpha = 0.5f))
-                        ) {
-                            if (isAdding) {
-                                CircularProgressIndicator(modifier = Modifier.size(24.dp), color = BgDark, strokeWidth = 2.dp)
-                            } else {
-                                Text(stringResource(R.string.cloud_save_and_connect), color = BgDark, fontWeight = FontWeight.Bold)
-                            }
+                // A row, not a floating disc parked over the content. Adding an account is a
+                // once-a-month action, and it does not need to sit on top of the panels you use
+                // every day -- which is also what it was covering.
+                item {
+                    com.mlmvpn.scanner.ui.settings.SettingsGroup {
+                        com.mlmvpn.scanner.ui.settings.SettingsActionRow(
+                            label = S(R.string.add_cloudflare_account),
+                            icon = Icons.Default.Add,
+                        ) { showAddModal = true }
+                        // The offer is made once and never again, so the walkthrough needs a door
+                        // that stays open -- for the second account, or for the user who dismissed
+                        // it the first time and then wished they had not.
+                        if (cloudStep == CloudCoach.Step.IDLE) {
+                            Separator()
+                            com.mlmvpn.scanner.ui.settings.SettingsActionRow(
+                                label = S(R.string.step_by_step_guide),
+                                icon = Icons.Default.AutoAwesome,
+                            ) { CloudCoach.start(context, hasAccount = accounts.isNotEmpty()) }
+                        }
+                        // Everything these accounts actually hold on Cloudflare -- workers, D1,
+                        // KV -- including what the app did not deploy itself. It lives in
+                        // Settings because it is about the account rather than about a panel;
+                        // this is the door to it from where the accounts are.
+                        if (accounts.isNotEmpty()) {
+                            Separator()
+                            com.mlmvpn.scanner.ui.settings.SettingsActionRow(
+                                label = S(R.string.cloudflare_resources),
+                                icon = Icons.Default.Dns,
+                            ) { onOpenCloudflareResources() }
                         }
                     }
-                },
-                confirmButton = {}
+                    com.mlmvpn.scanner.ui.settings.SettingsFooter(
+                        S(R.string.the_guide_walks_you_from_connecting_an) +
+                            S(R.string.technical_work_itself_you_can_leave_it)
+                    )
+                }
+                item { Spacer(modifier = Modifier.height(12.dp)) }
+            }
+        }
+    }
+
+        if (accountToDelete != null) {
+            com.mlmvpn.scanner.ui.settings.IosAlert(
+                title = stringResource(R.string.dialog_delete_account_title),
+                message = stringResource(R.string.dialog_delete_account_msg),
+                onDismiss = { accountToDelete = null },
+                actions = listOf(
+                    com.mlmvpn.scanner.ui.settings.IosAlertAction(
+                        stringResource(R.string.nodes_cancel),
+                        onClick = { accountToDelete = null },
+                    ),
+                    com.mlmvpn.scanner.ui.settings.IosAlertAction(
+                        stringResource(R.string.nodes_confirm),
+                        onClick = {
+                            cloudManager.accounts.remove(accountToDelete!!)
+                            cloudManager.saveAccounts()
+                            accounts = cloudManager.accounts.toList()
+                            accountToDelete = null
+                        },
+                        destructive = true,
+                    ),
+                ),
             )
         }
 
-        if (showNahanSettingsFor != null) {
-            com.mlmvpn.scanner.engines.nahan.NahanSettingsScreen(
-                account = showNahanSettingsFor!!,
-                groupManager = groupManager,
-                onGroupsUpdated = { cloudGroups = groupManager.cloudGroups.toList() },
-                onDismiss = { showNahanSettingsFor = null }
-            )
+    if (showNahanSettingsFor != null) {
+            com.mlmvpn.scanner.ui.home.IosModalHost(modifier = Modifier.fillMaxSize()) {
+                com.mlmvpn.scanner.engines.nahan.NahanSettingsScreen(
+                    account = showNahanSettingsFor!!,
+                    groupManager = groupManager,
+                    onGroupsUpdated = { cloudGroups = groupManager.cloudGroups.toList() },
+                    onDismiss = { showNahanSettingsFor = null }
+                )
+            }
         }
 
         if (showMlmUsersFor != null) {
-            val acc = showMlmUsersFor!!
-            com.mlmvpn.scanner.engines.mlm.MlmUsersScreen(
-                account = acc,
-                onDismiss = { showMlmUsersFor = null },
-                onScanUser = { configStr ->
-                    showMlmUsersFor = null
-                    com.mlmvpn.scanner.data.ScannerManager.globalBaseConfig.value = configStr
-                    onNavigateToScanner()
-                },
-                onGroupsUpdated = {
-                    groupManager.loadCloudGroups()
-                    cloudGroups = groupManager.cloudGroups.toList()
-                }
-            )
+            com.mlmvpn.scanner.ui.home.IosModalHost(modifier = Modifier.fillMaxSize()) {
+                val acc = showMlmUsersFor!!
+                com.mlmvpn.scanner.engines.mlm.MlmUsersScreen(
+                    account = acc,
+                    onDismiss = { showMlmUsersFor = null },
+                    onScanUser = { configStr ->
+                        showMlmUsersFor = null
+                        com.mlmvpn.scanner.data.ScannerManager.globalBaseConfig.value = configStr
+                        onNavigateToScanner()
+                    },
+                    onGroupsUpdated = {
+                        groupManager.loadCloudGroups()
+                        cloudGroups = groupManager.cloudGroups.toList()
+                    }
+                )
+            }
         }
 
         if (showMlmSettingsFor != null) {
-            com.mlmvpn.scanner.engines.mlm.MlmSettingsScreen(
-                account = showMlmSettingsFor!!,
-                onDismiss = { showMlmSettingsFor = null }
-            )
+            com.mlmvpn.scanner.ui.home.IosModalHost(modifier = Modifier.fillMaxSize()) {
+                com.mlmvpn.scanner.engines.mlm.MlmSettingsScreen(
+                    account = showMlmSettingsFor!!,
+                    onDismiss = { showMlmSettingsFor = null }
+                )
+            }
         }
         
         if (showBpbSettingsFor != null) {
-            BpbSettingsModal(
-                initialSettings = bpbInitialSettings,
-                onDismiss = { showBpbSettingsFor = null },
-                onConfirm = { settingsJson ->
-                    val acc = showBpbSettingsFor!!
-                    showBpbSettingsFor = null
-                    scope.launch {
-                        android.widget.Toast.makeText(context, context.getString(R.string.cloud_updating_settings_and_fetching), android.widget.Toast.LENGTH_SHORT).show()
+            com.mlmvpn.scanner.ui.home.IosModalHost(modifier = Modifier.fillMaxSize()) {
+                BpbSettingsModal(
+                    initialSettings = bpbInitialSettings,
+                    onDismiss = { showBpbSettingsFor = null },
+                    onConfirm = { settingsJson ->
+                        val acc = showBpbSettingsFor!!
+                        showBpbSettingsFor = null
+                        scope.launch {
+                            android.widget.Toast.makeText(context, context.getString(R.string.cloud_updating_settings_and_fetching), android.widget.Toast.LENGTH_SHORT).show()
                         
-                        val updateResult = cloudManager.updateWorkerSettings(acc, settingsJson)
-                        if (!updateResult.first) {
-                            android.widget.Toast.makeText(context, updateResult.second, android.widget.Toast.LENGTH_LONG).show()
-                            return@launch
-                        }
+                            val updateResult = cloudManager.updateWorkerSettings(acc, settingsJson)
+                            if (!updateResult.first) {
+                                android.widget.Toast.makeText(context, updateResult.second, android.widget.Toast.LENGTH_LONG).show()
+                                return@launch
+                            }
 
-                        val result = cloudManager.fetchCloudConfigs(acc)
-                        if (result.first) {
-                            val newGroup = com.mlmvpn.scanner.data.CloudGroup(
-                                id = System.currentTimeMillis().toString(),
-                                accountId = acc.id,
-                                date = java.text.SimpleDateFormat("yyyy/MM/dd HH:mm", java.util.Locale.US).format(java.util.Date()),
-                                title = com.mlmvpn.scanner.utils.NamingHelper.generateMythName(),
-                                nodes = result.second.map { uri ->
-                                    com.mlmvpn.scanner.models.VpnNode(
-                                        id = java.util.UUID.randomUUID().toString(),
-                                        name = "VLESS - " + acc.email.substringBefore("@"),
-                                        uri = uri,
-                                        type = "vless"
-                                    )
-                                }
-                            )
-                            groupManager.cloudGroups.add(0, newGroup)
-                            groupManager.saveCloudGroups()
-                            android.widget.Toast.makeText(context, context.getString(R.string.cloud_new_group_received), android.widget.Toast.LENGTH_SHORT).show()
-                        } else {
-                            android.widget.Toast.makeText(context, context.getString(R.string.cloud_error_fetching_nodes), android.widget.Toast.LENGTH_LONG).show()
+                            val result = cloudManager.fetchCloudConfigs(acc)
+                            if (result.first) {
+                                val newGroup = com.mlmvpn.scanner.data.CloudGroup(
+                                    id = System.currentTimeMillis().toString(),
+                                    accountId = acc.id,
+                                    date = java.text.SimpleDateFormat("yyyy/MM/dd HH:mm", java.util.Locale.US).format(java.util.Date()),
+                                    title = com.mlmvpn.scanner.utils.NamingHelper.generateMythName(),
+                                    nodes = result.second.map { uri ->
+                                        com.mlmvpn.scanner.models.VpnNode(
+                                            id = java.util.UUID.randomUUID().toString(),
+                                            name = "VLESS - " + acc.email.substringBefore("@"),
+                                            uri = uri,
+                                            type = "vless"
+                                        )
+                                    }
+                                )
+                                groupManager.cloudGroups.add(0, newGroup)
+                                    com.mlmvpn.scanner.ui.CombineCoach.offer(context, newGroup.id, newGroup.nodes.firstOrNull()?.uri ?: "")
+                                groupManager.saveCloudGroups()
+                                android.widget.Toast.makeText(context, context.getString(R.string.cloud_new_group_received), android.widget.Toast.LENGTH_SHORT).show()
+                            } else {
+                                android.widget.Toast.makeText(context, context.getString(R.string.cloud_error_fetching_nodes), android.widget.Toast.LENGTH_LONG).show()
+                            }
                         }
                     }
-                }
-            )
+                )
+            }
         }
 
-        if (showEdgSettingsFor != null) {
+    val coachStep by com.mlmvpn.scanner.ui.CombineCoach.step.collectAsState()
+    val coachUri by com.mlmvpn.scanner.ui.CombineCoach.uri.collectAsState()
+    androidx.compose.runtime.LaunchedEffect(Unit) { com.mlmvpn.scanner.ui.CombineCoach.init(context) }
+
+    if (coachStep == com.mlmvpn.scanner.ui.CombineCoach.Step.OFFERED) {
+    if (cloudStep == CloudCoach.Step.OFFERED) {
+        CloudOfferDialog(
+            onYes = { CloudCoach.accept(hasAccount = accounts.isNotEmpty()) },
+            onNo = { CloudCoach.skip() },
+        )
+    }
+
+        com.mlmvpn.scanner.ui.CombineOfferDialog(
+            onYes = {
+                com.mlmvpn.scanner.data.ScannerManager.globalBaseConfig.value = coachUri
+                com.mlmvpn.scanner.ui.CombineCoach.accept()
+                onNavigateToScanner()
+            },
+            onNo = { com.mlmvpn.scanner.ui.CombineCoach.skip() },
+        )
+    }
+
+    if (showEdgSettingsFor != null) {
+        com.mlmvpn.scanner.ui.home.IosModalHost(modifier = Modifier.fillMaxSize()) {
             com.mlmvpn.scanner.engines.edg.EdgSettingsScreen(
                 account = showEdgSettingsFor!!,
                 onDismiss = { showEdgSettingsFor = null }
+            )
+        }
+    }
+    }
+
+    if (!twoPane) {
+        root()
+        return
+    }
+
+    // A Row, mirrored by right-to-left for nothing: the account list lands on the right in
+    // Persian and on the left in English, with the open page opposite it.
+    Row(modifier = Modifier.fillMaxSize()) {
+        Box(modifier = Modifier.weight(1f).fillMaxHeight()) { root() }
+        Box(
+            modifier = Modifier
+                .width(1.dp)
+                .fillMaxHeight()
+                .background(com.mlmvpn.scanner.ui.settings.Ios.Separator),
+        )
+        Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+            if (detail != null) detail() else CloudDetailPlaceholder()
+        }
+    }
+}
+
+/** What fills the second column before an account or a group has been opened. */
+@Composable
+private fun CloudDetailPlaceholder() {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                Icons.Default.Cloud,
+                contentDescription = null,
+                tint = com.mlmvpn.scanner.ui.settings.Ios.SecondaryLabel.copy(alpha = 0.5f),
+                modifier = Modifier.size(56.dp),
+            )
+            Spacer(Modifier.height(14.dp))
+            Text(
+                S(R.string.cloud_pick_a_row),
+                color = com.mlmvpn.scanner.ui.settings.Ios.SecondaryLabel,
+                fontSize = 15.sp,
             )
         }
     }
@@ -357,18 +588,49 @@ fun AccountGroupCard(
     onShowNahanSettings: (CloudAccount) -> Unit,
     onShowMlmUsers: (CloudAccount) -> Unit,
     onShowMlmSettings: (CloudAccount) -> Unit,
+    /** Opens Config Studio on its user list, for an account Config Studio manages. */
+    onOpenConfigStudio: () -> Unit = {},
     onShowBpbSettings: (org.json.JSONObject?, CloudAccount) -> Unit,
     onShowEdgSettings: (CloudAccount) -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    /**
+     * Opens the troubleshooting page for this account.
+     *
+     * Hoisted rather than hosted here: the card is a row inside a LazyColumn, and a full page
+     * rendered from inside one is clipped to the row's own bounds. Every other full screen this
+     * card reaches -- the panel settings, the user list -- goes up the same way.
+     */
+    onTroubleshoot: () -> Unit = {},
+    /** Opens the V2Ray node list, for the group rows that hand their configs to it. */
+    onOpenV2Ray: () -> Unit = {},
+    onOpenGroup: (String) -> Unit = {},
+    /** Only the top card answers the coach; see the request handler below. */
+    isPrimary: Boolean = false,
+    onCoachHandOff: (groupId: String, uri: String) -> Unit = { _, _ -> },
 ) {
+    // Which panel is mid-removal, so only that row spins.
+    var removingPanel by remember { mutableStateOf<String?>(null) }
+    var confirmRemove by remember { mutableStateOf<String?>(null) }
+    // One panel open at a time; the rest stay one row tall.
+    var openPanel by remember { mutableStateOf<String?>(null) }
+    val cfgCount: (String) -> Int = { engine ->
+        cloudGroups.count { g -> (g.nodes.firstOrNull()?.engineType ?: "BPB") == engine }
+    }
     var deployState by remember { mutableStateOf(if (account.status == "DEPLOYED" || account.status == "deployed") "done" else "idle") }
     var edgDeployState by remember { mutableStateOf(if (account.edgStatus == "DEPLOYED" || account.edgStatus == "deployed") "done" else "idle") }
+    var nahanDeployState by remember { mutableStateOf(if (account.nahanStatus == "DEPLOYED" || account.nahanStatus == "deployed") "done" else "idle") }
+    var mlmDeployState by remember { mutableStateOf(if (account.mlmStatus == "DEPLOYED" || account.mlmStatus == "deployed") "done" else "idle") }
     var progress by remember { mutableStateOf(0f) }
     var edgProgress by remember { mutableStateOf(0f) }
+    var mlmProgress by remember { mutableStateOf(0f) }
+    var isNahanFetching by remember { mutableStateOf(false) }
+    var nahanProgress by remember { mutableStateOf(0f) }
     var isFetching by remember { mutableStateOf(false) }
     var isEdgFetching by remember { mutableStateOf(false) }
     var showUsage by remember { mutableStateOf(false) }
     var usageData by remember { mutableStateOf(0f) }
+    var isLoadingUsage by remember { mutableStateOf(false) }
+
     var isExpanded by remember { mutableStateOf(false) }
     var showSubdomainError by remember { mutableStateOf(false) }
     
@@ -387,6 +649,193 @@ fun AccountGroupCard(
     var subdomainCreationError by remember { mutableStateOf("") }
     
     val scope = rememberCoroutineScope()
+
+    // A redeploy is the same upload the deploy button runs -- but onto the script name already
+    // recorded for this panel, so it replaces what is there instead of adding a second worker
+    // beside it. The state goes back to "deploying" so the row's progress bar reports it.
+    val redeployPanel: (String) -> Unit = { key ->
+        scope.launch {
+            when (key) {
+                "BPB" -> {
+                    deployState = "deploying"; progress = 0f
+                    val r = cloudManager.deployWorker(account) { p, _ -> progress = p.toFloat() }
+                    // A failed REdeploy leaves the panel exactly as it was -- the old script is
+                    // still up there serving -- so the row goes back to "deployed", not to "idle".
+                    deployState = "done"
+                    if (!r.first) android.widget.Toast.makeText(context, r.second, android.widget.Toast.LENGTH_LONG).show()
+                }
+                "EDG" -> {
+                    edgDeployState = "deploying"; edgProgress = 0f
+                    val r = cloudManager.deployEdgWorker(account) { p, _ -> edgProgress = p.toFloat() }
+                    edgDeployState = "done"
+                    if (!r.first) android.widget.Toast.makeText(context, r.second, android.widget.Toast.LENGTH_LONG).show()
+                }
+                "NHN" -> {
+                    nahanDeployState = "deploying"; nahanProgress = 0f
+                    val d = com.mlmvpn.scanner.engines.nahan.NahanDeployer(context)
+                    val r = d.deployNahan(account) { p, _ -> nahanProgress = p.toFloat() }
+                    nahanDeployState = "done"
+                    if (!r.first) android.widget.Toast.makeText(context, r.second, android.widget.Toast.LENGTH_LONG).show()
+                }
+                "MLM" -> {
+                    mlmDeployState = "deploying"; mlmProgress = 0f
+                    val d = com.mlmvpn.scanner.engines.mlm.MlmDeployer(context)
+                    val r = d.deployMlm(account) { p, _ -> mlmProgress = p.toFloat() }
+                    mlmDeployState = "done"
+                    if (!r.first) android.widget.Toast.makeText(context, r.second, android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+            cloudManager.saveAccounts()
+        }
+    }
+
+    val removePanel: (String) -> Unit = { key ->
+        scope.launch {
+            removingPanel = key
+            // Read before the removal clears the worker address it is decided from.
+            val wasStudio = key == "MLM" && account.isStudioManaged
+            val (ok, message) = cloudManager.removePanel(account, key)
+            removingPanel = null
+            if (ok && wasStudio) {
+                com.mlmvpn.scanner.data.studio.StudioStore.get(context).disconnect(account.id)
+            }
+            if (ok) {
+                when (key) {
+                    "BPB" -> deployState = "idle"
+                    "EDG" -> edgDeployState = "idle"
+                    "NHN" -> nahanDeployState = "idle"
+                    "MLM" -> mlmDeployState = "idle"
+                }
+                openPanel = null
+            }
+            android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show()
+        }
+    }
+
+    // The install and the fetch, as functions rather than as two onClick bodies.
+    //
+    // The coach has to be able to run exactly what the buttons run -- not a second implementation
+    // that drifts from them. Both report through CloudCoach when the coach is the caller, and
+    // both are otherwise unchanged from the rows that used to own them.
+    val runEdgInstall: (Boolean) -> Unit = { coached ->
+        if (edgDeployState != "deploying" && edgDeployState != "done") {
+            edgDeployState = "deploying"
+            edgProgress = 0f
+            scope.launch {
+                val result = cloudManager.deployEdgWorker(account) { percent, _ ->
+                    edgProgress = percent.toFloat()
+                    if (coached) CloudCoach.setWork(S(R.string.installing_the_panel_on_your_account), percent / 100f)
+                }
+                if (result.first) {
+                    edgDeployState = "done"
+                    account.edgStatus = "DEPLOYED"
+                    cloudManager.saveAccounts()
+                    if (coached) CloudCoach.advance(CloudCoach.Step.FETCH)
+                } else {
+                    edgDeployState = "idle"
+                    if (coached) {
+                        CloudCoach.failed(
+                            CloudCoach.diagnose(
+                                emailVerified = isEmailVerified,
+                                hasSubdomain = hasSubdomain,
+                                installed = false,
+                                rawError = result.second,
+                            )
+                        )
+                    } else if (result.second == "ERR_ACCOUNT_HAS_SUBDOMAIN") {
+                        showSubdomainError = true
+                    } else {
+                        android.widget.Toast.makeText(context, result.second, android.widget.Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }
+    }
+
+    val runEdgFetch: (Boolean) -> Unit = { coached ->
+        if (edgDeployState == "done" && !isEdgFetching) {
+            scope.launch {
+                isEdgFetching = true
+                if (coached) {
+                    CloudCoach.setWork(S(R.string.fetching_configs_from_the_panel), 0f)
+                } else {
+                    android.widget.Toast.makeText(context, context.getString(R.string.cloud_fetching_edg_configs), android.widget.Toast.LENGTH_SHORT).show()
+                }
+                val result = cloudManager.fetchEdgConfigs(account)
+                if (result.first && result.second.isNotEmpty()) {
+                    val engineNodes = result.second.mapIndexed { index, uri ->
+                        com.mlmvpn.scanner.models.VpnNode(
+                            id = "edg_${account.id}_$index",
+                            name = "EDG Node ${index + 1}",
+                            uri = uri,
+                            type = if (uri.startsWith("vless")) "vless" else "trojan",
+                            engineType = "EDG"
+                        )
+                    }
+                    val newGroup = com.mlmvpn.scanner.data.CloudGroup(
+                        id = "edg_${account.id}_${System.currentTimeMillis()}",
+                        accountId = account.id,
+                        date = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).format(java.util.Date()),
+                        title = com.mlmvpn.scanner.utils.NamingHelper.generateMythName(),
+                        nodes = engineNodes
+                    )
+                    groupManager.cloudGroups.add(0, newGroup)
+                    groupManager.saveCloudGroups()
+                    onGroupsUpdated()
+                    if (coached) {
+                        // Straight into the combine coach at step 4 of 8 -- no second offer, the
+                        // user already said yes to being walked through this.
+                        //
+                        // The scanner needs the base config handed to it, not just the coach state:
+                        // without this the strip said "config chosen" over a picker that still read
+                        // "not chosen yet".
+                        com.mlmvpn.scanner.data.ScannerManager.globalBaseConfig.value =
+                            newGroup.nodes.firstOrNull()?.uri.orEmpty()
+                        com.mlmvpn.scanner.data.ScannerManager.selectedSourceGroupId.value = newGroup.id
+                        CloudCoach.handOff(context, newGroup.id, newGroup.nodes.firstOrNull()?.uri ?: "")
+                        onCoachHandOff(newGroup.id, newGroup.nodes.firstOrNull()?.uri ?: "")
+                    } else {
+                        com.mlmvpn.scanner.ui.CombineCoach.offer(context, newGroup.id, newGroup.nodes.firstOrNull()?.uri ?: "")
+                        android.widget.Toast.makeText(context, context.getString(R.string.cloud_configs_added_successfully, engineNodes.size), android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    if (coached) {
+                        CloudCoach.failed(
+                            CloudCoach.diagnose(
+                                emailVerified = isEmailVerified,
+                                hasSubdomain = hasSubdomain,
+                                installed = true,
+                                rawError = "",
+                            )
+                        )
+                    } else {
+                        android.widget.Toast.makeText(context, context.getString(R.string.cloud_error_fetching_configs), android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                }
+                isEdgFetching = false
+            }
+        }
+    }
+
+    // Only the first card answers the coach; with two accounts connected, "install the panel"
+    // has to mean one account, and the top one is the one the strip is sitting above.
+    val coachRequest by CloudCoach.request.collectAsState()
+    LaunchedEffect(coachRequest, isPrimary) {
+        if (!isPrimary) return@LaunchedEffect
+        when (coachRequest) {
+            CloudCoach.Request.INSTALL -> {
+                CloudCoach.consume()
+                openPanel = CloudCoach.PANEL
+                runEdgInstall(true)
+            }
+            CloudCoach.Request.FETCH -> {
+                CloudCoach.consume()
+                openPanel = CloudCoach.PANEL
+                runEdgFetch(true)
+            }
+            else -> Unit
+        }
+    }
     
     LaunchedEffect(subdomainTimer) {
         if (subdomainTimer > 0) {
@@ -401,31 +850,71 @@ fun AccountGroupCard(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(SurfaceDark, RoundedCornerShape(24.dp))
-            .border(1.dp, BorderDark, RoundedCornerShape(24.dp))
-            .clip(RoundedCornerShape(24.dp))
+            .frostedGlass(CardShape)
     ) {
-        // Header
+        // The account, in the shape Settings gives the Cloudflare row: the real mark rather than
+        // a grey cloud glyph in a bordered circle, the address as the title, and the state as a
+        // sentence instead of an eight-character slice of the API token -- which told the user
+        // nothing they could act on and put a credential fragment on screen for no reason.
         Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(modifier = Modifier.background(BgDark, CircleShape).border(1.dp, BorderDark, CircleShape).padding(8.dp)) {
-                    Icon(Icons.Default.Cloud, contentDescription = null, tint = Primary, modifier = Modifier.size(18.dp))
-                }
-                Spacer(modifier = Modifier.width(12.dp))
-                Column {
-                    Text(account.email, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            androidx.compose.foundation.Image(
+                painter = androidx.compose.ui.res.painterResource(R.drawable.ic_app_cloudflare),
+                contentDescription = null,
+                modifier = Modifier.size(42.dp),
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    account.email,
+                    color = TextPrimary,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                )
+                Spacer(modifier = Modifier.height(1.dp))
+                if (!isEmailVerified || !hasSubdomain) {
+                    // These block every panel at once, so they are still one sentence.
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("API: ${account.token.take(8)}...", color = TextMuted, fontSize = 10.sp)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(if (deployState == "done") GreenOk else RedError))
+                        Spacer(modifier = Modifier.height(22.dp))
+                        Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(YellowWarn))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            if (!isEmailVerified) S(R.string.email_not_verified) else S(R.string.subdomain_not_created),
+                            color = TextMuted,
+                            fontSize = 12.sp,
+                        )
                     }
+                } else {
+                    PanelLamps(
+                        lamps = listOf(
+                            "BPB" to lampOf(deployState, cfgCount("BPB")),
+                            "EDG" to lampOf(edgDeployState, cfgCount("EDG")),
+                            "NHN" to lampOf(nahanDeployState, cfgCount("NHN")),
+                            "MLM" to lampOf(mlmDeployState, cfgCount("MLM")),
+                        ),
+                        onSelect = { openPanel = if (openPanel == it) null else it },
+                    )
                 }
             }
             val isBusy = deployState == "deploying" || isFetching || edgDeployState == "deploying" || isEdgFetching || isCreatingSubdomain || isCheckingStatus
+            // Reachable whether or not the panel is locked. The lock is only one of the ways this
+            // account can fail to work, and a user whose deploys are being refused needs the same
+            // screen -- what Cloudflare answered, and the levers for their own account.
+            IconButton(
+                onClick = onTroubleshoot,
+                enabled = !isBusy
+            ) {
+                Icon(
+                    Icons.Default.Build,
+                    contentDescription = S(R.string.cf_fix_open),
+                    tint = if (!isBusy) TextMuted else BorderDark,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
             IconButton(
                 onClick = onDelete,
                 enabled = !isBusy
@@ -433,6 +922,13 @@ fun AccountGroupCard(
                 Icon(Icons.Default.Delete, contentDescription = "Delete", tint = if (!isBusy) TextMuted else BorderDark)
             }
         }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 70.dp)
+                .height(0.5.dp)
+                .background(com.mlmvpn.scanner.ui.settings.Ios.Separator)
+        )
 
         // Action Buttons Column
         Box(modifier = Modifier.fillMaxWidth()) {
@@ -447,13 +943,22 @@ fun AccountGroupCard(
                 // "locked/disabled" cue with zero native-blur risk.
                 .then(if (!isEmailVerified || !hasSubdomain) Modifier.alpha(0.35f) else Modifier)
             ) {
-            // --- ROW 1: BPB Engine ---
-            Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+            CloudPanelHeaderRow(
+                title = "BPB",
+                subtitle = S(R.string.full_panel_with_more_settings),
+                state = deployState,
+                configCount = cfgCount("BPB"),
+                expanded = openPanel == "BPB",
+                stale = com.mlmvpn.scanner.data.PanelBuild.isStale(account, "BPB"),
+                onClick = { openPanel = if (openPanel == "BPB") null else "BPB" },
+            )
+            if (openPanel == "BPB") {
+            Column(modifier = Modifier.fillMaxWidth().background(Color.White.copy(alpha = 0.035f))) {
+                val progressWidth by animateFloatAsState(targetValue = progress / 100f, animationSpec = tween(150))
                 // Deploy Button
                 Box(
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
+                        .fillMaxWidth()
                         .clip(RoundedCornerShape(0.dp))
                         .clickable(enabled = deployState != "deploying") {
                             if (deployState == "done") return@clickable
@@ -479,27 +984,40 @@ fun AccountGroupCard(
                         }
                 ) {
                     // Progress Bar Background
-                    val progressWidth by animateFloatAsState(targetValue = progress / 100f, animationSpec = tween(150))
-                    if (deployState == "deploying") {
-                        Box(modifier = Modifier.fillMaxHeight().fillMaxWidth(progressWidth).background(Primary.copy(alpha = 0.2f)))
-                    }
                     
-                    Column(
-                        modifier = Modifier.align(Alignment.Center).padding(vertical = 12.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         val color = if (deployState == "done") GreenOk else TextPrimary
                         Icon(if (deployState == "done") Icons.Default.CheckCircle else Icons.Default.PlayArrow, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
-                        Text(if (deployState == "deploying") stringResource(R.string.cloud_deploying) else if (deployState == "done") stringResource(R.string.cloud_deployed) else stringResource(R.string.cloud_deploy_bpb), color = color, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(if (deployState == "deploying") stringResource(R.string.cloud_deploying) else if (deployState == "done") stringResource(R.string.cloud_deployed) else stringResource(R.string.cloud_deploy_bpb), color = color, fontSize = 15.sp, modifier = Modifier.weight(1f))
                     }
                 }
-                Divider(modifier = Modifier.width(1.dp).fillMaxHeight(), color = BorderDark)
+                // The deploy really does report a percentage; this is that number, at the
+                // width it has actually reached, under the row it belongs to.
+                if (deployState == "deploying") {
+                    LinearProgressIndicator(
+                        progress = progressWidth,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 48.dp, end = 16.dp, bottom = 10.dp)
+                            .height(3.dp)
+                            .clip(CircleShape),
+                        color = com.mlmvpn.scanner.ui.settings.Ios.Blue,
+                        trackColor = Color.White.copy(alpha = 0.12f),
+                    )
+                }
+                Box(modifier = Modifier.fillMaxWidth().padding(start = 52.dp).height(0.5.dp).background(com.mlmvpn.scanner.ui.settings.Ios.Separator))
                 
                 // Get Nodes Button
                 Box(
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
+                        .fillMaxWidth()
                         .clickable(
                             enabled = deployState == "done" && !isFetching,
                             onClick = {
@@ -518,7 +1036,6 @@ fun AccountGroupCard(
                                 }
                             }
                         ),
-                    contentAlignment = Alignment.Center
                 ) {
                     if (isFetching) {
                         val infiniteTransition = rememberInfiniteTransition(label = "fetchBg")
@@ -529,137 +1046,92 @@ fun AccountGroupCard(
                         )
                         Box(modifier = Modifier.fillMaxSize().background(Primary.copy(alpha = alpha)))
                     }
-                    val color = if (deployState == "done") Primary else TextDim
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(vertical = 12.dp)) {
+                    val color = if (deployState == "done") TextPrimary else TextDim
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         if (isFetching) {
                             CircularProgressIndicator(modifier = Modifier.size(20.dp), color = color, strokeWidth = 2.dp)
                         } else {
                             Icon(Icons.Default.Refresh, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
                         }
-                        Text(if (isFetching) stringResource(R.string.cloud_fetching) else stringResource(R.string.cloud_fetch_bpb_node), color = color, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(if (isFetching) stringResource(R.string.cloud_fetching) else stringResource(R.string.cloud_fetch_bpb_node), color = color, fontSize = 15.sp, modifier = Modifier.weight(1f))
                     }
                 }
-            }
-
-            Divider(modifier = Modifier.fillMaxWidth().height(1.dp), color = BorderDark)
-            
-            // --- ROW 2: Usage Button ---
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(if (showUsage) BorderDark.copy(alpha = 0.5f) else Color.Transparent)
-                    .clickable { 
-                        showUsage = !showUsage
-                        if (showUsage && usageData == 0f) {
-                            scope.launch {
-                                val result = cloudManager.getUsage(account)
-                                if (result.first) {
-                                    usageData = result.second.toFloatOrNull() ?: 0f
-                                } else {
-                                    android.widget.Toast.makeText(context, result.second, android.widget.Toast.LENGTH_LONG).show()
-                                }
-                            }
-                        }
-                    }
-                    .padding(vertical = 12.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Default.DataUsage, contentDescription = null, tint = TextPrimary, modifier = Modifier.size(20.dp))
-                    Text(stringResource(R.string.cloud_daily_usage), color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                // Deployed panels can be replaced or taken down; see PanelBuild.
+                if (deployState == "done") {
+                    CloudPanelManageRows(
+                        stale = com.mlmvpn.scanner.data.PanelBuild.isStale(account, "BPB"),
+                        busy = deployState == "deploying",
+                        removing = removingPanel == "BPB",
+                        onRedeploy = { redeployPanel("BPB") },
+                        onRemove = { confirmRemove = "BPB" },
+                    )
                 }
             }
+            }
 
-            Divider(modifier = Modifier.fillMaxWidth().height(1.dp), color = BorderDark)
+            Box(modifier = Modifier.fillMaxWidth().padding(start = 52.dp).height(0.5.dp).background(com.mlmvpn.scanner.ui.settings.Ios.Separator))
 
-            // --- ROW 3: EDG Engine ---
-            Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+            CloudPanelHeaderRow(
+                title = "EDG",
+                subtitle = S(R.string.the_quickest_way_to_get_a_config),
+                state = edgDeployState,
+                configCount = cfgCount("EDG"),
+                expanded = openPanel == "EDG",
+                stale = com.mlmvpn.scanner.data.PanelBuild.isStale(account, "EDG"),
+                onClick = { openPanel = if (openPanel == "EDG") null else "EDG" },
+            )
+            if (openPanel == "EDG") {
+            Column(modifier = Modifier.fillMaxWidth().background(Color.White.copy(alpha = 0.035f))) {
+                val edgProgressWidth by animateFloatAsState(targetValue = edgProgress / 100f, animationSpec = tween(150))
                 // EDG Deploy Button
                 Box(
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
+                        .fillMaxWidth()
                         .clip(RoundedCornerShape(0.dp))
-                        .clickable(enabled = edgDeployState != "deploying") {
-                            if (edgDeployState == "done") return@clickable
-                            edgDeployState = "deploying"
-                            edgProgress = 0f
-                            scope.launch {
-                                val result = cloudManager.deployEdgWorker(account) { percent, _ ->
-                                    edgProgress = percent.toFloat()
-                                }
-                                if (result.first) {
-                                    edgDeployState = "done"
-                                    account.edgStatus = "DEPLOYED"
-                                    cloudManager.saveAccounts()
-                                } else {
-                                    edgDeployState = "idle"
-                                    if (result.second == "ERR_ACCOUNT_HAS_SUBDOMAIN") {
-                                        showSubdomainError = true
-                                    } else {
-                                        android.widget.Toast.makeText(context, result.second, android.widget.Toast.LENGTH_LONG).show()
-                                    }
-                                }
-                            }
-                        }
+                        .clickable(enabled = edgDeployState != "deploying") { runEdgInstall(false) }
                 ) {
-                    val edgProgressWidth by animateFloatAsState(targetValue = edgProgress / 100f, animationSpec = tween(150))
-                    if (edgDeployState == "deploying") {
-                        Box(modifier = Modifier.fillMaxHeight().fillMaxWidth(edgProgressWidth).background(Primary.copy(alpha = 0.2f)))
-                    }
                     
-                    Column(
-                        modifier = Modifier.align(Alignment.Center).padding(vertical = 12.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         val color = if (edgDeployState == "done") GreenOk else TextPrimary
                         Icon(if (edgDeployState == "done") Icons.Default.CheckCircle else Icons.Default.PlayArrow, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
-                        Text(if (edgDeployState == "deploying") stringResource(R.string.cloud_deploying) else if (edgDeployState == "done") stringResource(R.string.cloud_deployed) else stringResource(R.string.cloud_deploy_edg), color = color, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(if (edgDeployState == "deploying") stringResource(R.string.cloud_deploying) else if (edgDeployState == "done") stringResource(R.string.cloud_deployed) else stringResource(R.string.cloud_deploy_edg), color = color, fontSize = 15.sp, modifier = Modifier.weight(1f))
                     }
                 }
+                // The deploy really does report a percentage; this is that number, at the
+                // width it has actually reached, under the row it belongs to.
+                if (edgDeployState == "deploying") {
+                    LinearProgressIndicator(
+                        progress = edgProgressWidth,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 48.dp, end = 16.dp, bottom = 10.dp)
+                            .height(3.dp)
+                            .clip(CircleShape),
+                        color = com.mlmvpn.scanner.ui.settings.Ios.Blue,
+                        trackColor = Color.White.copy(alpha = 0.12f),
+                    )
+                }
                 
-                Divider(modifier = Modifier.width(1.dp).fillMaxHeight(), color = BorderDark)
+                Box(modifier = Modifier.fillMaxWidth().padding(start = 52.dp).height(0.5.dp).background(com.mlmvpn.scanner.ui.settings.Ios.Separator))
                 
                 // EDG Get Nodes Button
                 Box(
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .clickable(enabled = edgDeployState == "done" && !isEdgFetching) {
-                            if (edgDeployState == "done" && !isEdgFetching) {
-                                scope.launch {
-                                    isEdgFetching = true
-                                    android.widget.Toast.makeText(context, context.getString(R.string.cloud_fetching_edg_configs), android.widget.Toast.LENGTH_SHORT).show()
-                                    val result = cloudManager.fetchEdgConfigs(account)
-                                    if (result.first && result.second.isNotEmpty()) {
-                                        val engineNodes = result.second.mapIndexed { index, uri ->
-                                            com.mlmvpn.scanner.models.VpnNode(
-                                                id = "edg_${account.id}_$index",
-                                                name = "EDG Node ${index + 1}",
-                                                uri = uri,
-                                                type = if (uri.startsWith("vless")) "vless" else "trojan",
-                                                engineType = "EDG"
-                                            )
-                                        }
-                                        val newGroup = com.mlmvpn.scanner.data.CloudGroup(
-                                            id = "edg_${account.id}_${System.currentTimeMillis()}",
-                                            accountId = account.id,
-                                            date = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).format(java.util.Date()),
-                                            title = com.mlmvpn.scanner.utils.NamingHelper.generateMythName(),
-                                            nodes = engineNodes
-                                        )
-                                        groupManager.cloudGroups.add(0, newGroup)
-                                        groupManager.saveCloudGroups()
-                                        android.widget.Toast.makeText(context, context.getString(R.string.cloud_configs_added_successfully, engineNodes.size), android.widget.Toast.LENGTH_SHORT).show()
-                                        onGroupsUpdated()
-                                    } else {
-                                        android.widget.Toast.makeText(context, context.getString(R.string.cloud_error_fetching_configs), android.widget.Toast.LENGTH_SHORT).show()
-                                    }
-                                    isEdgFetching = false
-                                }
-                            }
-                        },
-                    contentAlignment = Alignment.Center
+                        .fillMaxWidth()
+                        .clickable(enabled = edgDeployState == "done" && !isEdgFetching) { runEdgFetch(false) }
                 ) {
                     if (isEdgFetching) {
                         val infiniteTransition = rememberInfiniteTransition(label = "fetchBgEDG")
@@ -670,52 +1142,79 @@ fun AccountGroupCard(
                         )
                         Box(modifier = Modifier.fillMaxSize().background(Primary.copy(alpha = alpha)))
                     }
-                    val color = if (edgDeployState == "done") Primary else TextDim
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(vertical = 12.dp)) {
+                    val color = if (edgDeployState == "done") TextPrimary else TextDim
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         if (isEdgFetching) {
                             CircularProgressIndicator(modifier = Modifier.size(20.dp), color = color, strokeWidth = 2.dp)
                         } else {
                             Icon(Icons.Default.Refresh, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
                         }
-                        Text(if (isEdgFetching) stringResource(R.string.cloud_fetching) else stringResource(R.string.cloud_fetch_edg_node), color = color, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(if (isEdgFetching) stringResource(R.string.cloud_fetching) else stringResource(R.string.cloud_fetch_edg_node), color = color, fontSize = 15.sp, modifier = Modifier.weight(1f))
                     }
                 }
                 
-                Divider(modifier = Modifier.width(1.dp).fillMaxHeight(), color = BorderDark)
+                Box(modifier = Modifier.fillMaxWidth().padding(start = 52.dp).height(0.5.dp).background(com.mlmvpn.scanner.ui.settings.Ios.Separator))
                 
                 // EDG Settings Button
                 Box(
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
+                        .fillMaxWidth()
                         .clickable(enabled = edgDeployState == "done") {
                             if (edgDeployState == "done") {
                                 onShowEdgSettings(account)
                             }
                         },
-                    contentAlignment = Alignment.Center
                 ) {
-                    val color = if (edgDeployState == "done") Primary else TextDim
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(vertical = 12.dp)) {
+                    val color = if (edgDeployState == "done") TextPrimary else TextDim
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Icon(Icons.Default.Settings, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
-                        Text(stringResource(R.string.cloud_edg_settings), color = color, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(stringResource(R.string.cloud_edg_settings), color = color, fontSize = 15.sp, modifier = Modifier.weight(1f))
                     }
                 }
+                // Deployed panels can be replaced or taken down; see PanelBuild.
+                if (edgDeployState == "done") {
+                    CloudPanelManageRows(
+                        stale = com.mlmvpn.scanner.data.PanelBuild.isStale(account, "EDG"),
+                        busy = edgDeployState == "deploying",
+                        removing = removingPanel == "EDG",
+                        onRedeploy = { redeployPanel("EDG") },
+                        onRemove = { confirmRemove = "EDG" },
+                    )
+                }
+            }
             }
             
-            Divider(modifier = Modifier.fillMaxWidth().height(1.dp), color = BorderDark)
+            Box(modifier = Modifier.fillMaxWidth().padding(start = 52.dp).height(0.5.dp).background(com.mlmvpn.scanner.ui.settings.Ios.Separator))
             
             // --- ROW 4: Nahan Engine ---
-            var nahanDeployState by remember { mutableStateOf(if (account.nahanStatus == "DEPLOYED" || account.nahanStatus == "deployed") "done" else "idle") }
-            var nahanProgress by remember { mutableStateOf(0f) }
-            var isNahanFetching by remember { mutableStateOf(false) }
-
-            Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+            CloudPanelHeaderRow(
+                title = "Nahan",
+                subtitle = S(R.string.with_a_username_and_password),
+                state = nahanDeployState,
+                configCount = cfgCount("NHN"),
+                expanded = openPanel == "NHN",
+                stale = com.mlmvpn.scanner.data.PanelBuild.isStale(account, "NHN"),
+                onClick = { openPanel = if (openPanel == "NHN") null else "NHN" },
+            )
+            if (openPanel == "NHN") {
+            Column(modifier = Modifier.fillMaxWidth().background(Color.White.copy(alpha = 0.035f))) {
+                val progressWidth by animateFloatAsState(targetValue = nahanProgress / 100f, animationSpec = tween(150))
                 // Nahan Deploy Button
                 Box(
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
+                        .fillMaxWidth()
                         .clickable(enabled = nahanDeployState != "deploying") {
                             if (nahanDeployState == "done") return@clickable
                             nahanDeployState = "deploying"
@@ -739,28 +1238,41 @@ fun AccountGroupCard(
                             }
                         }
                 ) {
-                    val progressWidth by animateFloatAsState(targetValue = nahanProgress / 100f, animationSpec = tween(150))
-                    if (nahanDeployState == "deploying") {
-                        Box(modifier = Modifier.fillMaxHeight().fillMaxWidth(progressWidth).background(Primary.copy(alpha = 0.2f)))
-                    }
                     
-                    Column(
-                        modifier = Modifier.align(Alignment.Center).padding(vertical = 12.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         val color = if (nahanDeployState == "done") GreenOk else TextPrimary
                         Icon(if (nahanDeployState == "done") Icons.Default.CheckCircle else Icons.Default.PlayArrow, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
-                        Text(if (nahanDeployState == "deploying") stringResource(R.string.cloud_deploying_short) else if (nahanDeployState == "done") stringResource(R.string.cloud_deployed) else stringResource(R.string.cloud_deploy_nhn), color = color, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(if (nahanDeployState == "deploying") stringResource(R.string.cloud_deploying_short) else if (nahanDeployState == "done") stringResource(R.string.cloud_deployed) else stringResource(R.string.cloud_deploy_nhn), color = color, fontSize = 15.sp, modifier = Modifier.weight(1f))
                     }
                 }
+                // The deploy really does report a percentage; this is that number, at the
+                // width it has actually reached, under the row it belongs to.
+                if (nahanDeployState == "deploying") {
+                    LinearProgressIndicator(
+                        progress = progressWidth,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 48.dp, end = 16.dp, bottom = 10.dp)
+                            .height(3.dp)
+                            .clip(CircleShape),
+                        color = com.mlmvpn.scanner.ui.settings.Ios.Blue,
+                        trackColor = Color.White.copy(alpha = 0.12f),
+                    )
+                }
                 
-                Divider(modifier = Modifier.width(1.dp).fillMaxHeight(), color = BorderDark)
+                Box(modifier = Modifier.fillMaxWidth().padding(start = 52.dp).height(0.5.dp).background(com.mlmvpn.scanner.ui.settings.Ios.Separator))
                 
                 // Nahan Get Nodes Button
                 Box(
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
+                        .fillMaxWidth()
                         .clickable(enabled = nahanDeployState == "done" && !isNahanFetching) {
                             if (nahanDeployState == "done" && !isNahanFetching) {
                                 scope.launch {
@@ -815,6 +1327,7 @@ fun AccountGroupCard(
                                                 nodes = engineNodes
                                             )
                                             groupManager.cloudGroups.add(0, newGroup)
+                                    com.mlmvpn.scanner.ui.CombineCoach.offer(context, newGroup.id, newGroup.nodes.firstOrNull()?.uri ?: "")
                                             groupManager.saveCloudGroups()
                                             android.widget.Toast.makeText(context, context.getString(R.string.cloud_admin_configs_received, engineNodes.size), android.widget.Toast.LENGTH_SHORT).show()
                                             onGroupsUpdated()
@@ -829,7 +1342,6 @@ fun AccountGroupCard(
                                 }
                             }
                         },
-                    contentAlignment = Alignment.Center
                 ) {
                     if (isNahanFetching) {
                         val infiniteTransition = rememberInfiniteTransition(label = "fetchBgNHN")
@@ -840,51 +1352,81 @@ fun AccountGroupCard(
                         )
                         Box(modifier = Modifier.fillMaxSize().background(Primary.copy(alpha = alpha)))
                     }
-                    val color = if (nahanDeployState == "done") Primary else TextDim
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(vertical = 12.dp)) {
+                    val color = if (nahanDeployState == "done") TextPrimary else TextDim
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         if (isNahanFetching) {
                             CircularProgressIndicator(modifier = Modifier.size(20.dp), color = color, strokeWidth = 2.dp)
                         } else {
                             Icon(Icons.Default.Refresh, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
                         }
-                        Text(if (isNahanFetching) stringResource(R.string.cloud_fetching_short) else stringResource(R.string.cloud_nhn_node), color = color, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(if (isNahanFetching) stringResource(R.string.cloud_fetching_short) else stringResource(R.string.cloud_nhn_node), color = color, fontSize = 15.sp, modifier = Modifier.weight(1f))
                     }
                 }
 
-                Divider(modifier = Modifier.width(1.dp).fillMaxHeight(), color = BorderDark)
+                Box(modifier = Modifier.fillMaxWidth().padding(start = 52.dp).height(0.5.dp).background(com.mlmvpn.scanner.ui.settings.Ios.Separator))
                 
                 // Nahan Settings Button
                 Box(
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
+                        .fillMaxWidth()
                         .clickable(enabled = nahanDeployState == "done") {
                             if (nahanDeployState == "done") {
                                 onShowNahanSettings(account)
                             }
                         },
-                    contentAlignment = Alignment.Center
                 ) {
                     val color = if (nahanDeployState == "done") TextPrimary else TextDim
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(vertical = 12.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Icon(Icons.Default.Settings, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
-                        Text(stringResource(R.string.cloud_settings), color = color, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(stringResource(R.string.cloud_settings), color = color, fontSize = 15.sp, modifier = Modifier.weight(1f))
                     }
                 }
+                // Deployed panels can be replaced or taken down; see PanelBuild.
+                if (nahanDeployState == "done") {
+                    CloudPanelManageRows(
+                        stale = com.mlmvpn.scanner.data.PanelBuild.isStale(account, "NHN"),
+                        busy = nahanDeployState == "deploying",
+                        removing = removingPanel == "NHN",
+                        onRedeploy = { redeployPanel("NHN") },
+                        onRemove = { confirmRemove = "NHN" },
+                    )
+                }
             } // end Nahan Engine
+            }
 
-            Divider(modifier = Modifier.fillMaxWidth().height(1.dp), color = BorderDark)
+            Box(modifier = Modifier.fillMaxWidth().padding(start = 52.dp).height(0.5.dp).background(com.mlmvpn.scanner.ui.settings.Ios.Separator))
             
             // --- ROW 5: MLM Engine ---
-            var mlmDeployState by remember { mutableStateOf(if (account.mlmStatus == "DEPLOYED" || account.mlmStatus == "deployed") "done" else "idle") }
-            var mlmProgress by remember { mutableStateOf(0f) }
-
-            Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+            CloudPanelHeaderRow(
+                title = "MLM",
+                // The same engine as Config Studio's; said, so the two are not taken for two panels.
+                subtitle = if (account.isStudioManaged) S(R.string.cloud_mlm_studio_subtitle)
+                else S(R.string.our_own_panel_with_user_management),
+                state = mlmDeployState,
+                configCount = cfgCount("MLM"),
+                expanded = openPanel == "MLM",
+                stale = com.mlmvpn.scanner.data.PanelBuild.isStale(account, "MLM"),
+                onClick = { openPanel = if (openPanel == "MLM") null else "MLM" },
+            )
+            if (openPanel == "MLM") {
+            Column(modifier = Modifier.fillMaxWidth().background(Color.White.copy(alpha = 0.035f))) {
+                val progressWidth by animateFloatAsState(targetValue = mlmProgress / 100f, animationSpec = tween(150))
                 // MLM Deploy Button
                 Box(
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
+                        .fillMaxWidth()
                         .clickable(enabled = mlmDeployState != "deploying") {
                             if (mlmDeployState == "done") return@clickable
                             mlmDeployState = "deploying"
@@ -905,65 +1447,119 @@ fun AccountGroupCard(
                             }
                         }
                 ) {
-                    val progressWidth by animateFloatAsState(targetValue = mlmProgress / 100f, animationSpec = tween(150))
-                    if (mlmDeployState == "deploying") {
-                        Box(modifier = Modifier.fillMaxHeight().fillMaxWidth(progressWidth).background(Primary.copy(alpha = 0.2f)))
-                    }
                     
-                    Column(
-                        modifier = Modifier.align(Alignment.Center).padding(vertical = 12.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         val color = if (mlmDeployState == "done") GreenOk else TextPrimary
                         Icon(if (mlmDeployState == "done") Icons.Default.CheckCircle else Icons.Default.PlayArrow, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
-                        Text(if (mlmDeployState == "deploying") "در حال نصب" else if (mlmDeployState == "done") "نصب شده" else "نصب MLM", color = color, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(if (mlmDeployState == "deploying") S(R.string.installing_2) else if (mlmDeployState == "done") S(R.string.installed) else S(R.string.install_on_account), color = color, fontSize = 15.sp, modifier = Modifier.weight(1f))
                     }
                 }
+                // The deploy really does report a percentage; this is that number, at the
+                // width it has actually reached, under the row it belongs to.
+                if (mlmDeployState == "deploying") {
+                    LinearProgressIndicator(
+                        progress = progressWidth,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 48.dp, end = 16.dp, bottom = 10.dp)
+                            .height(3.dp)
+                            .clip(CircleShape),
+                        color = com.mlmvpn.scanner.ui.settings.Ios.Blue,
+                        trackColor = Color.White.copy(alpha = 0.12f),
+                    )
+                }
                 
-                Divider(modifier = Modifier.width(1.dp).fillMaxHeight(), color = BorderDark)
+                Box(modifier = Modifier.fillMaxWidth().padding(start = 52.dp).height(0.5.dp).background(com.mlmvpn.scanner.ui.settings.Ios.Separator))
                 
                 // MLM Users Button
                 Box(
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
+                        .fillMaxWidth()
                         .clickable(enabled = mlmDeployState == "done") {
                             if (mlmDeployState == "done") {
-                                onShowMlmUsers(account)
+                                // Config Studio's own list on an account it manages: the old one
+                                // cannot show those people's links, and its edits and deletes do
+                                // not mean what Config Studio's do.
+                                if (account.isStudioManaged) {
+                                    com.mlmvpn.scanner.ui.configstudio.StudioLaunch.openUsers = true
+                                    onOpenConfigStudio()
+                                } else {
+                                    onShowMlmUsers(account)
+                                }
                             }
                         },
-                    contentAlignment = Alignment.Center
                 ) {
-                    val color = if (mlmDeployState == "done") Primary else TextDim
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(vertical = 12.dp)) {
+                    val color = if (mlmDeployState == "done") TextPrimary else TextDim
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Icon(Icons.Default.Group, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
-                        Text("کاربران", color = color, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            if (account.isStudioManaged) S(R.string.cloud_mlm_users_in_studio) else S(R.string.users),
+                            color = color, fontSize = 15.sp, modifier = Modifier.weight(1f),
+                        )
                     }
                 }
 
-                Divider(modifier = Modifier.width(1.dp).fillMaxHeight(), color = BorderDark)
+                Box(modifier = Modifier.fillMaxWidth().padding(start = 52.dp).height(0.5.dp).background(com.mlmvpn.scanner.ui.settings.Ios.Separator))
                 
                 // MLM Settings Button
                 Box(
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
+                        .fillMaxWidth()
                         .clickable(enabled = mlmDeployState == "done") {
                             if (mlmDeployState == "done") {
                                 onShowMlmSettings(account)
                             }
                         },
-                    contentAlignment = Alignment.Center
                 ) {
                     val color = if (mlmDeployState == "done") TextPrimary else TextDim
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(vertical = 12.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Icon(Icons.Default.Settings, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
-                        Text("تنظیمات", color = color, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(S(R.string.settings), color = color, fontSize = 15.sp, modifier = Modifier.weight(1f))
                     }
                 }
+                // Deployed panels can be replaced or taken down; see PanelBuild.
+                if (mlmDeployState == "done") {
+                    CloudPanelManageRows(
+                        stale = com.mlmvpn.scanner.data.PanelBuild.isStale(account, "MLM"),
+                        busy = mlmDeployState == "deploying",
+                        removing = removingPanel == "MLM",
+                        onRedeploy = { redeployPanel("MLM") },
+                        onRemove = { confirmRemove = "MLM" },
+                    )
+                }
             } // end MLM Engine
+            }
 
             // Smart Verification Overlay
+            //
+            // The panel is unusable until Cloudflare will accept a worker, and there are two
+            // reasons it will not: the account's email is unverified, or it has no workers.dev
+            // subdomain yet. Which one is shown matters -- the first sends the user to an external
+            // dashboard, the second is one button here -- and the app used to get it wrong. The
+            // probe behind `isEmailVerified` asked an endpoint that has no email-verification
+            // field at all, so a verified account with no subdomain was shown the email overlay
+            // and had no way past it. That inference is gone (see CloudManager.probeAccountStatus)
+            // and the report button below is what tells us whether anything still lands a working
+            // account here.
             Box(modifier = Modifier.fillMaxSize()) {
                 if (!isEmailVerified || !hasSubdomain) {
                     Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f))) {
@@ -975,7 +1571,7 @@ fun AccountGroupCard(
                                 indication = null
                             ) { }
                         )
-                
+
                     Column(
                         modifier = Modifier.align(Alignment.Center).padding(16.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
@@ -984,59 +1580,54 @@ fun AccountGroupCard(
                         if (!isEmailVerified) {
                             Button(
                                 onClick = { showEmailModal = true },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF59E0B))
-                            ) {
+                                colors = iosButtonColors(Color(0xFFF59E0B)),
+                                border = iosButtonBorder(Color(0xFFF59E0B))) {
                                 Icon(Icons.Default.Warning, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text(stringResource(R.string.cloud_verify_email_required), color = Color.White)
+                                Text(stringResource(R.string.cloud_verify_email_required),)
                             }
                         } else if (!hasSubdomain) {
                             Button(
                                 onClick = {
                                     isCreatingSubdomain = true
                                     scope.launch {
-                                        val res = cloudManager.createSubdomainOnly(account)
+                                        val res = cloudManager.createSubdomain(account)
                                         isCreatingSubdomain = false
-                                        if (res.first) {
+                                        if (res.ok) {
                                             account.hasSubdomain = true
                                             hasSubdomain = true
                                             cloudManager.saveAccounts()
                                             subdomainTimer = 180
+                                        } else if (res.failure == com.mlmvpn.scanner.data.CloudManager.SubdomainFailure.EMAIL_UNVERIFIED) {
+                                            // Cloudflare itself named the email as the reason for
+                                            // refusing the one operation that requires it. That is
+                                            // the only evidence in this app allowed to say so. The
+                                            // old rule guessed it from the word "verify" appearing
+                                            // anywhere in the error -- which also matches
+                                            // permission and rate-limit messages -- and then
+                                            // confirmed the guess against an endpoint that always
+                                            // answered no.
+                                            isEmailVerified = false
+                                            account.isEmailVerified = false
+                                            cloudManager.saveAccounts()
+                                            android.widget.Toast.makeText(context, context.getString(R.string.cloud_error_email_not_verified), android.widget.Toast.LENGTH_LONG).show()
                                         } else {
-                                            // Cloudflare's raw subdomain-create error text can contain the
-                                            // word "verify" for reasons that have nothing to do with email
-                                            // verification (token scope, rate limiting, etc). Matching on
-                                            // that substring alone used to lock the whole cloud panel behind
-                                            // the "verify your email" overlay for any such error, with no way
-                                            // out except an external Cloudflare login -- even when the real
-                                            // problem was something else entirely. Ask Cloudflare's own /user
-                                            // endpoint for the actual verified state instead of guessing from
-                                            // unrelated error text.
-                                            val realStatus = if (res.second.contains("verify", ignoreCase = true)) {
-                                                cloudManager.checkAccountStatus(account)
-                                            } else null
-                                            if (realStatus != null && !realStatus.second) {
-                                                isEmailVerified = false
-                                                account.isEmailVerified = false
-                                                cloudManager.saveAccounts()
-                                                android.widget.Toast.makeText(context, context.getString(R.string.cloud_error_email_not_verified), android.widget.Toast.LENGTH_LONG).show()
-                                            } else {
-                                                subdomainCreationError = res.second
-                                            }
+                                            subdomainCreationError = res.errors.ifBlank { res.message }
                                         }
                                     }
                                 },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),
+                                colors = iosButtonColors(Color(0xFF3B82F6)),
+                                border = iosButtonBorder(Color(0xFF3B82F6), enabled = !isCreatingSubdomain && subdomainTimer == 0),
                                 enabled = !isCreatingSubdomain && subdomainTimer == 0
                             ) {
                                 if (isCreatingSubdomain) {
-                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White)
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp),)
                                 } else if (subdomainTimer > 0) {
                                     Text(stringResource(R.string.cloud_wait_timer, subdomainTimer / 60, subdomainTimer % 60))
                                 } else {
                                     Icon(Icons.Default.Language, contentDescription = null, modifier = Modifier.size(16.dp))
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text(stringResource(R.string.cloud_create_subdomain_required), color = Color.White)
+                                    Text(stringResource(R.string.cloud_create_subdomain_required),)
                                 }
                             }
 
@@ -1057,138 +1648,361 @@ fun AccountGroupCard(
                                             }
                                         }
                                     },
-                                    colors = ButtonDefaults.buttonColors(containerColor = Primary),
+                                    colors = iosButtonColors(Primary),
+                                    border = iosButtonBorder(Primary, enabled = !isCheckingStatus),
                                     enabled = !isCheckingStatus
                                 ) {
                                     if (isCheckingStatus) {
-                                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = BgDark)
+                                        CircularProgressIndicator(modifier = Modifier.size(16.dp),)
                                     } else {
-                                        Text(stringResource(R.string.cloud_check_subdomain_status), color = BgDark)
+                                        Text(stringResource(R.string.cloud_check_subdomain_status),)
                                     }
                                 }
                             }
+
+                            // Cloudflare's own words, not ours. A create can fail for a scope the
+                            // token was never granted, for a name already taken, or because the
+                            // request never left the phone, and "it did not work" points the user
+                            // at the wrong fix for all three.
+                            if (subdomainCreationError.isNotBlank()) {
+                                Text(
+                                    stringResource(R.string.cloud_subdomain_failed_reason, subdomainCreationError),
+                                    color = TextMuted,
+                                    fontSize = 12.sp,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                    modifier = Modifier.widthIn(max = 300.dp),
+                                )
+                            }
+                        }
+
+                        // Always reachable while the panel is locked, because this is exactly the
+                        // population it is for: whoever is looking at this overlay is either
+                        // genuinely blocked or blocked by us, and only what Cloudflare actually
+                        // answered can tell those apart. Opening it re-probes, so an account that
+                        // is in fact fine is unlocked by the same tap.
+                        TextButton(onClick = onTroubleshoot) {
+                            Text(
+                                stringResource(R.string.cf_fix_open),
+                                color = TextMuted,
+                                fontSize = 12.sp,
+                            )
                         }
                     }
+                }
+                }
+            }
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 70.dp)
+                .height(0.5.dp)
+                .background(com.mlmvpn.scanner.ui.settings.Ios.Separator)
+        )
+        // --- Daily quota -------------------------------------------------------------------
+        //
+        // This number is not "traffic". It is `workersInvocationsAdaptive.sum.requests` for the
+        // whole Cloudflare account since 00:00 UTC -- every request served by every panel on it --
+        // and the denominator is the free plan's 100,000/day. It used to be a bare `12400 / 100,000`
+        // behind a row labelled "مصرف روزانه": the one number on this screen whose meaning cannot
+        // be guessed, and the one that silently ends the user's day when it runs out.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 70.dp)
+                .height(0.5.dp)
+                .background(com.mlmvpn.scanner.ui.settings.Ios.Separator)
+        )
+        val quotaFraction = (usageData / 100_000f).coerceIn(0f, 1f)
+        val quotaTone = when {
+            quotaFraction >= 0.9f -> com.mlmvpn.scanner.ui.settings.Ios.Red
+            quotaFraction >= 0.7f -> YellowWarn
+            else -> GreenOk
+        }
+        val loadUsage: () -> Unit = {
+            isLoadingUsage = true
+            scope.launch {
+                val result = cloudManager.getUsage(account)
+                isLoadingUsage = false
+                if (result.first) {
+                    usageData = result.second.toFloatOrNull() ?: 0f
+                } else {
+                    android.widget.Toast.makeText(context, result.second, android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable {
+                    showUsage = !showUsage
+                    if (showUsage && usageData == 0f) loadUsage()
+                }
+                .padding(horizontal = 16.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(30.dp)
+                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(9.dp))
+                    .background(Color.White.copy(alpha = 0.09f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Default.DataUsage,
+                    contentDescription = null,
+                    tint = TextMuted,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    stringResource(R.string.cloud_daily_usage),
+                    color = TextPrimary,
+                    fontSize = 15.sp,
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    S(R.string.cloudflare_s_free_allowance_for_this_whole),
+                    color = TextMuted,
+                    fontSize = 11.sp,
+                )
+            }
+            when {
+                isLoadingUsage -> CircularProgressIndicator(
+                    modifier = Modifier.size(15.dp),
+                    color = TextMuted,
+                    strokeWidth = 2.dp,
+                )
+                usageData > 0f -> Text(
+                    S(R.string.str) + faCount((quotaFraction * 100).toInt()),
+                    color = quotaTone,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                else -> Text(S(R.string.show), color = TextMuted, fontSize = 15.sp)
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Icon(
+                if (showUsage) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                contentDescription = null,
+                tint = com.mlmvpn.scanner.ui.settings.Ios.Chevron,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+
+        AnimatedVisibility(visible = showUsage) {
+            Column(modifier = Modifier.fillMaxWidth().padding(start = 57.dp, end = 16.dp, bottom = 14.dp)) {
+                val usagePercent by animateFloatAsState(
+                    targetValue = quotaFraction,
+                    animationSpec = tween(700),
+                )
+                LinearProgressIndicator(
+                    progress = usagePercent,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(CircleShape),
+                    color = quotaTone,
+                    trackColor = Color.White.copy(alpha = 0.10f),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(
+                        faGrouped(usageData.toInt()) + S(R.string.of) + faGrouped(100_000),
+                        color = TextPrimary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        faGrouped((100_000 - usageData.toInt()).coerceAtLeast(0)) + S(R.string.left),
+                        color = TextMuted,
+                        fontSize = 12.sp,
+                    )
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    S(R.string.this_number_is_not_data_usage_it) +
+                        S(R.string.cloudflare_today_each_time_you_connect_to) +
+                        S(R.string.request_and_nothing_is_added_while_you) +
+                        S(R.string.every_disconnect_and_reconnect_and_every_switch),
+                    color = TextMuted,
+                    fontSize = 11.sp,
+                    lineHeight = 18.sp,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    S(R.string.the_free_allowance_is_100_000_requests) +
+                        S(R.string.together_not_each_on_its_own_it) +
+                        S(R.string.this_account_s_configs_will_not_connect) +
+                        S(R.string.cloudflare_account_and_spread_the_load_across),
+                    color = TextMuted,
+                    fontSize = 11.sp,
+                    lineHeight = 18.sp,
+                )
+                Spacer(modifier = Modifier.height(11.dp))
+                Row(
+                    modifier = Modifier
+                        .clip(com.mlmvpn.scanner.ui.theme.BadgeShape)
+                        .clickable(enabled = !isLoadingUsage) { loadUsage() }
+                        .padding(vertical = 4.dp, horizontal = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Default.Refresh,
+                        contentDescription = null,
+                        tint = TextPrimary,
+                        modifier = Modifier.size(15.dp),
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(S(R.string.refresh), color = TextPrimary, fontSize = 13.sp)
                 }
             }
         }
 
-        // Usage Panel
-        AnimatedVisibility(visible = showUsage) {
-            Column(modifier = Modifier.fillMaxWidth().background(Color(0xFF1A1A1A)).border(1.dp, BorderDark).padding(16.dp)) {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(stringResource(R.string.cloud_free_daily_usage), color = TextMuted, fontSize = 12.sp)
-                    Text("${usageData.toInt()} / 100,000", color = Primary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                val usagePercent by animateFloatAsState(targetValue = usageData / 100000f, animationSpec = tween(1000))
-                Box(modifier = Modifier.fillMaxWidth().height(8.dp).background(BgDark, CircleShape).border(1.dp, BorderDark, CircleShape)) {
-                    Box(modifier = Modifier.fillMaxHeight().fillMaxWidth(usagePercent).background(Primary, CircleShape))
-                }
-            }
-        }
 
         // Cloud Groups List
+        //
+        // Rows that push a page, not expandable cards with three differently-sized buttons on a
+        // 40dp strip. Everything a group can do is on its own page now -- including combining it
+        // for speed, which had nowhere to live here at all.
         if (cloudGroups.isNotEmpty()) {
-            Divider(color = BorderDark)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 70.dp)
+                    .height(0.5.dp)
+                    .background(com.mlmvpn.scanner.ui.settings.Ios.Separator)
+            )
             Row(
-                modifier = Modifier.fillMaxWidth().clickable { isExpanded = !isExpanded }.padding(12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Layers, contentDescription = null, tint = TextMuted, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(stringResource(R.string.cloud_received_groups), color = TextPrimary, fontSize = 14.sp)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Box(modifier = Modifier.background(BgDark, RoundedCornerShape(4.dp)).border(1.dp, BorderDark, RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp)) {
-                        Text("${cloudGroups.size}", color = Primary, fontSize = 12.sp)
-                    }
-                }
-                Icon(if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, contentDescription = null, tint = TextMuted)
+                Icon(
+                    Icons.Default.Layers,
+                    contentDescription = null,
+                    tint = TextMuted,
+                    modifier = Modifier.size(15.dp),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    stringResource(R.string.cloud_received_groups),
+                    color = TextMuted,
+                    fontSize = 12.sp,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    com.mlmvpn.scanner.ui.faCount(cloudGroups.size),
+                    color = TextMuted,
+                    fontSize = 12.sp,
+                )
             }
-            
-            AnimatedVisibility(visible = isExpanded) {
-                Column(modifier = Modifier.fillMaxWidth().background(BgDark).padding(8.dp)) {
-                    cloudGroups.forEachIndexed { index, group ->
-                        Column(
-                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).background(SurfaceDark, RoundedCornerShape(12.dp)).border(1.dp, BorderDark, RoundedCornerShape(12.dp))
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(12.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+
+            cloudGroups.forEach { group ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 70.dp)
+                        .height(0.5.dp)
+                        .background(com.mlmvpn.scanner.ui.settings.Ios.Separator)
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onOpenGroup(group.id) }
+                        .padding(horizontal = 16.dp, vertical = 11.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    com.mlmvpn.scanner.ui.settings.SettingsGlyph(
+                        Icons.Default.Layers,
+                        com.mlmvpn.scanner.ui.settings.Ios.Indigo,
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            group.title,
+                            color = TextPrimary,
+                            fontSize = 15.sp,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        )
+                        Spacer(modifier = Modifier.height(3.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            PanelBadge(group.nodes.firstOrNull()?.engineType ?: "BPB")
+                            Spacer(modifier = Modifier.width(6.dp))
+                            // "2026-09-02 20:49" is two Latin runs with a space between them, and
+                            // in an RTL paragraph that space lets the clock walk in front of the
+                            // date. The stamp is LTR content; it gets an LTR context.
+                            androidx.compose.runtime.CompositionLocalProvider(
+                                androidx.compose.ui.platform.LocalLayoutDirection provides
+                                    androidx.compose.ui.unit.LayoutDirection.Ltr
                             ) {
-                                Column {
-                                    Text(stringResource(R.string.cloud_group_nodes_count, group.title, group.nodes.size), color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                                    val engine = group.nodes.firstOrNull()?.engineType ?: "BPB"
-                                    Text("$engine - ${group.date}", color = TextMuted, fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
-                                }
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    IconButton(onClick = { 
-                                        val nodeManager = com.mlmvpn.scanner.data.NodeManager(context)
-                                        // Avoid duplicating nodes if possible
-                                        val existingUris = nodeManager.nodes.map { it.uri }.toSet()
-                                        var added = 0
-                                        group.nodes.forEach { n ->
-                                            if (!existingUris.contains(n.uri)) {
-                                                nodeManager.nodes.add(n.copy(id = java.util.UUID.randomUUID().toString(), groupTitle = group.title))
-                                                added++
-                                            }
-                                        }
-                                        nodeManager.saveNodes()
-                                        if (added > 0) {
-                                            android.widget.Toast.makeText(context, context.getString(R.string.cloud_nodes_added_to_connection_list, added), android.widget.Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            android.widget.Toast.makeText(context, context.getString(R.string.cloud_nodes_already_added), android.widget.Toast.LENGTH_SHORT).show()
-                                        }
-                                    }, modifier = Modifier.size(28.dp).background(BgDark, RoundedCornerShape(8.dp)).border(1.dp, BorderDark, RoundedCornerShape(8.dp))) {
-                                        Icon(
-                                            Icons.Default.ArrowForward,
-                                            contentDescription = "Add Nodes",
-                                            tint = GreenOk,
-                                            modifier = Modifier.size(14.dp).scale(if (androidx.compose.ui.platform.LocalLayoutDirection.current == androidx.compose.ui.unit.LayoutDirection.Rtl) -1f else 1f)
-                                        )
-                                    }
-                                    
-                                    IconButton(onClick = { 
-                                        groupManager.cloudGroups.remove(group)
-                                        groupManager.saveCloudGroups()
-                                        onGroupsUpdated()
-                                        android.widget.Toast.makeText(context, context.getString(R.string.cloud_group_deleted), android.widget.Toast.LENGTH_SHORT).show()
-                                    }, modifier = Modifier.size(28.dp).background(BgDark, RoundedCornerShape(8.dp)).border(1.dp, BorderDark, RoundedCornerShape(8.dp))) {
-                                        Icon(Icons.Default.Delete, contentDescription = "Delete", tint = TextMuted, modifier = Modifier.size(14.dp))
-                                    }
-                                }
-                            }
-                            
-                            Row(
-                                modifier = Modifier.fillMaxWidth().background(BgDark.copy(alpha = 0.3f)).padding(8.dp),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                group.nodes.take(3).forEach { n ->
-                                    Box(modifier = Modifier.background(Color(0xFF1A1A1A), RoundedCornerShape(4.dp)).border(1.dp, BorderDark, RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 4.dp)) {
-                                        Text(n.name.take(15), color = TextMuted, fontSize = 10.sp, maxLines = 1)
-                                    }
-                                }
-                                if (group.nodes.size > 3) {
-                                    Box(modifier = Modifier.background(Color(0xFF1A1A1A), RoundedCornerShape(4.dp)).border(1.dp, BorderDark, RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 4.dp)) {
-                                        Text("+${group.nodes.size - 3}", color = TextMuted, fontSize = 10.sp)
-                                    }
-                                }
+                                Text(group.date, color = TextMuted, fontSize = 11.sp)
                             }
                         }
                     }
+                    Text(
+                        com.mlmvpn.scanner.ui.faCount(group.nodes.size),
+                        color = TextMuted,
+                        fontSize = 14.sp,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Icon(
+                        Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = com.mlmvpn.scanner.ui.settings.Ios.Chevron,
+                        modifier = Modifier
+                            .size(17.dp)
+                            .scale(
+                                scaleX = if (androidx.compose.ui.platform.LocalLayoutDirection.current ==
+                                    androidx.compose.ui.unit.LayoutDirection.Rtl) -1f else 1f,
+                                scaleY = 1f,
+                            ),
+                    )
                 }
             }
         }
     }
     } // Closes the main Column
 
+    // Deleting a worker cannot be undone from here, and every config already handed out from that
+    // panel stops working the moment it goes -- so it is said plainly before it happens.
+    confirmRemove?.let { key ->
+        val panelName = when (key) {
+            "BPB" -> "BPB"
+            "EDG" -> "EDG"
+            "NHN" -> "Nahan"
+            else -> "MLM"
+        }
+        com.mlmvpn.scanner.ui.settings.IosAlert(
+            title = S(R.string.delete_the_panelname_panel, panelName),
+            // The MLM panel of a Config Studio account IS Config Studio's engine there.
+            message = if (key == "MLM" && account.isStudioManaged) S(R.string.cloud_mlm_remove_studio_body)
+            else S(R.string.this_panel_s_worker_will_be_removed) +
+                S(R.string.this_panel_will_stop_working_you_can),
+            onDismiss = { confirmRemove = null },
+            actions = listOf(
+                com.mlmvpn.scanner.ui.settings.IosAlertAction(S(R.string.cancel), onClick = { confirmRemove = null }),
+                com.mlmvpn.scanner.ui.settings.IosAlertAction(
+                    S(R.string.delete_2),
+                    onClick = { removePanel(key); confirmRemove = null },
+                    destructive = true,
+                ),
+            ),
+        )
+    }
+
     if (showSubdomainError) {
         AlertDialog(
             onDismissRequest = { showSubdomainError = false },
-            containerColor = SurfaceDark,
+            containerColor = DialogSurface,
+            modifier = androidx.compose.ui.Modifier.border(
+                0.7.dp,
+                androidx.compose.ui.graphics.Color.White.copy(alpha = 0.15f),
+                CardShape,
+            ),
+                shape = CardShape,
             title = { Text(stringResource(R.string.cloud_manual_change_required), color = TextPrimary) },
             text = {
                 Text(
@@ -1204,9 +2018,9 @@ fun AccountGroupCard(
                         context.startActivity(intent)
                         showSubdomainError = false
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Primary)
-                ) {
-                    Text(stringResource(R.string.cloud_login_to_cloudflare), color = BgDark)
+                    colors = iosButtonColors(Primary),
+                    border = iosButtonBorder(Primary)) {
+                    Text(stringResource(R.string.cloud_login_to_cloudflare),)
                 }
             },
             dismissButton = {
@@ -1220,7 +2034,13 @@ fun AccountGroupCard(
     if (subdomainCreationError.isNotEmpty()) {
         AlertDialog(
             onDismissRequest = { subdomainCreationError = "" },
-            containerColor = SurfaceDark,
+            containerColor = DialogSurface,
+            modifier = androidx.compose.ui.Modifier.border(
+                0.7.dp,
+                androidx.compose.ui.graphics.Color.White.copy(alpha = 0.15f),
+                CardShape,
+            ),
+                shape = CardShape,
             title = { Text(stringResource(R.string.cloud_error_creating_subdomain), color = TextPrimary) },
             text = {
                 val errorMsg = subdomainCreationError
@@ -1247,9 +2067,9 @@ fun AccountGroupCard(
                         context.startActivity(intent)
                         subdomainCreationError = ""
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Primary)
-                ) {
-                    Text(stringResource(R.string.cloud_login_to_cloudflare), color = BgDark)
+                    colors = iosButtonColors(Primary),
+                    border = iosButtonBorder(Primary)) {
+                    Text(stringResource(R.string.cloud_login_to_cloudflare),)
                 }
             },
             dismissButton = {
@@ -1263,7 +2083,13 @@ fun AccountGroupCard(
     if (showEmailModal) {
         AlertDialog(
             onDismissRequest = { showEmailModal = false },
-            containerColor = SurfaceDark,
+            containerColor = DialogSurface,
+            modifier = androidx.compose.ui.Modifier.border(
+                0.7.dp,
+                androidx.compose.ui.graphics.Color.White.copy(alpha = 0.15f),
+                CardShape,
+            ),
+                shape = CardShape,
             title = { Text(stringResource(R.string.cloud_verify_cloudflare_email), color = TextPrimary) },
             text = {
                 Column {
@@ -1289,10 +2115,11 @@ fun AccountGroupCard(
                             val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
                             context.startActivity(intent)
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = Primary),
+                        colors = iosButtonColors(Primary),
+                        border = iosButtonBorder(Primary),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text(stringResource(R.string.cloud_login_cloudflare_profile), color = BgDark)
+                        Text(stringResource(R.string.cloud_login_cloudflare_profile),)
                     }
                     
                     Button(
@@ -1312,13 +2139,14 @@ fun AccountGroupCard(
                                 }
                             }
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = GreenOk),
+                        colors = iosButtonColors(GreenOk),
+                        border = iosButtonBorder(GreenOk),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         if (isCheckingStatus) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp), color = BgDark)
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp),)
                         } else {
-                            Text(stringResource(R.string.cloud_check_verification_status), color = BgDark)
+                            Text(stringResource(R.string.cloud_check_verification_status),)
                         }
                     }
                 }
@@ -1334,3 +2162,110 @@ fun AccountGroupCard(
 
 }
 }
+
+
+/**
+ * The foot of a cloud group card: hand these configs to V2Ray, and get there.
+ *
+ * Three states, and each one is readable without pressing anything:
+ *
+ *  - nothing transferred yet: a labelled button saying how many configs it will add.
+ *  - some new ones since last time: the same button, counting only what is actually new, so a
+ *    group that gained two configs does not look identical to one that gained none.
+ *  - everything already there: no button at all, just a confirmation and the way into V2Ray.
+ *
+ * The old green arrow could only express the first state; discovering the third meant pressing it
+ * and reading a toast.
+ */
+@Composable
+private fun CloudGroupHandoff(
+    group: com.mlmvpn.scanner.data.CloudGroup,
+    knownUris: Set<String>,
+    onAdded: (Set<String>) -> Unit,
+    onOpenV2Ray: () -> Unit,
+) {
+    val context = LocalContext.current
+    val pending = group.nodes.count { it.uri !in knownUris }
+    val allThere = pending == 0 && group.nodes.isNotEmpty()
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 8.dp, end = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (allThere) {
+            Icon(
+                Icons.Default.CheckCircle,
+                contentDescription = null,
+                tint = GreenOk,
+                modifier = Modifier.size(16.dp),
+            )
+            Text(
+                stringResource(R.string.cloud_group_in_v2ray),
+                color = TextMuted,
+                fontSize = 12.sp,
+                modifier = Modifier.weight(1f),
+            )
+        } else {
+            Button(
+                onClick = {
+                    val nodeManager = com.mlmvpn.scanner.data.NodeManager(context)
+                    val existing = nodeManager.nodes.map { it.uri }.toSet()
+                    group.nodes.forEach { n ->
+                        if (n.uri !in existing) {
+                            nodeManager.nodes.add(
+                                n.copy(
+                                    id = java.util.UUID.randomUUID().toString(),
+                                    groupTitle = group.title,
+                                )
+                            )
+                        }
+                    }
+                    nodeManager.saveNodes()
+                    // Report the new truth to the section so every row re-reads its own state,
+                    // including any other group that shares these configs.
+                    onAdded(nodeManager.nodes.map { it.uri }.toSet())
+                },
+                modifier = Modifier.weight(1f).height(40.dp),
+                colors = iosButtonColors(Primary),
+                border = iosButtonBorder(Primary),
+                shape = ControlShape,
+                contentPadding = PaddingValues(horizontal = 12.dp),
+            ) {
+                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    stringResource(R.string.cloud_group_send_to_v2ray, pending),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                )
+            }
+        }
+
+        // Always available, whether or not anything was just added: this is the section's way
+        // into the list these configs live in.
+        TextButton(
+            onClick = onOpenV2Ray,
+            colors = androidx.compose.material3.ButtonDefaults.textButtonColors(contentColor = Primary),
+            contentPadding = PaddingValues(horizontal = 10.dp),
+        ) {
+            Text(stringResource(R.string.cloud_open_v2ray), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Icon(
+                Icons.Default.ChevronLeft,
+                contentDescription = null,
+                modifier = Modifier
+                    .size(16.dp)
+                    // Points the way the reader is going: leading edge in RTL, trailing in LTR.
+                    .scale(
+                        if (androidx.compose.ui.platform.LocalLayoutDirection.current ==
+                            androidx.compose.ui.unit.LayoutDirection.Rtl
+                        ) 1f else -1f
+                    ),
+            )
+        }
+    }
+}
+

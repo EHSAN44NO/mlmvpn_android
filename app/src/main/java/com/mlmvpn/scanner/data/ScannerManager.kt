@@ -6,10 +6,25 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import com.mlmvpn.scanner.ui.ScannedIP
 import com.mlmvpn.scanner.utils.NetworkWatchdog
+import com.mlmvpn.scanner.utils.ScanPreflight
 
 object ScannerManager {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var scanJob: Job? = null
+
+    /**
+     * Which run owns the shared state.
+     *
+     * Cancelling a scan does not stop it instantly -- the job unwinds through its own `finally`,
+     * on another thread, some milliseconds later. That `finally` writes the results, the archive
+     * and the phase, and it used to do so unconditionally: pressing "cancel and rescan" cleared
+     * the list and then watched the dying run put it straight back, and starting a second scan
+     * quickly enough had the first one's teardown flip `isScanning` to false underneath it.
+     *
+     * Every run captures this counter on the way in and checks it before touching anything shared.
+     * Stopping or restarting bumps it, so a superseded run finishes quietly and changes nothing.
+     */
+    private var generation = 0
 
     private val _isScanning = MutableStateFlow(false)
     val isScanning = _isScanning.asStateFlow()
@@ -20,6 +35,16 @@ object ScannerManager {
     private val _progress = MutableStateFlow(0f)
     val progress = _progress.asStateFlow()
 
+    /**
+     * The scan's own account of itself: probed, alive, tested, healthy.
+     *
+     * [progress] is kept because a single number is still the right thing for a compact readout,
+     * but it can only ever describe one half of a pipeline that runs both halves at once -- which
+     * is why the screen reads this instead.
+     */
+    private val _stats = MutableStateFlow(CloudflareScanner.ScanStats())
+    val stats = _stats.asStateFlow()
+
     private val _foundCount = MutableStateFlow(0)
     val foundCount = _foundCount.asStateFlow()
 
@@ -28,13 +53,43 @@ object ScannerManager {
 
     val globalBaseConfig = MutableStateFlow("")
 
+    /**
+     * The cloud group the base config was picked from, when it was picked from one.
+     *
+     * A combine multiplies EVERY config in a group against every clean IP, which is what makes it
+     * worth doing; knowing only the one URI in the field would limit it to a single server.
+     */
+    val selectedSourceGroupId = MutableStateFlow("")
+
+    /** What the scan optimises for. Persisted by the screen, read here when a scan starts. */
+    val strategy = MutableStateFlow(ScanStrategy.FAST_CONFIG)
+
+    /**
+     * The ports the configs being combined actually use.
+     *
+     * Derived from the source group rather than assumed: a group whose workers answer on 2053 is
+     * unusable if the scan only ever probes 443, and probing every Cloudflare TLS port for every
+     * address would multiply the scan by six for no reason on the common single-port group.
+     */
+    val scanPorts = MutableStateFlow(listOf(443))
+
+    /**
+     * True while the TCP sweep is pinned to the real line under somebody else's VPN.
+     *
+     * The screen shows it, because the two halves of the scan are then measuring different things:
+     * the sweep sees the real link, the verification still goes through their tunnel.
+     */
+    private val _pinnedToRealLine = MutableStateFlow(false)
+    val pinnedToRealLine = _pinnedToRealLine.asStateFlow()
+
     private val _lastScanNewCount = MutableStateFlow(0)
     val lastScanNewCount = _lastScanNewCount.asStateFlow()
 
     private val _lastScanDuplicateCount = MutableStateFlow(0)
     val lastScanDuplicateCount = _lastScanDuplicateCount.asStateFlow()
 
-    private val _healthTestResults = MutableStateFlow<Pair<Int, Int>?>(null) // Pair(total, blocked)
+    /** (tested, blocked) after a health test, or null when there is nothing to clean up. */
+    private val _healthTestResults = MutableStateFlow<Pair<Int, Int>?>(null)
     val healthTestResults = _healthTestResults.asStateFlow()
 
     private val _pauseMessage = MutableStateFlow<String?>(null)
@@ -43,56 +98,132 @@ object ScannerManager {
     private var lastHealthTestIps: List<String>? = null
     private var lastHealthTestGoodIps: List<String>? = null
 
-    fun startScan(context: android.content.Context, baseConfig: String, limit: Int = 50, successTarget: Int = 10, customIps: List<String>? = null, isHealthTest: Boolean = false) {
+    /**
+     * Start a scan.
+     *
+     * @param testBudget the ceiling on definitive (proxied) tests -- the "test limit" field.
+     * @param successTarget how many working IPs end the scan early.
+     * @param customIps a fixed list to test instead of generating one from the Cloudflare ranges.
+     * @param isHealthTest re-testing an archive rather than discovering new addresses. Changes the
+     *   contract: every address is tested (no early stop), because the question is which of THESE
+     *   still work, and an answer based on a partial sweep would be used to delete the rest.
+     * @param useRealLine pin the TCP sweep to the non-VPN interface. Only meaningful when a
+     *   foreign VPN holds the default route and the user chose to scan anyway.
+     */
+    fun startScan(
+        context: android.content.Context,
+        baseConfig: String,
+        testBudget: Int = 50,
+        successTarget: Int = 10,
+        customIps: List<String>? = null,
+        isHealthTest: Boolean = false,
+        useRealLine: Boolean = false,
+    ) {
         if (_isScanning.value) return
+        val myGeneration = ++generation
         _isScanning.value = true
         _scannedIPs.value = emptyList()
         _progress.value = 0f
+        _stats.value = CloudflareScanner.ScanStats()
         _phase.value = CloudflareScanner.ScanPhase.IDLE
         _healthTestResults.value = null
         _lastScanNewCount.value = 0
         _lastScanDuplicateCount.value = 0
-        lastHealthTestIps = if (isHealthTest) customIps else null
+        // Both of these used to survive into the next scan. A stale count showed the previous
+        // run's total for the first half-second, and a pause banner left over from a run that was
+        // cancelled while offline stayed on screen accusing a perfectly healthy connection.
+        _foundCount.value = 0
+        _pauseMessage.value = null
+        _pinnedToRealLine.value = false
+        lastHealthTestIps = if (isHealthTest) customIps?.distinct() else null
+        lastHealthTestGoodIps = null
 
-        val watchdog = NetworkWatchdog(context)
+        // applicationContext, not the caller's. This scope outlives every screen, so holding the
+        // Activity here leaked it for the whole length of a scan.
+        val appContext = context.applicationContext
+        val watchdog = NetworkWatchdog(appContext)
         watchdog.start()
+        // A scan can run for minutes. Without a foreground service the platform is free to freeze
+        // the process the moment the user looks at another app, and a frozen scan does not fail --
+        // it silently marks everything it has not reached yet as dead.
+        IpScanService.start(appContext)
 
         scanJob = scope.launch(Dispatchers.Default) {
             try {
                 val scanner = CloudflareScanner()
                 val ranges = CloudflareScanner.DEFAULT_RANGES
-                val ipsToScan = customIps ?: scanner.generateIPs(ranges)
+                val ipsToScan = (customIps?.distinct() ?: scanner.generateIPs(ranges))
+
+                // A health test asks a closed question -- which of THESE addresses still work --
+                // so it has to try all of them. Stopping at the usual target and then reporting
+                // "the rest are blocked" was how a 60-address archive got cut to 10.
+                val effectiveTarget = if (isHealthTest) ipsToScan.size else successTarget
+                val effectiveBudget = if (isHealthTest) ipsToScan.size else testBudget
+
+                // Under a foreign VPN the sweep can still see the real link, which is the whole
+                // reason "scan anyway" is offered rather than merely permitted.
+                val probeNetwork = if (useRealLine) ScanPreflight.underlyingNetwork(appContext) else null
+                if (probeNetwork != null) _pinnedToRealLine.value = true
 
                 // Map to keep track of uniqueness based on IP string
                 val currentMap = java.util.concurrent.ConcurrentHashMap<String, ScannedIP>()
                 val idCounter = java.util.concurrent.atomic.AtomicInteger(0)
 
+                fun snapshot(): List<ScannedIP> = currentMap.values
+                    .filter { it.downloadSpeed > 0 }
+                    .sortedBy { it.downloadSpeed }
+                    // The cap is a display concern for a discovery scan; a health test must show
+                    // every address that answered, since that list is what replaces the archive.
+                    .let { if (isHealthTest) it else it.take(effectiveTarget) }
+
                 val uiUpdateJob = launch {
                     while (isActive) {
                         delay(500) // Update UI every 500ms
+                        if (myGeneration != generation) break
                         _foundCount.value = currentMap.size
-                        if (_phase.value == CloudflareScanner.ScanPhase.DONE) {
-                            val sortedList = currentMap.values.filter { it.downloadSpeed > 0 }.sortedBy { it.downloadSpeed }.take(successTarget)
-                            _scannedIPs.value = sortedList
-                        } else {
-                            _scannedIPs.value = emptyList() // Hide list during scan to prevent UI freeze
-                        }
+                        // Live, not hidden until the end. The pipeline verifies exits while it
+                        // is still probing, so there is something true to show the whole time --
+                        // the old two-phase scan had nothing until the very last moment, which is
+                        // why this used to blank the list during a scan.
+                        _scannedIPs.value = snapshot()
                     }
                 }
 
                 try {
                     scanner.startScan(
-                        context = context,
+                        context = appContext,
                         ips = ipsToScan,
                         baseConfig = baseConfig,
-                        limit = limit,
-                        successTarget = successTarget,
+                        testBudget = effectiveBudget,
+                        successTarget = effectiveTarget,
+                        strategy = strategy.value,
+                        ports = scanPorts.value,
                         watchdog = watchdog,
+                        probeNetwork = probeNetwork,
+                        healthTest = isHealthTest,
                         onPhaseChange = { newPhase ->
-                            _phase.value = newPhase
+                            if (myGeneration == generation) _phase.value = newPhase
                         },
-                        onProgress = { current, total ->
-                            _progress.value = if (total > 0) (current.toFloat() / total.toFloat()) * 100f else 0f
+                        onStats = { s ->
+                            if (myGeneration == generation) {
+                                _stats.value = s
+                                val probe = if (s.total > 0) s.probed.toFloat() / s.total else 0f
+                                _progress.value = if (s.healthTest) {
+                                    // A health test ends when it has been through the LIST, and
+                                    // most of a stale archive is expected to fail -- so weighting
+                                    // this towards "healthy found" would have a run that worked
+                                    // perfectly finish at 20%.
+                                    probe.coerceIn(0f, 1f) * 100f
+                                } else {
+                                    // A single figure for the compact readout. Weighted towards
+                                    // verification because that is what actually ends the scan:
+                                    // the probes can finish long before the last candidate is
+                                    // tested.
+                                    val verify =
+                                        if (s.target > 0) s.healthy.toFloat() / s.target else 0f
+                                    (probe * 0.3f + verify * 0.7f).coerceIn(0f, 1f) * 100f
+                                }
+                            }
                         },
                         onIpFound = { result ->
                             // Update our map silently
@@ -100,7 +231,8 @@ object ScannerManager {
                             if (existing != null) {
                                 currentMap[result.ip] = existing.copy(
                                     ping = result.ping,
-                                    downloadSpeed = result.downloadSpeed
+                                    downloadSpeed = result.downloadSpeed,
+                                    port = result.port
                                 )
                             } else {
                                 currentMap[result.ip] = ScannedIP(
@@ -108,77 +240,107 @@ object ScannerManager {
                                     ip = result.ip,
                                     ping = result.ping,
                                     downloadSpeed = result.downloadSpeed,
+                                    port = result.port,
                                     selected = true
                                 )
                             }
                         },
                         onPaused = { message ->
-                            _pauseMessage.value = message
+                            if (myGeneration == generation) _pauseMessage.value = message
                         }
                     )
                 } finally {
                     uiUpdateJob.cancel()
                     watchdog.stop()
-                    val sortedList = currentMap.values.filter { it.downloadSpeed > 0 }.sortedBy { it.downloadSpeed }.take(successTarget)
-                    _scannedIPs.value = sortedList
+                    if (myGeneration == generation) {
+                        val sortedList = snapshot()
+                        _scannedIPs.value = sortedList
+                        _pauseMessage.value = null
 
-                    if (isHealthTest && lastHealthTestIps != null) {
-                        val goodIps = sortedList.map { it.ip }
-                        lastHealthTestGoodIps = goodIps
-                        val blockedCount = lastHealthTestIps!!.size - goodIps.size
-                        if (blockedCount > 0) {
-                            _healthTestResults.value = Pair(lastHealthTestIps!!.size, blockedCount)
-                        }
-                    } else if (sortedList.isNotEmpty()) {
-                        try {
-                            val gm = GroupManager(context)
-                            gm.loadIpArchives()
-                            val newIps = sortedList.map { it.ip }
-                            val existingArchive = gm.ipArchives.find { it.id == "unified_archive" }
-                            val dateStr = java.text.SimpleDateFormat("yyyy/MM/dd HH:mm", java.util.Locale.US).format(java.util.Date())
-                            
-                            val existingIps = existingArchive?.ips ?: emptyList()
-                            val duplicatesCount = newIps.count { it in existingIps }
-                            val newCount = newIps.size - duplicatesCount
-                            _lastScanNewCount.value = newCount
-                            _lastScanDuplicateCount.value = duplicatesCount
-
-                            if (existingArchive != null) {
-                                val mergedIps = (existingArchive.ips + newIps).distinct()
-                                val updatedArchive = existingArchive.copy(
-                                    date = "Last updated: $dateStr",
-                                    ips = mergedIps
-                                )
-                                val index = gm.ipArchives.indexOf(existingArchive)
-                                gm.ipArchives[index] = updatedArchive
-                            } else {
-                                val archive = IpArchive(
-                                    id = "unified_archive",
-                                    date = "Last updated: $dateStr",
-                                    ips = newIps.distinct()
-                                )
-                                gm.ipArchives.add(archive)
-                            }
-                            gm.saveIpArchives()
-                        } catch (e: Exception) {
-                            e.printStackTrace()
+                        if (isHealthTest) {
+                            recordHealthTest(sortedList)
+                        } else if (sortedList.isNotEmpty()) {
+                            archiveFoundIps(appContext, sortedList)
                         }
                     }
                 }
+            } catch (e: CancellationException) {
+                // The normal way a stopped scan ends.
+                throw e
             } catch (e: Exception) {
                 e.printStackTrace()
             } finally {
-                _isScanning.value = false
-                _phase.value = CloudflareScanner.ScanPhase.DONE
+                if (myGeneration == generation) {
+                    _isScanning.value = false
+                    _phase.value = CloudflareScanner.ScanPhase.DONE
+                    _pauseMessage.value = null
+                }
+                // Unconditional: a superseded run owns no state, but it may well be the only
+                // reason the service is still up, and leaving a foreground notification behind is
+                // a bug the user can see. The service also stops itself when isScanning clears,
+                // so a live run that is still going will simply start it again.
+                if (!_isScanning.value) IpScanService.stop(appContext)
             }
         }
     }
 
+    /**
+     * What the health test found, and what it is therefore safe to say.
+     *
+     * "Blocked" is `tested - answered`, never `archive size - answered`. The two are the same only
+     * when the run actually reached every address; when it did not -- a stop, a lost connection --
+     * the second number invents a verdict for addresses nobody looked at, and the cleanup button
+     * then deletes them.
+     */
+    private fun recordHealthTest(answered: List<ScannedIP>) {
+        val asked = lastHealthTestIps ?: return
+        // PROBED, not tested. An archive address that no longer opens its port fails at the TCP
+        // sweep and never reaches the proxied test at all -- so counting "tested" would say the
+        // run never finished precisely when it found the most blocked addresses. Every address in
+        // the list gets a probe; one that neither opened nor answered is what "blocked" means.
+        val checked = _stats.value.probed.coerceAtMost(asked.size)
+        val goodIps = answered.map { it.ip }
+        lastHealthTestGoodIps = goodIps
+
+        val blocked = (checked - goodIps.size).coerceAtLeast(0)
+        // Nothing to offer if nothing failed, and nothing HONEST to offer if the run did not get
+        // through the whole list: deleting on a partial answer is the data loss this exists to
+        // prevent. A stopped or interrupted test therefore offers no cleanup at all.
+        if (blocked > 0 && checked >= asked.size) {
+            _healthTestResults.value = Pair(checked, blocked)
+        } else {
+            lastHealthTestGoodIps = null
+        }
+    }
+
+    /** Merge a discovery scan's results into the single unified archive. */
+    private fun archiveFoundIps(context: android.content.Context, found: List<ScannedIP>) {
+        try {
+            // One call, so the load/merge/write happens under the archive's own lock rather than
+            // across three steps that another thread's delete could land in the middle of.
+            val (new, duplicates) = GroupManager(context)
+                .mergeIntoUnifiedArchive(found.map { it.ip })
+            _lastScanNewCount.value = new
+            _lastScanDuplicateCount.value = duplicates
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    /**
+     * Stop the running scan.
+     *
+     * The generation bump is what makes this immediate from the caller's point of view: the job
+     * still unwinds on its own schedule, but from here on it owns nothing and writes nothing.
+     */
     fun stopScan() {
+        generation++
         scanJob?.cancel()
+        scanJob = null
         _isScanning.value = false
         _phase.value = CloudflareScanner.ScanPhase.DONE
         _pauseMessage.value = null
+        _pinnedToRealLine.value = false
     }
 
     fun toggleSelection(id: Int) {
@@ -192,29 +354,16 @@ object ScannerManager {
         _scannedIPs.value = emptyList()
         _progress.value = 0f
         _foundCount.value = 0
-    }
-
-    fun setScannedIPs(ips: List<ScannedIP>) {
-        _scannedIPs.value = ips
-        _phase.value = CloudflareScanner.ScanPhase.DONE
+        _stats.value = CloudflareScanner.ScanStats()
+        _phase.value = CloudflareScanner.ScanPhase.IDLE
+        _lastScanNewCount.value = 0
+        _lastScanDuplicateCount.value = 0
     }
 
     fun confirmHealthTestCleanup(context: android.content.Context) {
         val goodIps = lastHealthTestGoodIps ?: return
         try {
-            val gm = GroupManager(context)
-            gm.loadIpArchives()
-            val existingArchive = gm.ipArchives.find { it.id == "unified_archive" }
-            if (existingArchive != null) {
-                val dateStr = java.text.SimpleDateFormat("yyyy/MM/dd HH:mm", java.util.Locale.US).format(java.util.Date())
-                val updatedArchive = existingArchive.copy(
-                    date = "Last updated: $dateStr",
-                    ips = goodIps
-                )
-                val index = gm.ipArchives.indexOf(existingArchive)
-                gm.ipArchives[index] = updatedArchive
-                gm.saveIpArchives()
-            }
+            GroupManager(context).replaceUnifiedArchive(goodIps)
         } catch (e: Exception) {
             e.printStackTrace()
         } finally {

@@ -1,5 +1,7 @@
 package com.mlmvpn.scanner.ui
 
+import com.mlmvpn.scanner.ui.home.HomeWallpaper
+import com.mlmvpn.scanner.ui.home.Wallpapers
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.EaseInCubic
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -33,6 +35,8 @@ import com.mlmvpn.scanner.ui.theme.*
 import kotlinx.coroutines.delay
 import kotlin.math.sin
 import kotlin.random.Random
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
 
 /**
  * Opening animation, built around the app's own mark: the ring draws itself, the M appears,
@@ -47,6 +51,19 @@ import kotlin.random.Random
  * past it. The last one does most of the work — an object moving up against a still background
  * reads as an object being dragged; the same object against descending stars reads as flight.
  */
+/**
+ * Whether the intro has already played in THIS process.
+ *
+ * It has to live outside the composition. `remember` inside setContent is reset by anything that
+ * recreates the activity -- coming back to a backgrounded app the system has since torn down, a
+ * configuration change, our own recreate() after a language or theme switch -- so the animation
+ * replayed on returns that were not launches at all. A plain object field survives every one of
+ * those and is cleared by the only event that should replay it: the process actually ending.
+ */
+object IntroState {
+    @Volatile var played: Boolean = false
+}
+
 @Composable
 fun SplashScreen(onFinished: () -> Unit) {
     val arcSweep = remember { Animatable(0f) }
@@ -107,10 +124,31 @@ fun SplashScreen(onFinished: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Brush.verticalGradient(listOf(Color(0xFF0A101C), BgDark, Color(0xFF0A101C))))
             .alpha(exitAlpha.value),
         contentAlignment = Alignment.Center,
     ) {
+        // The intro paints the WALLPAPER underneath itself, at whatever blur is set, then its own
+        // dark field on top. Two reasons for the pair: it follows the blur setting like every
+        // other surface, and it is opaque, so the home screen behind it does not show through --
+        // made merely translucent, the icons were visible straight through the animation.
+        HomeWallpaper(
+            wallpaperId = Wallpapers.current,
+            blurPercent = Wallpapers.blur,
+            modifier = Modifier.fillMaxSize(),
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color(0xFF0A101C).copy(alpha = 0.90f),
+                            Color(0xFF0A101C).copy(alpha = 0.72f),
+                            Color(0xFF0A101C).copy(alpha = 0.90f),
+                        )
+                    )
+                )
+        )
         // Starfield spans the whole screen so the streaks read as depth, not a decorated box.
         Canvas(modifier = Modifier.fillMaxSize()) {
             if (launch.value <= 0f && ignite.value <= 0f) return@Canvas
@@ -135,6 +173,9 @@ fun SplashScreen(onFinished: () -> Unit) {
 
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
 
+            // The mark's colour is read once, above the Canvas: the palette resolves against
+            // the Appearance setting now, and a DrawScope cannot invoke composables.
+            val markColor = Primary
             Canvas(modifier = Modifier.size(240.dp)) {
                 val cx = size.width / 2f
                 val cy = size.height / 2f
@@ -146,7 +187,7 @@ fun SplashScreen(onFinished: () -> Unit) {
                 val ringAlpha = (1f - morph.value).coerceIn(0f, 1f)
                 if (ringAlpha > 0f) {
                     drawArc(
-                        color = Primary.copy(alpha = ringAlpha),
+                        color = markColor.copy(alpha = ringAlpha),
                         startAngle = 118f,
                         sweepAngle = 304f * arcSweep.value,
                         useCenter = false,
@@ -154,7 +195,7 @@ fun SplashScreen(onFinished: () -> Unit) {
                         size = Size(r * 2, r * 2),
                         style = Stroke(width = stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round),
                     )
-                    drawM(cx, cy, r, stroke, Primary.copy(alpha = markAlpha.value * ringAlpha))
+                    drawM(cx, cy, r, stroke, markColor.copy(alpha = markAlpha.value * ringAlpha))
                 }
 
                 // ---- the dot, and what it becomes ---------------------------------------
@@ -171,7 +212,7 @@ fun SplashScreen(onFinished: () -> Unit) {
                     // The dot swells and thins as the rocket grows out of it.
                     val a = (1f - m / 0.85f).coerceIn(0f, 1f)
                     drawCircle(
-                        color = Primary.copy(alpha = a),
+                        color = markColor.copy(alpha = a),
                         radius = stroke * (1.15f + 1.5f * m) * dotScale.value,
                         center = Offset(cx, dotY),
                         style = Stroke(width = stroke * 0.62f * (1f - m * 0.55f)),
@@ -184,7 +225,7 @@ fun SplashScreen(onFinished: () -> Unit) {
                         drawFlame(scale, ignite.value, flicker, launch.value)
                         // Fades in over the first two thirds, so nose and fins emerge from
                         // inside the dot rather than popping in complete.
-                        drawRocket(scale, Primary, (m / 0.66f).coerceAtMost(1f))
+                        drawRocket(scale, markColor, (m / 0.66f).coerceAtMost(1f))
                     }
                 }
             }
@@ -192,7 +233,7 @@ fun SplashScreen(onFinished: () -> Unit) {
             Spacer(modifier = Modifier.height(64.dp))
 
             Text(
-                text = "با MLMVPN همیشه، در هر شرایطی، متصل بمان",
+                text = S(R.string.with_mlmvpn_stay_connected_always_whatever_the),
                 color = TextPrimary,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Medium,

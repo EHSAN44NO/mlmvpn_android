@@ -10,6 +10,8 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import java.net.InetSocketAddress
 import javax.net.ssl.SSLSocketFactory
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
 
 /**
  * "DNS ضد تحریم شخصی" — a domain-based split tunnel that sends ONLY sanctioned domains
@@ -24,13 +26,131 @@ object AntiSanctionManager {
     private const val PREFS_USER_DOMAINS = "antisanction_user_domains"
     private const val PREFS_REMOVED = "antisanction_removed_defaults"
     private const val PREFS_ACCOUNT_ID = "antisanction_account_id"
+    private const val PREFS_APPS = "antisanction_apps"
+    private const val PREFS_EXIT = "antisanction_exit"
+
+    // --- Where the un-sanctioned traffic comes out -------------------------
+    //
+    // A Cloudflare Worker is free, unlimited and fast, and for most sanctioned services -- GitHub,
+    // Steam, npm, the AI APIs -- it is all that is needed: they check whether the address is
+    // Iranian and nothing else.
+    //
+    // Some services check a second thing. Gemini refuses datacenter and proxy ranges outright, and
+    // a Worker egresses from Cloudflare's own network, so it fails there no matter which country
+    // the colo is in. Measured on the user's own account: with the Worker off the site answers
+    // 403 (sanctioned), with it on the site answers "not available in your country" (the address
+    // is no longer Iranian, and still refused). The EDG worker behaves identically, which rules
+    // out the routing and leaves the address itself.
+    //
+    // VPN Gate is the opposite kind of exit: volunteer-run servers, a large share of them on home
+    // broadband in Japan, Korea and Taiwan. Those are residential addresses, which is exactly what
+    // the datacenter check is looking for the absence of. It is slower and less reliable than a
+    // Worker, which is why it is a choice rather than the default.
+
+    enum class Exit { WORKER, GATEWAY }
+
+    fun exitKind(context: Context): Exit {
+        val raw = PreferenceManager.getDefaultSharedPreferences(context)
+            .getString(PREFS_EXIT, Exit.WORKER.name)
+        return runCatching { Exit.valueOf(raw ?: "") }.getOrDefault(Exit.WORKER)
+    }
+
+    fun setExitKind(context: Context, kind: Exit) {
+        PreferenceManager.getDefaultSharedPreferences(context)
+            .edit().putString(PREFS_EXIT, kind.name).apply()
+    }
+    private const val PREFS_APPS_SEEDED = "antisanction_apps_seeded"
     const val NODE_ID = "ANTISANCTION"
+
+    // --- Sanctioned apps ---------------------------------------------------
+    //
+    // Domain routing cannot reach a native app the way it reaches a browser. Three things get in
+    // its way, and Gemini hits all three: the app speaks QUIC on UDP/443, it resolves through
+    // Google's own resolver rather than the one this tunnel provides (so the fakedns pool never
+    // sees the query and the real IP comes back), and its sign-in and token refresh happen inside
+    // Google Play Services -- a different package, under a different UID, that no domain rule
+    // written for "the Gemini app" will ever match.
+    //
+    // Selecting an app instead routes it by UID at the VpnService layer, which none of that can
+    // slip past. See MyVpnService's builder and [companionsOf].
+
+    /**
+     * Apps worth offering first, by package.
+     *
+     * These are the ones sanctioned by the vendor rather than filtered by the operator -- the
+     * case this feature exists for. Anything else the user installs can be added by hand.
+     */
+    val SUGGESTED_APPS: List<String> = listOf(
+        "com.anthropic.claude",
+        "com.openai.chatgpt",
+        "com.google.android.apps.bard",
+        "com.zhiliaoapp.musically",
+        "com.ss.android.ugc.trill",
+        "com.google.android.apps.gemini",
+        "com.microsoft.copilot",
+        "com.perplexity.app.android",
+    )
+
+    /**
+     * Packages that must ride along when [pkg] is routed.
+     *
+     * A Google app does not carry its own account: sign-in, token refresh and much of its API
+     * traffic run through Play Services. Routing the app alone leaves those requests going out
+     * over the real IP, which is exactly the half the sanction check looks at -- the app then
+     * signs in "successfully" and every call it makes afterwards is refused.
+     */
+    fun companionsOf(pkg: String): List<String> = when {
+        pkg.startsWith("com.google.android.apps.") ->
+            listOf("com.google.android.gms", "com.android.vending")
+        else -> emptyList()
+    }
+
+    /** The packages routed through the worker, including the companions they need. */
+    fun getApps(context: Context): List<String> {
+        seedApps(context)
+        return readSet(context, PREFS_APPS).toList().sorted()
+    }
+
+    fun routedPackages(context: Context): Set<String> {
+        val chosen = getApps(context)
+        return (chosen + chosen.flatMap { companionsOf(it) }).toSet()
+    }
+
+    fun addApp(context: Context, pkg: String) {
+        if (pkg.isBlank()) return
+        val set = readSet(context, PREFS_APPS)
+        set.add(pkg)
+        writeSet(context, PREFS_APPS, set)
+    }
+
+    fun removeApp(context: Context, pkg: String) {
+        val set = readSet(context, PREFS_APPS)
+        set.remove(pkg)
+        writeSet(context, PREFS_APPS, set)
+    }
+
+    /**
+     * On first run, pre-select the suggested apps the user actually has.
+     *
+     * Only once, and recorded separately from the list itself -- otherwise clearing the list
+     * would be undone the next time the screen opened.
+     */
+    private fun seedApps(context: Context) {
+        val prefs = PreferenceManager.getDefaultSharedPreferences(context)
+        if (prefs.getBoolean(PREFS_APPS_SEEDED, false)) return
+        val pm = context.packageManager
+        val present = SUGGESTED_APPS.filter { pkg ->
+            try { pm.getPackageInfo(pkg, 0); true } catch (e: Exception) { false }
+        }
+        if (present.isNotEmpty()) writeSet(context, PREFS_APPS, present.toSet())
+        prefs.edit().putBoolean(PREFS_APPS_SEEDED, true).apply()
+    }
 
     // --- Domain list (bundled defaults + user edits) ------------------------
 
     private fun assetDomains(context: Context): List<String> {
         return try {
-            val raw = context.assets.open("sanction_domains.json").bufferedReader().use { it.readText() }
+            val raw = com.mlmvpn.scanner.store.StoreFiles.open(context, "sanction_domains.json").bufferedReader().use { it.readText() }
             val arr = org.json.JSONObject(raw).optJSONArray("domains") ?: JSONArray()
             (0 until arr.length()).map { arr.getString(it).trim().lowercase() }.filter { it.isNotEmpty() }
         } catch (e: Exception) {
@@ -41,10 +161,16 @@ object AntiSanctionManager {
     private fun readSet(context: Context, key: String): MutableSet<String> {
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
         val json = prefs.getString(key, "[]") ?: "[]"
+        // Domains are case-insensitive; package names are not, and lowercasing one would quietly
+        // stop it matching anything the PackageManager knows about.
+        val fold = key != PREFS_APPS
         val out = linkedSetOf<String>()
         try {
             val arr = JSONArray(json)
-            for (i in 0 until arr.length()) out.add(arr.getString(i).trim().lowercase())
+            for (i in 0 until arr.length()) {
+                val v = arr.getString(i).trim()
+                out.add(if (fold) v.lowercase() else v)
+            }
         } catch (_: Exception) {}
         return out
     }
@@ -136,12 +262,18 @@ object AntiSanctionManager {
         val vless = getExitVless(context) ?: return null
         val config = VpnConfig.parseUri(vless) ?: return null
         val domains = routingDomains(context)
-        if (domains.isEmpty()) return null
+        val apps = routedPackages(context)
+        // With apps selected, MyVpnService puts ONLY those packages in the tunnel -- so anything
+        // arriving here is from an app the user asked to un-sanction, and all of it goes to the
+        // worker. That is what makes the routing immune to QUIC, to the app's own resolver, and
+        // to traffic that leaves under a companion package's UID.
+        if (domains.isEmpty() && apps.isEmpty()) return null
         return XrayJsonGenerator.generateAntiSanctionConfig(
             config = config,
             localPort = localPort,
             sanctionedDomains = domains,
-            backendDns = backendDns
+            backendDns = backendDns,
+            proxyEverything = apps.isNotEmpty(),
         )
     }
 
@@ -157,21 +289,21 @@ object AntiSanctionManager {
 
         // Direct open: TCP ok + HTTP < 400
         if (tcp.first && https.first != null && https.first!! < 400) {
-            return@withContext Report(domain, State.OPEN, "مستقیم باز است — نه تحریم نه فیلتر")
+            return@withContext Report(domain, State.OPEN, S(R.string.direct_access_works_neither_sanctioned_nor_filtered))
         }
         // Network-layer block (reset/timeout) → filtering, not sanction
         if (!tcp.first && (tcp.second == "reset" || tcp.second == "timeout")) {
-            return@withContext Report(domain, State.FILTERED, "فیلتر شبکه‌ای (کار VPN، نه این بخش)")
+            return@withContext Report(domain, State.FILTERED, S(R.string.network_filtering_a_job_for_the_vpn))
         }
         // Geo-block: TLS ok but HTTP 403/451
         if (https.first == 403 || https.first == 451) {
-            return@withContext Report(domain, State.SANCTIONED, "تحریم — دکمه «افزودن» را بزنید تا از کلادفلر باز شود ✅")
+            return@withContext Report(domain, State.SANCTIONED, S(R.string.sanctioned_tap_add_to_open_it_through))
         }
         // TCP ok but TLS reset → SNI filtering
         if (tcp.first && https.first == null && https.second == "reset") {
-            return@withContext Report(domain, State.FILTERED, "فیلتر مبتنی بر SNI (کار VPN)")
+            return@withContext Report(domain, State.FILTERED, S(R.string.sni_based_filtering_a_job_for_the))
         }
-        Report(domain, State.UNKNOWN, "نامشخص — می‌توانید دستی به لیست اضافه کنید")
+        Report(domain, State.UNKNOWN, S(R.string.unclear_you_can_add_it_to_the))
     }
 
     private fun tcpConnect(host: String, port: Int, timeoutMs: Int): Pair<Boolean, String> {

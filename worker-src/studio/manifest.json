@@ -1,0 +1,148 @@
+{
+  "output": "app/src/main/assets/mlm_worker.js",
+  "note": [
+    "Order is significant. The fragments are concatenated verbatim and share ONE top-level",
+    "scope -- exactly as the single file did -- so there are no imports or exports between",
+    "them and a fragment may freely use anything declared in an earlier one.",
+    "",
+    "The split was made byte-identical on purpose: `node scripts/build-studio-worker.js --check`",
+    "reproduces the committed asset exactly. That is what makes this a refactor rather than a",
+    "rewrite, on a worker that is already deployed on live accounts where a subtle difference",
+    "would only show up as someone's tunnel breaking after a redeploy.",
+    "",
+    "Never edit app/src/main/assets/mlm_worker.js directly. Edit a fragment and rebuild; the",
+    "Gradle `checkWorkerAsset` task fails the build if the two disagree."
+  ],
+  "parts": [
+    {
+      "file": "01-globals.js",
+      "describes": "module import, isolate-level caches, tuning constants, DEFAULT_RELAY"
+    },
+    {
+      "file": "02-env.js",
+      "describes": "logging, the duck-typed D1 binding resolver"
+    },
+    {
+      "file": "03-entry.js",
+      "describes": "export default fetch(), handleRequest routing"
+    },
+    {
+      "file": "04-router.js",
+      "describes": "Router: every route, the API surface, auth, the camouflage fallback"
+    },
+    {
+      "file": "04a-studio-api.js",
+      "describes": "build 6: the /{STUDIO_ROUTE}/v1/* control plane — bearer auth, bootstrap, health, keys"
+    },
+    {
+      "file": "04b-studio-users.js",
+      "describes": "build 6: /v1/users — keyset list, ?since= sync with tombstones, CRUD, renew"
+    },
+    {
+      "file": "04c-studio-sub.js",
+      "describes": "build 6: configs, the /s/{token} subscription and its Subscription-Userinfo headers"
+    },
+    {
+      "file": "04d-studio-page.js",
+      "describes": "build 6: the Persian /p/{token} page a subscriber opens"
+    },
+    {
+      "file": "04e-studio-plans.js",
+      "describes": "build 6: /v1/plans — «بسته», the idempotent fleet-sync write path, and :apply"
+    },
+    {
+      "file": "04f-studio-analytics.js",
+      "describes": "build 6: /v1/analytics and /v1/audit -- rollup reads only, never the users table"
+    },
+    {
+      "file": "04g-studio-nodes.js",
+      "describes": "build 6: /v1/nodes -- the endpoints a subscription fans out over, and the scan handover"
+    },
+    {
+      "file": "04h-studio-templates.js",
+      "describes": "build 9: /v1/templates -- «قالب», the config shape reused by name, fleet-synced like plans"
+    },
+    {
+      "file": "04i-studio-nodegroups.js",
+      "describes": "build 10: /v1/node-groups -- the ORDER endpoints are handed out in, which is all the engine controls"
+    },
+    {
+      "file": "04j-studio-exits.js",
+      "describes": "build 16: /v1/exits -- locations: SOCKS5/HTTP exits per country, the dialler, health, no-leak"
+    },
+    {
+      "file": "04k-studio-pool.js",
+      "describes": "build 17: /v1/pool -- opt-in public per-country servers for locations, with the risk said to operator and user"
+    },
+    {
+      "file": "05-db.js",
+      "describes": "DbService, lazy ensureSchema, the panel-password cache"
+    },
+    {
+      "file": "05a-migrations.js",
+      "describes": "build 6: versioned migrator, the studio schema, legacy adoption"
+    },
+    {
+      "file": "06-subscription.js",
+      "describes": "SubscriptionService: link/feed/status output, the URI builder"
+    },
+    {
+      "file": "07-traffic.js",
+      "describes": "flushExpiredTraffic"
+    },
+    {
+      "file": "07a-meter.js",
+      "describes": "build 18: the usage meter -- one per person per isolate, every transport, exact quotas"
+    },
+    {
+      "file": "08-ws.js",
+      "describes": "handleWsTunnel: the shipping data plane, and denyTransport"
+    },
+    {
+      "file": "09-xhttp.js",
+      "describes": "handleXHTTP: stream-one and packet-up"
+    },
+    {
+      "file": "10-caps.js",
+      "describes": "isUserCapped"
+    },
+    {
+      "file": "10a-trojan.js",
+      "describes": "build 6: the Trojan inbound -- header detection, request parse, and the auth_hash lookup"
+    },
+    {
+      "file": "10b-guard.js",
+      "describes": "build 16: the abuse guard -- torrent, mail, private targets, connection floods"
+    },
+    {
+      "file": "11-netutil.js",
+      "describes": "IP/hostname helpers, byte helpers, socket close"
+    },
+    {
+      "file": "12-doh.js",
+      "describes": "dohQuery"
+    },
+    {
+      "file": "13-streams.js",
+      "describes": "upstream queue, downstream sender, connect/race/UDP plumbing"
+    },
+    {
+      "file": "13a-session-do.js",
+      "describes": "build 6: SessionDO -- device / concurrent / IP caps, and the admission client"
+    },
+    {
+      "file": "14-panel-html.js",
+      "describes": "HTML_TEMPLATES: nginx camouflage, setup, login, panel, status",
+      "guardProtocolLiterals": false,
+      "why": [
+        "This fragment is exempt from the plaintext-protocol guard, and the exemption is",
+        "evidence-based rather than a convenience: the asset shipping today already contains",
+        "eight plaintext 'VLESS' strings, all of them inside this panel's visible text",
+        "('کانفیگ VLESS', 'VLESS مستقیم'), and Cloudflare has accepted every upload of it. So",
+        "human-readable protocol names in HTML demonstrably do not trip the deploy-time",
+        "scanner, while the functional strings in the code fragments are obfuscated via atob",
+        "and must stay that way. This whole fragment is deleted at build 7 anyway (plan §8.1)."
+      ]
+    }
+  ]
+}

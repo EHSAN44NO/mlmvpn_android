@@ -1,0 +1,61 @@
+{
+  "format": "mlmvpn-game-catalog",
+  "v": 1,
+  "updated": "2026-09-25",
+  "about": "Per-game overlay on GameDatabase: regions (game region -> anchor region in RegionCatalog), the hosts of each part of the game's traffic for the doctor, and notes. Hosts are checked live on every line and nothing is steered unless a fix is proven there, so a wrong or dead host costs a line of 'unclear', never a broken game. Lists marked verified=false still need a lab session with the game installed.",
+  "games": [
+    {
+      "id": "codm",
+      "verified": false,
+      "regions": [
+        { "key": "EU", "anchor": "aws-eu-central-1", "fa": "اروپا", "en": "Europe" },
+        { "key": "ME", "anchor": "aws-me-south-1", "fa": "خاورمیانه", "en": "Middle East" },
+        { "key": "AS", "anchor": "aws-ap-southeast-1", "fa": "آسیا", "en": "Asia" }
+      ],
+      "defaultRegion": "EU",
+      "udpPorts": "7085-7995, 8700, 9030, 10010-10019, 17000-20100",
+      "classes": {
+        "LOGIN": ["profile.callofduty.com", "s.activision.com"],
+        "API": ["cod.activision.com", "www.callofduty.com"],
+        "SOCIAL": ["games.googleapis.com"]
+      },
+      "steer": [],
+      "noteFa": "سرور خاورمیانهٔ کالاف (بحرین) از اسفند ۱۴۰۴ آسیب دیده؛ اگر بازی اجازه می‌دهد، منطقه‌ای را بزن که بوستر پیشنهاد می‌کند.",
+      "noteEn": "Call of Duty's Middle East server (Bahrain) has been damaged since March 2026; if the game lets you, pick the region the booster suggests."
+    },
+    {
+      "id": "pubg",
+      "verified": false,
+      "regions": [
+        { "key": "EU", "anchor": "aws-eu-central-1", "fa": "اروپا", "en": "Europe" },
+        { "key": "ME", "anchor": "aws-me-south-1", "fa": "خاورمیانه", "en": "Middle East" },
+        { "key": "AS", "anchor": "aws-ap-southeast-1", "fa": "آسیا", "en": "Asia" }
+      ],
+      "defaultRegion": "EU",
+      "classes": {
+        "API": ["pubgmobile.com", "www.pubgmobile.com"],
+        "SOCIAL": ["games.googleapis.com"]
+      },
+      "steer": [],
+      "noteFa": "سرورهای خاورمیانهٔ پابجی از اسفند ۱۴۰۴ خاموش‌اند و بازیکن‌های منطقه به اروپا منتقل شده‌اند.",
+      "noteEn": "PUBG Mobile's Middle East servers have been offline since March 2026; the region's players were moved to Europe."
+    },
+    {
+      "id": "fifamobile",
+      "name": "EA SPORTS FC Mobile",
+      "verified": false,
+      "regions": [
+        { "key": "EU", "anchor": "aws-eu-central-1", "fa": "اروپا", "en": "Europe" }
+      ],
+      "defaultRegion": "EU",
+      "classes": {
+        "LOGIN": ["accounts.ea.com"],
+        "API": ["gateway.ea.com", "fifa.ea.com"],
+        "SOCIAL": ["games.googleapis.com"]
+      },
+      "steer": [],
+      "noteFa": "EA به‌خاطر تحریم، ورود از ایران را می‌بندد؛ بوستر بخش ورود را با DNS ضدتحریمی باز می‌کند که روی اینترنت خودت امتحان شده.",
+      "noteEn": "EA blocks sign-in from Iran because of sanctions; the booster opens the sign-in part with an anti-sanction DNS it has tried on your own line."
+    }
+  ]
+}

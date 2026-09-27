@@ -12,8 +12,8 @@ android {
         applicationId "com.mlmvpn.scanner"
         minSdk 24
         targetSdk 34
-        versionCode 61
-        versionName "1.2.2"
+        versionCode 68
+        versionName "1.2.36"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
@@ -29,6 +29,19 @@ android {
             useLegacyPackaging = true
         }
     }
+
+    // No externalNativeBuild block, deliberately.
+    //
+    // src/main/cpp/ carries the sources for two of the libraries in jniLibs -- the JNI shim
+    // over the tunnel core (libtunneljni.so) and badvpn's tun2socks/lwIP userspace stack
+    // (libtun2socks.so) -- but both are checked in already built, exactly like libaether.so,
+    // libtun2proxy.so and every other core in this APK. Wiring CMake up here would demand an
+    // NDK and CMake 3.22 on every machine that builds the app, and would then emit the same
+    // two file names the packager is already taking from jniLibs.
+    //
+    // To rebuild them: install the NDK, restore an `externalNativeBuild { cmake { path
+    // file('src/main/cpp/CMakeLists.txt') } }` block here, and delete the two prebuilt copies
+    // from src/main/jniLibs/*/ first so the names cannot collide.
 
     // Per-CPU builds plus one that runs everywhere.
     //
@@ -120,12 +133,13 @@ dependencies {
             version { strictly("1.13.1") }
             because("prevent amneziawg from pulling 1.17.0 which requires compileSdk 36")
         }
-        // io.github.tim06:openvpn asks for lifecycle 2.8.2. Left alone that one bump
-        // cascades across the whole app: lifecycle 2.7.0 -> 2.8.2 drags compose-runtime
-        // 1.5.4 -> 1.6.5 (past our compose compiler extension 1.5.10) and lifecycle-process
-        // -> emoji2 1.4.0 -> appcompat 1.7.1 -> material 1.12.0. The VPN Gate feature only
-        // needs LifecycleService, which 2.7.0 already has, so pin the whole atomic group and
-        // leave every other engine's dependency graph exactly as it was.
+        // The lifecycle group stays pinned. It was pinned because io.github.tim06:openvpn
+        // asked for 2.8.2, and that one bump cascades across the whole app: lifecycle
+        // 2.7.0 -> 2.8.2 drags compose-runtime 1.5.4 -> 1.6.5 (past our compose compiler
+        // extension 1.5.10) and lifecycle-process -> emoji2 1.4.0 -> appcompat 1.7.1 ->
+        // material 1.12.0. That dependency is gone, but other engines can reintroduce the same
+        // bump, and the pin costs nothing -- so it stays as a fence rather than being removed
+        // along with the thing that first needed it.
         [
             "lifecycle-runtime", "lifecycle-runtime-ktx", "lifecycle-runtime-compose",
             "lifecycle-common", "lifecycle-common-java8", "lifecycle-process",
@@ -135,8 +149,8 @@ dependencies {
         ].each { artifact ->
             implementation("androidx.lifecycle:$artifact") {
                 version { strictly("2.7.0") }
-                because("prevent io.github.tim06:openvpn from bumping the androidx.lifecycle " +
-                        "group to 2.8.2, which cascades into compose-runtime/appcompat/material")
+                because("keep the androidx.lifecycle group at 2.8.2-free; a bump cascades into " +
+                        "compose-runtime/appcompat/material")
             }
         }
         implementation("org.jetbrains.kotlin:kotlin-stdlib") {
@@ -201,16 +215,407 @@ dependencies {
     implementation 'com.google.zxing:core:3.5.3'
     implementation 'com.journeyapps:zxing-android-embedded:4.3.0'
 
-    // Xray/V2ray Core
-    implementation files('libs/libv2ray.aar')
+    // Prebuilt cores shipped as .aar: libv2ray (Xray) and psiphontunnel (Psiphon's Go
+    // controller). Taken as a tree rather than named one by one so adding a core is a file
+    // copy rather than a build edit -- and so neither can be listed twice by accident.
+    //
+    // The `-ns` on the Psiphon artifact is not a version suffix. Both of these are gomobile
+    // builds, and gomobile gives every library it produces the same `go.Seq` runtime classes
+    // and the same `libgojni.so`, so shipping both unmodified fails with a duplicate class AND
+    // a duplicate native library. The `-ns` copy has that runtime moved into `pg` and its
+    // native library renamed; see third_party/README.md and scripts/repackage-psiphon-aar.py.
+    // The pristine upstream AAR is kept in third_party/ and deliberately NOT in this folder.
+    implementation fileTree(dir: 'libs', include: ['*.aar'])
     
+    // Unit tests. There were none before Config Studio; these two exist so that
+    // ConfigBuilder's golden fixtures can run as a plain JVM test rather than needing an
+    // instrumented device or Robolectric.
+    //
+    // The org.json artifact is not redundant with the one Android ships. In a unit test the
+    // framework's org.json is a stub whose every method returns null, so a builder that produces
+    // JSONObject would silently compare empty against empty and the fixtures would pass while
+    // testing nothing. This puts a real implementation on the unit-test classpath.
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20231013'
+
     // AmneziaWG Core
     implementation 'com.zaneschepke:amneziawg-android:2.1.13'
 
-    // OpenVPN Core (openvpn3 via JNI) — used only by the VPN Gate feature.
-    // Runs OpenVPNService in its own ":openvpn" process, so it cannot disturb
-    // MyVpnService or any other engine.
-    implementation 'io.github.tim06:openvpn:1.1.3'
-    implementation 'io.github.tim06:vpnprotocolsnotification:1.1.0'
+    // No OpenVPN core here any more. It was carried for VPN Gate, which does not use it:
+    // openvpn3 brings the tunnel fully up and then refuses the data channel, because with
+    // IV_NCP=2 it accepts only AEAD there and SoftEther's OpenVPN emulation offers CBC
+    // exclusively. VPN Gate ships on the pure-Kotlin SoftEther client instead, and nothing in
+    // the app ever produced the `vpngate://` URI that reached the OpenVPN path.
+    //
+    // Its libovpn3.so was also the one native library in this APK whose ELF LOAD segments were
+    // 4 KB aligned rather than 16 KB, which Android 15+ reports to the user as an app
+    // compatibility warning on 16 KB-page devices.
 
 }
+
+/**
+ * Fails the build when the two string catalogues drift apart.
+ *
+ * Every user-visible string in this app lives twice -- `values/strings.xml` and
+ * `values-fa/strings.xml` -- and the two must carry exactly the same keys. When one gains a key the
+ * other did not, nothing fails: the locale missing it renders the raw resource name, so the bug
+ * ships and is found by a user looking at `studio_user_quota_title` in the middle of a sentence.
+ *
+ * That was a review rule until now. It is a poor one, because the volume defeats it: 3153 entries
+ * per file today, and Config Studio adds roughly 450 more, which is ~900 hand-edited entries across
+ * two files. Drift stops being a risk at that size and becomes a certainty, so it is checked here
+ * instead, where it costs a second and cannot be forgotten.
+ *
+ * The same pass enforces the Config Studio vocabulary rule (plan D6) on `studio_*` keys only --
+ * scoped that way deliberately, because the rest of the app is free to say whatever it already says
+ * and a blanket ban would fire on strings that predate the rule.
+ */
+tasks.register('checkStringParity') {
+    group = 'verification'
+    description = 'Both string catalogues must carry the same keys, and Studio strings must follow D6.'
+
+    def en = file('src/main/res/values/strings.xml')
+    def fa = file('src/main/res/values-fa/strings.xml')
+    inputs.files(en, fa)
+    inputs.dir('../worker-src/studio')
+
+    doLast {
+        def namesOf = { File f ->
+            new groovy.xml.XmlSlurper().parse(f).string.collect { it.@name.text() }
+        }
+        def enNames = namesOf(en)
+        def faNames = namesOf(fa)
+        def enKeys = enNames as Set
+        def faKeys = faNames as Set
+
+        def missingFa = (enKeys - faKeys).sort()
+        def missingEn = (faKeys - enKeys).sort()
+
+        def problems = []
+
+        // A key defined TWICE in one catalogue. This check used to build a Set first, which made a
+        // duplicate invisible here and left it to fail at `mergeDebugResources` — a task that runs
+        // several minutes later, names the file but not which of its 3,400 keys is the new one, and
+        // says nothing about the append that introduced it. Cheap to catch here, tedious to find
+        // there.
+        [en, fa].eachWithIndex { File f, int i ->
+            def names = (i == 0 ? enNames : faNames)
+            def dupes = names.countBy { it }.findAll { it.value > 1 }.keySet().sort()
+            if (dupes) {
+                problems << "  ${dupes.size()} duplicate key(s) in ${f.parentFile.name}/strings.xml:\n" +
+                        dupes.take(20).collect { "    - $it" }.join('\n')
+            }
+        }
+        if (missingFa) {
+            problems << "  ${missingFa.size()} key(s) in values/ but not in values-fa/:\n" +
+                    missingFa.take(20).collect { "    - $it" }.join('\n') +
+                    (missingFa.size() > 20 ? "\n    ... and ${missingFa.size() - 20} more" : '')
+        }
+        if (missingEn) {
+            problems << "  ${missingEn.size()} key(s) in values-fa/ but not in values/:\n" +
+                    missingEn.take(20).collect { "    - $it" }.join('\n') +
+                    (missingEn.size() > 20 ? "\n    ... and ${missingEn.size() - 20} more" : '')
+        }
+
+        // D6: no commerce vocabulary in Config Studio strings, in either locale.
+        def bannedEn = ['seller', 'sellers', 'customer', 'customers', 'buyer', 'buyers',
+                        'purchase', 'purchased', 'price', 'pricing']
+        def bannedFa = ['\u0641\u0631\u0648\u0634', '\u0645\u0634\u062a\u0631\u06cc',
+                        '\u062e\u0631\u06cc\u062f', '\u0642\u06cc\u0645\u062a',
+                        '\u062a\u0648\u0645\u0627\u0646']
+        def offenders = []
+        [en, fa].each { File f ->
+            new groovy.xml.XmlSlurper().parse(f).string.each { s ->
+                def key = s.@name.text()
+                if (!key.startsWith('studio_')) return
+                def text = s.text()
+                def lower = text.toLowerCase()
+                bannedEn.each { w ->
+                    if (lower =~ /(?<![a-z])${w}(?![a-z])/) offenders << "    ${f.parentFile.name}/$key: '$w'"
+                }
+                bannedFa.each { w -> if (text.contains(w)) offenders << "    ${f.parentFile.name}/$key: '$w'" }
+            }
+        }
+        if (offenders) {
+            problems << "  Config Studio strings must not use commerce vocabulary (plan D6):\n" +
+                    offenders.unique().join('\n')
+        }
+
+        // D6's other half, which the plan asked for and this task did not do until now: the same
+        // ban over the worker source and its schema. Strings are the visible surface, but the rule
+        // is a SCHEMA rule -- "there is no `price` column in any phase" -- and a column named
+        // `price` is exactly the thing that later grows a screen to display it. Catching it in a
+        // migration is free; catching it after a migration has run on other people's accounts is
+        // not, because a shipped column cannot be taken back.
+        def schemaOffenders = []
+        def workerDir = file('../worker-src/studio')
+        if (workerDir.isDirectory()) {
+            def bannedSql = ['price', 'pricing', 'currency', 'paid_at', 'amount_paid',
+                             'invoice', 'payment', 'customer', 'seller', 'buyer']
+            workerDir.eachFileMatch(~/.*\.js/) { File f ->
+                // Comments are prose and may legitimately say "no price column"; only code is
+                // checked. Same reasoning as the R2 protocol-literal guard in the worker builder.
+                f.eachLine { String raw, int no ->
+                    def line = raw.replaceFirst(/\/\/.*$/, '').replaceFirst(/^\s*\*.*$/, '')
+                    if (!line.trim()) return
+                    def lower = line.toLowerCase()
+                    bannedSql.each { w ->
+                        if (lower =~ /(?<![a-z_])${w}(?![a-z_])/) {
+                            schemaOffenders << "    ${f.name}:${no}: '$w'"
+                        }
+                    }
+                }
+            }
+        }
+        if (schemaOffenders) {
+            problems << "  The Config Studio worker must carry no commerce columns or vocabulary (plan D6, §D):\n" +
+                    schemaOffenders.unique().join('\n')
+        }
+
+        if (problems) {
+            // The advice has to match the problem. This message used to say "every string belongs
+            // in BOTH catalogues" whatever had failed, which is useless guidance when what actually
+            // failed was a `price` column in a migration.
+            def advice = schemaOffenders
+                    ? "There is no price, currency or paid_at column in any phase (plan D6, §D).\n" +
+                      "If the word is only prose, put it in a // comment -- comments are not checked.\n"
+                    : (missingFa || missingEn
+                        ? "Every string belongs in BOTH values/strings.xml and values-fa/strings.xml.\n"
+                        : "A key may appear only once per catalogue. Delete the older definition, not the newer one.\n")
+            throw new GradleException(
+                    "Config Studio catalogue check failed.\n\n" + problems.join('\n\n') +
+                    "\n\n" + advice +
+                    "See android/docs/CONFIG-STUDIO-PLAN.md F7, R11 and D6.\n")
+        }
+        logger.lifecycle("string catalogues: ${enKeys.size()} keys, in step; worker vocabulary clean")
+    }
+}
+
+tasks.named('preBuild') { dependsOn 'checkStringParity' }
+/**
+ * Fails the build when app/src/main/assets/mlm_worker.js has drifted from worker-src/studio/.
+ *
+ * The asset is a build output now, not a source file, and the risk that creates is specific: a
+ * change made directly to the asset still works, still deploys, and is silently reverted the next
+ * time anyone rebuilds from the fragments. That is a bug that erases a fix rather than causing one,
+ * which is the kind that gets found weeks later on someone else's account.
+ *
+ * Skipped -- with a warning rather than a failure -- when Node is not on PATH, so that a machine
+ * set up only for Android work can still build the app.
+ */
+tasks.register('checkWorkerAsset') {
+    group = 'verification'
+    description = 'The worker asset must match the fragments it is built from.'
+
+    def srcDir = file('../worker-src/studio')
+    def asset = file('src/main/assets/mlm_worker.js')
+    def script = file('../scripts/build-studio-worker.js')
+    inputs.dir(srcDir)
+    inputs.file(asset)
+
+    doLast {
+        def node = ['node', 'node.exe'].findResult { exe ->
+            try {
+                def p = new ProcessBuilder(exe, '--version').redirectErrorStream(true).start()
+                p.waitFor() == 0 ? exe : null
+            } catch (Exception ignored) { null }
+        }
+        if (node == null) {
+            logger.warn('checkWorkerAsset: node not found on PATH, skipping the worker asset check')
+            return
+        }
+        def proc = new ProcessBuilder(node, script.absolutePath, '--check')
+                .directory(file('..'))
+                .redirectErrorStream(true)
+                .start()
+        def out = proc.inputStream.text
+        if (proc.waitFor() != 0) {
+            throw new GradleException("\n" + out)
+        }
+        logger.lifecycle(out.trim())
+    }
+}
+
+tasks.named('preBuild') { dependsOn 'checkWorkerAsset' }
+/**
+ * Runs the worker against real SQLite (scripts/test-studio-worker.mjs).
+ *
+ * The worker has no other automated coverage: it is deployed by uploading a file, and a redeploy
+ * overwrites the script that is currently carrying live traffic. Until this existed it was verified
+ * by reading. It already earned its place -- on its first green run it found that burning the
+ * bootstrap secret remembered only the LAST consumed hash, so an older deploy secret became valid
+ * again the moment its binding came back.
+ *
+ * Skipped with a warning when Node is absent, like checkWorkerAsset.
+ */
+tasks.register('testWorker') {
+    group = 'verification'
+    description = 'Run the Config Studio worker against an in-memory SQLite database.'
+
+    def srcDir = file('../worker-src/studio')
+    def asset = file('src/main/assets/mlm_worker.js')
+    def script = file('../scripts/test-studio-worker.mjs')
+    inputs.dir(srcDir)
+    inputs.file(asset)
+    inputs.file(script)
+
+    doLast {
+        def node = ['node', 'node.exe'].findResult { exe ->
+            try {
+                def p = new ProcessBuilder(exe, '--version').redirectErrorStream(true).start()
+                p.waitFor() == 0 ? exe : null
+            } catch (Exception ignored) { null }
+        }
+        if (node == null) {
+            logger.warn('testWorker: node not found on PATH, skipping the worker tests')
+            return
+        }
+        def proc = new ProcessBuilder(node, script.absolutePath)
+                .directory(file('..'))
+                .redirectErrorStream(true)
+                .start()
+        def out = proc.inputStream.text
+        if (proc.waitFor() != 0) {
+            throw new GradleException("\nThe worker tests failed.\n\n" + out)
+        }
+        logger.lifecycle(out.readLines().findAll { it.contains('passed') }.join('\n'))
+    }
+}
+
+tasks.named('preBuild') { dependsOn 'testWorker' }
+/**
+ * Fails the build when a Config Studio screen reaches past the domain layer.
+ *
+ * `data/studio/api/dto/` holds the worker's wire format -- snake_case field names, nullable
+ * everything, shapes that exist because of how JSON travels. The repository maps those to domain
+ * types at the boundary, and the point of paying for that mapper is that a screen never holds a type
+ * whose field names are an API contract.
+ *
+ * That rule survives exactly as long as it is checked. One `import ...api.dto.UserDto` in a
+ * composable, added because it was right there and the mapping was one field, and the next API
+ * change reaches into the UI -- at which point the boundary still exists on paper and buys nothing.
+ * The plan says "enforce by grepping"; this is the grep, run by the build rather than remembered.
+ *
+ * Also checks the reverse direction: the data layer must not import Compose. A repository that
+ * returns a `Color` or a `@Composable` has quietly become a screen.
+ */
+tasks.register('checkStudioLayering') {
+    group = 'verification'
+    description = 'Config Studio UI must not import DTOs, and the data layer must not import Compose.'
+
+    def uiDir = file('src/main/java/com/mlmvpn/scanner/ui/configstudio')
+    def dataDir = file('src/main/java/com/mlmvpn/scanner/data/studio')
+    inputs.files(fileTree(dataDir))
+
+    doLast {
+        def problems = []
+
+        if (uiDir.exists()) {
+            uiDir.eachFileRecurse { f ->
+                if (!f.name.endsWith('.kt')) return
+                f.eachLine { line, n ->
+                    if (line =~ /import\s+com\.mlmvpn\.scanner\.data\.studio\.api\.dto\./) {
+                        problems << "  ui/configstudio/${f.name}:${n} imports a DTO"
+                    }
+                }
+            }
+        }
+
+        if (dataDir.exists()) {
+            dataDir.eachFileRecurse { f ->
+                if (!f.name.endsWith('.kt')) return
+                f.eachLine { line, n ->
+                    if (line =~ /import\s+androidx\.compose\./) {
+                        problems << "  data/studio/${f.name}:${n} imports Compose"
+                    }
+                }
+            }
+        }
+
+        if (problems) {
+            throw new GradleException(
+                    "Config Studio layering violated.\n\n" + problems.join('\n') +
+                    "\n\nScreens take domain types from the repository; DTOs stay inside\n" +
+                    "data/studio/api/. See android/docs/CONFIG-STUDIO-PLAN.md §12.1.\n")
+        }
+        logger.lifecycle('studio layering: clean')
+    }
+}
+
+tasks.named('preBuild') { dependsOn 'checkStudioLayering' }
+/**
+ * The engine's own version number and the app's must agree.
+ *
+ * `STUDIO_API_VERSION` in the worker is what `/v1/health` reports; `PanelBuild.MLM` is what the app
+ * believes it ships. `StudioDeployer` compares the two to decide whether a deploy would go
+ * backwards -- so while they disagreed, every SUCCESSFUL deploy left the account looking newer than
+ * the app, the downgrade guard fired on the next attempt, and the installation could never be
+ * redeployed or upgraded again.
+ *
+ * It was found by deploying to a real Cloudflare account, because nothing else could find it: both
+ * files compiled, both numbers were individually sensible, and the failure only appears on the
+ * second deploy to the same account. Two constants that must match, in two languages, in two
+ * directories, is not something to leave to memory.
+ */
+tasks.register('checkEngineVersion') {
+    group = 'verification'
+    description = 'PanelBuild.MLM must equal STUDIO_API_VERSION in the worker.'
+
+    def kt = file('src/main/java/com/mlmvpn/scanner/data/PanelBuild.kt')
+    def js = file('../worker-src/studio/04a-studio-api.js')
+    def mig = file('../worker-src/studio/05a-migrations.js')
+    inputs.files(kt, js, mig)
+
+    doLast {
+        if (!js.exists()) {
+            logger.warn('checkEngineVersion: worker source not found, skipping')
+            return
+        }
+        def ktMatch = (kt.text =~ /const val MLM = (\d+)/)
+        def jsMatch = (js.text =~ /const STUDIO_API_VERSION = (\d+)/)
+        if (!ktMatch || !jsMatch) {
+            throw new GradleException('checkEngineVersion: could not read one of the version constants')
+        }
+        def appVersion = ktMatch[0][1] as int
+        def engineVersion = jsMatch[0][1] as int
+        if (appVersion != engineVersion) {
+            throw new GradleException(
+                    "\nEngine version mismatch.\n\n" +
+                    "  PanelBuild.MLM      = ${appVersion}\n" +
+                    "  STUDIO_API_VERSION  = ${engineVersion}\n\n" +
+                    "The engine reports STUDIO_API_VERSION from /v1/health and the deployer compares it\n" +
+                    "against PanelBuild.MLM. While these differ, a successful deploy makes the account\n" +
+                    "look newer than the app, and the downgrade guard then blocks every later deploy to\n" +
+                    "that account. Bump both together.\n")
+        }
+        // The same trap one level down. A release can add a migration without touching a single
+        // endpoint -- «بسته» did exactly that -- and an installation left on the old schema then
+        // answers 404 for a feature the app is sure exists, with nothing offering an update.
+        // PanelBuild.MLM_SCHEMA is what the Settings screen compares against, so it has to be the
+        // worker's real high-water mark rather than a number somebody remembered to bump.
+        if (mig.exists()) {
+            def schemaKt = (kt.text =~ /const val MLM_SCHEMA = (\d+)/)
+            def versions = (mig.text =~ /\n\s*v:\s*(\d+),/).collect { it[1] as int }
+            if (!schemaKt || versions.isEmpty()) {
+                throw new GradleException('checkEngineVersion: could not read the schema constants')
+            }
+            def appSchema = schemaKt[0][1] as int
+            def workerSchema = versions.max()
+            if (appSchema != workerSchema) {
+                throw new GradleException(
+                        "\nSchema version mismatch.\n\n" +
+                        "  PanelBuild.MLM_SCHEMA        = ${appSchema}\n" +
+                        "  highest MIGRATIONS v in 05a  = ${workerSchema}\n\n" +
+                        "The app offers an engine update when an installation's schema_version is below\n" +
+                        "MLM_SCHEMA. While these differ, either every up-to-date account is nagged to\n" +
+                        "redeploy forever, or a real schema upgrade is never offered at all. Bump the\n" +
+                        "constant in the same commit as the migration.\n")
+            }
+            logger.lifecycle("engine schema: ${appSchema}, app and worker agree")
+        }
+        logger.lifecycle("engine version: ${appVersion}, app and worker agree")
+    }
+}
+
+tasks.named('preBuild') { dependsOn 'checkEngineVersion' }
+

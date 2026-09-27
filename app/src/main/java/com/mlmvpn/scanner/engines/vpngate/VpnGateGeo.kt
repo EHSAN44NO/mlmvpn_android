@@ -1,6 +1,8 @@
 package com.mlmvpn.scanner.engines.vpngate
 
 import java.util.Locale
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
 
 /**
  * Country → continent grouping for the server browser, plus localised country names.
@@ -12,13 +14,13 @@ import java.util.Locale
 object VpnGateGeo {
 
     enum class Continent(val label: String, val emoji: String) {
-        ASIA("آسیا", "🌏"),
-        EUROPE("اروپا", "🇪🇺"),
-        NORTH_AMERICA("آمریکای شمالی", "🌎"),
-        SOUTH_AMERICA("آمریکای جنوبی", "🌎"),
-        AFRICA("آفریقا", "🌍"),
-        OCEANIA("اقیانوسیه", "🌏"),
-        OTHER("سایر", "🌐"),
+        ASIA(S(R.string.asia_2), "🌏"),
+        EUROPE(S(R.string.europe_2), "🇪🇺"),
+        NORTH_AMERICA(S(R.string.north_america), "🌎"),
+        SOUTH_AMERICA(S(R.string.south_america), "🌎"),
+        AFRICA(S(R.string.africa), "🌍"),
+        OCEANIA(S(R.string.oceania), "🌏"),
+        OTHER(S(R.string.other), "🌐"),
     }
 
     private val ASIA = setOf(

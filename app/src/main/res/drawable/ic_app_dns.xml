@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Dedicated DNS. The mark the Windows build uses for the DNS engine.
+
+    The mark itself is the source artwork, unaltered. Only its seating changed: it sits on the
+    same squircle every other home-screen tile uses, because a circular or bare icon in a grid of
+    squircles reads as a rendering fault rather than as a brand.
+
+    See HomeApp.imageRes: a tile with artwork gets no coloured background drawn behind it.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="1024"
+    android:viewportHeight="1024">
+    <!-- iOS green: this is the tile that turns the anti-sanction resolver on. -->
+    <path
+        android:pathData="M651.264 51.2c92.16 0 138.24 0 188.416 15.36 54.272 19.456 97.28 62.464 116.736 116.736C972.8 233.472 972.8 280.576 972.8 372.736v278.528c0 92.16 0 138.24-15.36 188.416-19.456 54.272-62.464 97.28-116.736 116.736-51.2 16.384-97.28 16.384-189.44 16.384H372.736c-92.16 0-138.24 0-188.416-15.36-55.296-20.48-97.28-62.464-117.76-117.76C51.2 790.528 51.2 744.448 51.2 651.264V372.736c0-92.16 0-138.24 15.36-188.416 20.48-54.272 62.464-97.28 117.76-116.736C233.472 51.2 279.552 51.2 372.736 51.2h278.528z"
+        android:fillColor="#34C759" />
+
+    <!-- Globe and DNS wordmark, stroked exactly as the source SVG draws them. -->
+    <group
+        android:scaleX="1.24"
+        android:scaleY="1.24"
+        android:translateX="194.56"
+        android:translateY="194.56">
+        <path
+            android:pathData="M256 15a241 241 0 1 0 0 482a241 241 0 1 0 0 -482z"
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="30"
+            android:strokeMiterLimit="1"
+            android:fillColor="#00000000" />
+        <path
+            android:pathData="M221 319V208l4.354.001L286.646 304H291V193M161 255.844c0 26.566-14.744 47.586-38.136 47.995-7.787.136-27.91.212-28.219.212V208h27.42c25.657-.364 38.935 21.278 38.935 47.844zM408.828 217.869s-17.226-14.48-37.54-8.361c-8.024 2.417-14.682 8.728-16.013 17.212-3.087 19.678 22.375 24.946 36.175 30.037 35.354 13.04 20.125 47.243-8.336 47.243-14.252 0-26.214-6.241-33.454-14.23M360 141.656H152L211.5 84M152 370.344h208L300.5 428"
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="30"
+            android:strokeMiterLimit="1"
+            android:fillColor="#00000000" />
+    </group>
+
+</vector>

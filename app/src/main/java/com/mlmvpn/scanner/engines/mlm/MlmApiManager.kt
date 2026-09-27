@@ -16,7 +16,6 @@ class MlmApiManager(private val context: Context) {
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .writeTimeout(20, TimeUnit.SECONDS)
-        .addInterceptor(com.mlmvpn.scanner.emergency.EmergencyInterceptor(context))
         .build()
         
     private val gson = Gson()

@@ -17,6 +17,8 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
 
 /**
  * تست رقیب (race) بین DNSها -- و پورت‌های مختلف -- برای resolve کردن دامنه‌ی سرور بازی.
@@ -111,7 +113,7 @@ object DnsRaceTester {
             }.awaitAll()
         }
 
-        if (results.isEmpty()) Log.w(TAG, "هیچ ترکیب DNS:پورتی پاسخ نداد")
+        if (results.isEmpty()) Log.w(TAG, S(R.string.no_dns_port_combination_answered))
         results.values.toList()
     }
 
@@ -125,7 +127,7 @@ object DnsRaceTester {
      */
     suspend fun findWorkingDnsServers(testHostname: String): List<DnsResult> {
         val results = raceAllCombos(testHostname).sortedBy { it.latencyMs }.distinctBy { it.dnsServer.ip }
-        Log.d(TAG, "findWorkingDnsServers($testHostname): ${results.size} DNS جواب داد: ${results.map { it.dnsServer.ip }}")
+        Log.d(TAG, S(R.string.findworkingdnsservers_testhostname_dns_answered, testHostname, results.size, results.map { it.dnsServer.ip }))
         return results
     }
 
@@ -171,6 +173,76 @@ object DnsRaceTester {
     }
 
     /**
+     * DNS over HTTPS to a resolver's IP ADDRESS, never its name.
+     *
+     * The names are the problem on Iranian lines: `dns.google` and `cloudflare-dns.com` are
+     * filtered on the TLS name (SNI) itself, so [resolveViaDoh] dies there however its socket is
+     * pointed. A URL with an IP literal sends no SNI at all, and both resolvers' certificates carry
+     * their addresses, so the handshake verifies. Measured 2026-09-24: `https://8.8.8.8/resolve`
+     * answered where every named DoH endpoint and 1.1.1.1 failed. Each attempt is capped at 2.5 s
+     * so a dead resolver cannot hold a boost.
+     */
+    suspend fun resolveViaDohByIp(hostname: String): List<String> = withContext(Dispatchers.IO) {
+        val attempts = listOf(
+            "https://8.8.8.8/resolve?name=$hostname&type=A" to null,
+            "https://8.8.4.4/resolve?name=$hostname&type=A" to null,
+            "https://1.1.1.1/dns-query?name=$hostname&type=A" to "application/dns-json",
+        )
+        for ((url, accept) in attempts) {
+            try {
+                val rb = Request.Builder().url(url)
+                if (accept != null) rb.addHeader("Accept", accept)
+                val body = dohByIpClient.newCall(rb.build()).execute().use { it.body?.string() }
+                if (body.isNullOrEmpty()) continue
+                val answers = JSONObject(body).optJSONArray("Answer") ?: continue
+                val ips = (0 until answers.length()).mapNotNull { i ->
+                    answers.optJSONObject(i)?.takeIf { it.optInt("type") == 1 }?.optString("data")
+                }.filter { it.isNotBlank() }
+                if (ips.isNotEmpty()) return@withContext ips
+            } catch (e: Exception) {
+                Log.d(TAG, "DoH-by-IP $url failed: ${e.message}")
+            }
+        }
+        emptyList()
+    }
+
+    private val dohByIpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(2500, TimeUnit.MILLISECONDS)
+            .readTimeout(2500, TimeUnit.MILLISECONDS)
+            .callTimeout(2500, TimeUnit.MILLISECONDS)
+            .build()
+    }
+
+    /**
+     * One A query over plain UDP to [dnsIp]:[port], optionally pinned to [network] (the physical
+     * line, when some VPN is up). The answer's first A record and the round trip in ms, or null
+     * when nothing usable came back in [timeoutMs].
+     */
+    internal suspend fun queryA(
+        dnsIp: String, hostname: String, network: android.net.Network? = null,
+        port: Int = 53, timeoutMs: Int = QUERY_TIMEOUT_MS.toInt(),
+    ): Pair<String, Long>? = withContext(Dispatchers.IO) {
+        var socket: DatagramSocket? = null
+        try {
+            socket = DatagramSocket().also { s -> network?.bindSocket(s) }
+            socket.soTimeout = timeoutMs
+            val query = buildDnsQuery(hostname)
+            val t0 = System.nanoTime()
+            socket.send(DatagramPacket(query, query.size, InetSocketAddress(dnsIp, port)))
+            val buf = ByteArray(512)
+            val resp = DatagramPacket(buf, buf.size)
+            socket.receive(resp)
+            val ms = (System.nanoTime() - t0) / 1_000_000
+            parseDnsResponse(resp.data, resp.length)?.let { it to ms }
+        } catch (e: Exception) {
+            null
+        } finally {
+            try { socket?.close() } catch (_: Exception) {}
+        }
+    }
+
+    /**
      * یک query واقعی DNS (UDP, type A) به سرور و پورت مشخص می‌زند و latency + IP حل‌شده را برمی‌گرداند.
      */
     private suspend fun queryDns(dns: GameDnsList.DnsServer, port: Int, hostname: String): DnsResult? =
@@ -211,7 +283,7 @@ object DnsRaceTester {
      * یک query DNS ساده برای type A می‌سازد.
      * Transaction ID ثابت + یک flag + question section.
      */
-    private fun buildDnsQuery(hostname: String): ByteArray {
+    internal fun buildDnsQuery(hostname: String): ByteArray {
         val baos = java.io.ByteArrayOutputStream()
 
         // Transaction ID
@@ -250,7 +322,7 @@ object DnsRaceTester {
     /**
      * اولین A record را از پاسخ DNS استخراج می‌کند.
      */
-    private fun parseDnsResponse(data: ByteArray, length: Int): String? {
+    internal fun parseDnsResponse(data: ByteArray, length: Int): String? {
         try {
             if (length < 12) return null
 

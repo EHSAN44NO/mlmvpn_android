@@ -131,15 +131,83 @@ class SubGenManager(private val context: Context) {
 
     // --- Cloudflare API Calls ---
 
-    private fun getAuthHeaders(account: CloudAccount): Headers {
-        val isCfat = account.token.startsWith("cfat_") || account.email.isEmpty()
-        return Headers.Builder().apply {
-            if (isCfat) add("Authorization", "Bearer ${account.token}")
-            else {
-                add("X-Auth-Email", account.email)
-                add("X-Auth-Key", account.token)
+    /**
+     * Delegated rather than rebuilt.
+     *
+     * This was a third hand-written copy of the same two branches, and copies drift: this one
+     * never trimmed the credential. One implementation means the next fix reaches every caller.
+     */
+    private fun getAuthHeaders(account: CloudAccount): Headers =
+        com.mlmvpn.scanner.data.CloudAuth.headers(account)
+
+    /** The headers this account is NOT currently using. */
+    private fun otherAuthHeaders(account: CloudAccount): Headers? {
+        val bearer = com.mlmvpn.scanner.data.CloudAuth.useBearer(account)
+        if (!bearer) {
+            return Headers.Builder()
+                .add("Authorization", "Bearer ${account.token.trim()}")
+                .add("Content-Type", "application/json")
+                .build()
+        }
+        // The Global-Key pair is only a possibility when there is an email to pair with.
+        if (account.email.isBlank()) return null
+        return Headers.Builder()
+            .add("X-Auth-Email", account.email.trim())
+            .add("X-Auth-Key", account.token.trim())
+            .add("Content-Type", "application/json")
+            .build()
+    }
+
+    /**
+     * Run a Cloudflare call, and if it comes back 401, try the other header shape once.
+     *
+     * `authScheme` is decided when an account is added and then trusted for the life of that
+     * account -- which is right, because the shape test it would otherwise fall back on is known
+     * to be too narrow (a working 52-character Global API Key has been seen, and the test only
+     * recognises 37). But "decided once and trusted forever" has the obvious failure: if it was
+     * ever recorded wrongly, every call from then on authenticates the wrong way and there is no
+     * path back. That reached a user as
+     *
+     *     API Error: 401 - {"code":10000,"message":"Authentication error"}
+     *
+     * on every Sub Link save, with no way to act on it -- the same credential worked elsewhere in
+     * the app, so re-entering it changed nothing.
+     *
+     * A 401 is the one answer that means "the envelope is wrong", so it is the one answer worth
+     * retrying differently. If the other shape works, the account is corrected on disk and the
+     * next call is right the first time; the repair happens once rather than on every request.
+     * Anything other than 401 is returned untouched: a 403 or a 404 is about permissions or a
+     * missing resource, and retrying those with different headers would only hide them.
+     */
+    private fun callWithAuthRepair(
+        account: CloudAccount,
+        build: (Headers) -> Request,
+    ): Pair<Int, String> {
+        client.newCall(build(getAuthHeaders(account))).execute().use { res ->
+            val body = res.body?.string() ?: ""
+            if (res.code != 401) return Pair(res.code, body)
+        }
+
+        val alternate = otherAuthHeaders(account) ?: return Pair(401, "")
+        client.newCall(build(alternate)).execute().use { res ->
+            val body = res.body?.string() ?: ""
+            if (res.isSuccessful) {
+                val proven = if (com.mlmvpn.scanner.data.CloudAuth.useBearer(account)) "global"
+                             else "bearer"
+                android.util.Log.w(
+                    "SubGenManager",
+                    "auth scheme for ${account.id} was wrong; corrected to $proven",
+                )
+                runCatching {
+                    val cm = com.mlmvpn.scanner.data.CloudManager(context)
+                    cm.accounts.firstOrNull { it.id == account.id }?.let {
+                        it.authScheme = proven
+                        cm.saveAccounts()
+                    }
+                }
             }
-        }.build()
+            return Pair(res.code, body)
+        }
     }
 
     suspend fun checkWorkerExistsOnline(account: CloudAccount): SubGenAccountData? = withContext(Dispatchers.IO) {
@@ -221,26 +289,22 @@ class SubGenManager(private val context: Context) {
 
     suspend fun uploadConfigs(account: CloudAccount, subData: SubGenAccountData, slug: String, configsBase64: String, expiryTimestamp: Long): Pair<Boolean, String> = withContext(Dispatchers.IO) {
         try {
-            val headers = getAuthHeaders(account)
             val jsonPayload = JSONObject().apply {
                 put("configs", configsBase64)
                 put("expiry", expiryTimestamp)
             }.toString()
 
-            val req = Request.Builder()
-                .url("https://api.cloudflare.com/client/v4/accounts/${account.accountId}/storage/kv/namespaces/${subData.namespaceId}/values/sub_$slug")
-                .headers(headers)
-                .put(jsonPayload.toRequestBody("application/json".toMediaTypeOrNull()))
-                .build()
-
-            client.newCall(req).execute().use { res ->
-                val bodyStr = res.body?.string() ?: ""
-                if (res.isSuccessful) {
-                    return@withContext Pair(true, "")
-                } else {
-                    return@withContext Pair(false, "API Error: ${res.code} - $bodyStr")
-                }
+            val (code, bodyStr) = callWithAuthRepair(account) { hdrs ->
+                Request.Builder()
+                    .url("https://api.cloudflare.com/client/v4/accounts/${account.accountId}/storage/kv/namespaces/${subData.namespaceId}/values/sub_$slug")
+                    .headers(hdrs)
+                    .put(jsonPayload.toRequestBody("application/json".toMediaTypeOrNull()))
+                    .build()
             }
+            if (code in 200..299) {
+                return@withContext Pair(true, "")
+            }
+            return@withContext Pair(false, "API Error: $code - $bodyStr")
         } catch (e: Exception) {
             Pair(false, e.message ?: "Unknown Exception")
         }
@@ -359,11 +423,14 @@ class SubGenManager(private val context: Context) {
     /**
      * Resolves a sub-link's `mappedGroupName` (a composite `"manual:<engine>:<groupTitle>"` /
      * `"cloud:<groupId>:<engine>"` / `"scanner:<groupId>:<engine>"` string, always set this way
-     * by SubLinkScreen -- see its "Update" button logic) to the actual node list it refers to.
-     * Must stay in sync with that screen's own copy of this parsing; kept here as the one shared
-     * implementation so the two can no longer drift.
+     * by the sub-link screen) to the actual node list it refers to.
+     *
+     * Public because the screen's own "update now" button needs exactly this. It used to carry a
+     * hand-copied second version of the same `when` block, which is what the note here warned
+     * about and did not prevent -- an id format understood in two places is one edit away from
+     * being understood differently in two places.
      */
-    private fun resolveGroupNodes(
+    fun resolveGroupNodes(
         mappedGroupName: String,
         liveNodes: List<VpnNode>,
         groupManager: GroupManager

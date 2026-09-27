@@ -118,6 +118,13 @@ class GstEngine : IVpnEngine {
         // longer breaks the whole tunnel.
         val scriptIdArray = relays.joinToString(", ") { "\"${it.deploymentId}\"" }
 
+        // 0.0.0.0 only when the user asked for Local Network. The core has no
+        // authentication on this listener, so binding it to every interface by
+        // default would publish an open proxy to whatever Wi-Fi the phone is on.
+        val listenHost =
+            if (com.mlmvpn.scanner.lan.LanShare.sharingActive(context)) "0.0.0.0"
+            else "127.0.0.1"
+
         return """
             [relay]
             mode = "apps_script"
@@ -128,7 +135,7 @@ class GstEngine : IVpnEngine {
             [network]
             google_ip = "$frontIp"
             front_domain = "$sni"
-            listen_host = "127.0.0.1"
+            listen_host = "$listenHost"
             socks5_port = $localPort
             listen_port = ${localPort + 10000}
             verify_ssl = true

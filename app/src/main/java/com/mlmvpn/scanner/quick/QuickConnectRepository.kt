@@ -19,6 +19,8 @@ import java.net.URLDecoder
 import java.net.URLEncoder
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
 
 /**
  * «اتصال سریع» -- a ready-to-use server pool with a country picker and one-tap connect.
@@ -105,6 +107,13 @@ object QuickConnectRepository {
         val mirror: String? = null,
         /** When set, entries come from [FreeConfigEngine] instead of a URL of our own. */
         val pool: Boolean = false,
+        /**
+         * When set, entries come from the MLMVPN shared pool.
+         *
+         * It cannot be a plain URL like the others: the request has to be signed with this
+         * install's enrolment, and what comes back is scoped to the caller's own network.
+         */
+        val shared: Boolean = false,
     )
 
     // Several feeds, on purpose: any single one being down or filtered still leaves a usable
@@ -126,21 +135,32 @@ object QuickConnectRepository {
     private const val RADIKAL_MIRROR = "https://cdn.jsdelivr.net/gh/0xRadikal/Free-v2ray-Configs@main"
 
     private val SOURCES = listOf(
+        // First on purpose. De-duplication keeps the FIRST occurrence, so a server that is both
+        // in a public feed and in the pool is filed under the pool -- which is the label that
+        // actually says something about whether it works.
+        Source(
+            id = MlmPoolClient.SOURCE,
+            title = S(R.string.mlmvpn_private_list_2),
+            shared = true,
+        ),
         Source(
             id = "global",
-            title = "مخزن جهانی",
+            title = S(R.string.global_pool),
             url = "https://raw.githubusercontent.com/iampedii/whitedns-sub/refs/heads/main/base64.txt",
             mirror = "https://cdn.jsdelivr.net/gh/iampedii/whitedns-sub@main/base64.txt",
         ),
-        Source(id = "verified", title = "تأییدشده", url = "$RADIKAL/verified/configs.txt", mirror = "$RADIKAL_MIRROR/verified/configs.txt"),
-        Source(id = "fast", title = "سریع", url = "$RADIKAL/fast/configs.txt", mirror = "$RADIKAL_MIRROR/fast/configs.txt"),
-        Source(id = "secure", title = "امن", url = "$RADIKAL/secure/configs.txt", mirror = "$RADIKAL_MIRROR/secure/configs.txt"),
-        Source(id = "all", title = "همه", url = "$RADIKAL/all/configs.txt", mirror = "$RADIKAL_MIRROR/all/configs.txt"),
-        Source(id = "extra", title = "منابع تکمیلی", pool = true),
+        Source(id = "verified", title = S(R.string.verified), url = "$RADIKAL/verified/configs.txt", mirror = "$RADIKAL_MIRROR/verified/configs.txt"),
+        Source(id = "fast", title = S(R.string.fast), url = "$RADIKAL/fast/configs.txt", mirror = "$RADIKAL_MIRROR/fast/configs.txt"),
+        Source(id = "secure", title = S(R.string.secure), url = "$RADIKAL/secure/configs.txt", mirror = "$RADIKAL_MIRROR/secure/configs.txt"),
+        Source(id = "all", title = S(R.string.all_4), url = "$RADIKAL/all/configs.txt", mirror = "$RADIKAL_MIRROR/all/configs.txt"),
+        Source(id = "extra", title = S(R.string.extra_sources), pool = true),
     )
 
+    /** How many feeds a refresh has to get through, for the progress readout. */
+    val sourceCount: Int get() = SOURCES.size
+
     /** How often the upstream feeds themselves refresh — shown to the user in the list. */
-    const val SOURCE_REFRESH_LABEL = "منابع هر ۱۵ دقیقه به‌روز می‌شوند"
+    val SOURCE_REFRESH_LABEL: String get() = S(R.string.the_sources_refresh_every_15_minutes)
 
     private const val CACHE_FILE = "quick-servers.json"
 
@@ -205,7 +225,7 @@ object QuickConnectRepository {
                 lastErr = e.message
             }
         }
-        throw IllegalStateException(lastErr ?: "دریافت نشد")
+        throw IllegalStateException(lastErr ?: S(R.string.not_fetched))
     }
 
     /** Feeds ship either raw links or one big base64 blob; accept both without being told. */
@@ -293,6 +313,25 @@ object QuickConnectRepository {
      * malformed parameters -- every one of which is fatal to the WHOLE Xray config rather than
      * to the single node, so none of them may ever reach the tester.
      */
+    /**
+     * One URI, parsed the same way a feed's would be.
+     *
+     * The pool worker hands back configs rather than a feed, but they have to arrive as the same
+     * [QuickNode] the list, the tester and the connect button already know -- including the
+     * protocol filtering, which is not cosmetic: a config the core cannot speak poisons the whole
+     * generated Xray config, not just its own entry.
+     */
+    fun parseNode(uri: String, sourceId: String): QuickNode? {
+        val (nodes, _, _) = toEntries(
+            uris = listOf(uri),
+            sourceId = sourceId,
+            seen = HashSet(),
+            usedTags = HashSet(),
+            blocked = emptySet(),
+        )
+        return nodes.firstOrNull()
+    }
+
     private fun toEntries(
         uris: List<String>,
         sourceId: String,
@@ -414,16 +453,25 @@ object QuickConnectRepository {
         }
     }
 
-    private suspend fun fetchAll(context: Context): Snapshot {
+    private suspend fun fetchAll(
+        context: Context,
+        onProgress: (done: Int, total: Int, title: String) -> Unit = { _, _, _ -> },
+    ): Snapshot {
         val seen = HashSet<String>()
         val usedTags = HashSet<String>()
         val nodes = ArrayList<QuickNode>()
         val sources = ArrayList<QuickSourceStatus>()
         val blocked = QuickBlocklist.ids(context)
 
-        for (src in SOURCES) {
+        for ((index, src) in SOURCES.withIndex()) {
+            onProgress(index, SOURCES.size, src.title)
             try {
-                val uris = if (src.pool) {
+                val uris = if (src.shared) {
+                    // Servers other installs on this same network have proven within the hour.
+                    // Returns nothing when the pool has not been reached or has no entry for
+                    // this ISP yet, which is an ordinary empty source, not a failure.
+                    MlmPoolClient.fetch(context).map { it.uri }
+                } else if (src.pool) {
                     // Already parsed and de-duped by FreeConfigEngine; re-key it against the
                     // merged set so the same server appearing in both feeds is listed once.
                     FreeConfigEngine.fetchCandidates()
@@ -444,7 +492,8 @@ object QuickConnectRepository {
             }
         }
 
-        if (nodes.isEmpty()) throw IllegalStateException("هیچ سروری دریافت نشد — اینترنت یا مسیر دسترسی را بررسی کنید.")
+        onProgress(SOURCES.size, SOURCES.size, "")
+        if (nodes.isEmpty()) throw IllegalStateException(S(R.string.no_servers_were_fetched_check_your_internet))
         QuickVerifiedStore.applyTo(context, nodes)
         return Snapshot(at = System.currentTimeMillis(), nodes = nodes, sources = sources)
     }
@@ -524,6 +573,41 @@ object QuickConnectRepository {
     }
 
     suspend fun catalog(context: Context, force: Boolean = false): QuickCatalog = summarise(load(context, force))
+
+    /**
+     * The list we already hold, or null -- memory first, then the disk cache. Never the network.
+     *
+     * Opening the browse screen used to call straight through to [catalog], so the first thing
+     * it did was download six feeds and parse ~12,000 lines while the user watched an empty
+     * screen. Whatever was cached could have been on screen instantly. Refreshing is now
+     * something the user asks for, so the wait only ever happens when it was requested.
+     */
+    fun cached(context: Context): QuickCatalog? {
+        val snap = memory ?: readDiskCache(context)?.also { memory = it } ?: return null
+        return summarise(snap)
+    }
+
+    /** How old the cached list is, in milliseconds, or null when there is none. */
+    fun cacheAgeMs(context: Context): Long? {
+        val snap = memory ?: readDiskCache(context)?.also { memory = it } ?: return null
+        return System.currentTimeMillis() - snap.at
+    }
+
+    /**
+     * Download every feed again, reporting which one is in flight.
+     *
+     * Unlike [catalog] this never falls back to the cache: the user pressed refresh, so a
+     * failure is something they need to be told about rather than quietly papered over.
+     */
+    suspend fun refresh(
+        context: Context,
+        onProgress: (done: Int, total: Int, title: String) -> Unit = { _, _, _ -> },
+    ): QuickCatalog = loadLock.withLock {
+        val fresh = fetchAll(context, onProgress)
+        memory = fresh
+        writeDiskCache(context, fresh)
+        summarise(fresh)
+    }
 
     /** Every node, or only those in one country. `"unknown"` selects the unlabelled ones. */
     suspend fun nodesFor(context: Context, country: String?, force: Boolean = false): List<QuickNode> {

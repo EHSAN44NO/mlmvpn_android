@@ -1,5 +1,7 @@
 package com.mlmvpn.scanner.ui.aether
 
+import com.mlmvpn.scanner.ui.home.frostedGlass
+import com.mlmvpn.scanner.ui.theme.*
 import android.app.Activity
 import android.content.Context
 import android.widget.Toast
@@ -71,6 +73,8 @@ import com.mlmvpn.core.aether.AetherScan
 import com.mlmvpn.core.aether.AetherStage
 import com.mlmvpn.core.aether.AetherState
 import kotlinx.coroutines.launch
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
 
 /**
  * Compose UI for the Aether engine on Android.
@@ -101,7 +105,7 @@ fun AetherScreen() {
         when (state.stage) {
             AetherStage.CONNECTED -> Toast.makeText(
                 context,
-                "متصل شد${state.server?.let { " • $it" } ?: ""}",
+                S(R.string.connected_server_suffix, state.server?.let { " • $it" } ?: ""),
                 Toast.LENGTH_SHORT,
             ).show()
             // `stageFa` carries the headline (AetherState.failed puts the message there);
@@ -180,7 +184,7 @@ fun AetherScreen() {
         if (res.resultCode == Activity.RESULT_OK) {
             pendingConfig?.let { startTunnel(it) }
         } else {
-            Toast.makeText(context, "بدون اجازهٔ VPN، تونل کل دستگاه ممکن نیست", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, S(R.string.without_vpn_permission_there_can_be_no_2), Toast.LENGTH_LONG).show()
         }
         pendingConfig = null
     }
@@ -208,7 +212,10 @@ fun AetherScreen() {
      */
     var screenOwnsSession by remember { mutableStateOf(false) }
 
-    fun doConnect() {
+    fun doConnect() = com.mlmvpn.scanner.data.ScanGuard.run(
+        // A tunnel steals the default route from a running IP scan; the guard asks first.
+        com.mlmvpn.scanner.data.ScanGuard.Reason.CONNECT_VPN
+    ) {
         userStopped = false
         screenOwnsSession = true
         val opts = AetherOptions(
@@ -289,7 +296,7 @@ fun AetherScreen() {
             state.sawAccessDenied && !triedIdentityReset -> {
                 triedIdentityReset = true
                 val n = engine.resetIdentity()
-                autoRetryNote = "هویت پذیرفته نشد — هویت تازه ساخته شد ($n فایل) و دوباره تلاش می‌کنم"
+                autoRetryNote = S(R.string.the_identity_was_rejected_a_fresh_one, n)
                 kotlinx.coroutines.delay(1200)
                 doConnect()
             }
@@ -304,7 +311,7 @@ fun AetherScreen() {
             activeTab == AetherProtocol.MASQUE && transport == "h3" && !triedH2Fallback -> {
                 triedH2Fallback = true
                 transport = "h2"
-                autoRetryNote = "با HTTP/3 سروری پیدا نشد — احتمالاً UDP بسته است؛ خودکار HTTP/2 را امتحان می‌کنم"
+                autoRetryNote = S(R.string.no_server_was_found_over_http_3)
                 kotlinx.coroutines.delay(1200)
                 doConnect()
             }
@@ -313,14 +320,15 @@ fun AetherScreen() {
 
     Column(modifier = Modifier
         .fillMaxSize()
-        .background(MaterialTheme.colorScheme.background)
-        // bottom = 100.dp clears the floating bottom nav (≈78dp) so the connect/disconnect
-        // buttons never hide under it. Matches the app-wide convention used everywhere else.
-        .padding(start = 12.dp, top = 12.dp, end = 12.dp, bottom = 100.dp)) {
+        // Transparent: the feature host owns the backdrop for every screen it hosts.
+        .background(androidx.compose.ui.graphics.Color.Transparent)
+        // The floating bottom nav bar this used to clear no longer exists; the system
+        // navigation bar inset is handled once by AppScreen's feature host.
+        .padding(start = 12.dp, top = 12.dp, end = 12.dp, bottom = 24.dp)) {
 
         // Title + protocol tabs, kept compact so the button dominates the screen.
         Text(
-            "موتور وایرگارد",
+            S(R.string.wireguard_engine),
             fontWeight = FontWeight.Bold,
             fontSize = 16.sp,
             modifier = Modifier.align(Alignment.CenterHorizontally),
@@ -354,7 +362,7 @@ fun AetherScreen() {
                 lineHeight = 16.sp,
                 modifier = Modifier
                     .align(Alignment.CenterHorizontally)
-                    .clip(RoundedCornerShape(10.dp))
+                    .clip(ControlShape)
                     .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f))
                     .padding(horizontal = 12.dp, vertical = 8.dp),
             )
@@ -374,8 +382,8 @@ fun AetherScreen() {
                 // Spell out the split. "۲ فایل" after a single connect reads like the app
                 // enrolled twice; "۱ هویت + ۱ حافظه‌ی سرور" says what actually happened.
                 val r = engine.resetIdentityDetailed()
-                val msg = if (r.total == 0) "چیزی برای پاک کردن نبود"
-                          else "${r.identities} هویت و ${r.caches} حافظه‌ی سرور پاک شد"
+                val msg = if (r.total == 0) S(R.string.there_was_nothing_to_clear)
+                          else S(R.string.identities_and_server_caches_were_cleared, r.identities, r.caches)
                 Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
             },
         )
@@ -418,7 +426,7 @@ private fun AetherPowerButton(
     modifier: Modifier = Modifier,
 ) {
     val accent = when (state.stage) {
-        AetherStage.CONNECTED -> Color(0xFF3ba55d)
+        AetherStage.CONNECTED -> GreenOk
         AetherStage.FAILED, AetherStage.CRASHED -> Color(0xFFff6b6b)
         AetherStage.STOPPED, AetherStage.IDLE -> MaterialTheme.colorScheme.primary
         else -> Color(0xFFFDE293)
@@ -467,8 +475,8 @@ private fun AetherPowerButton(
         ) {
             Icon(
                 imageVector = Icons.Default.PowerSettingsNew,
-                contentDescription = if (state.running) "قطع اتصال" else "اتصال",
-                tint = Color(0xFF121212),
+                contentDescription = if (state.running) S(R.string.disconnect_4) else S(R.string.connect_3),
+                tint = BgDark,
                 modifier = Modifier.size(52.dp),
             )
         }
@@ -478,9 +486,9 @@ private fun AetherPowerButton(
 @Composable
 private fun AetherStatusLine(state: AetherState, modifier: Modifier = Modifier) {
     val color = when (state.stage) {
-        AetherStage.CONNECTED -> Color(0xFF3ba55d)
+        AetherStage.CONNECTED -> GreenOk
         AetherStage.FAILED, AetherStage.CRASHED -> Color(0xFFff6b6b)
-        AetherStage.STOPPED, AetherStage.IDLE -> Color(0xFF9AA0A6)
+        AetherStage.STOPPED, AetherStage.IDLE -> TextMuted
         else -> Color(0xFFFDE293)
     }
     Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
@@ -513,7 +521,7 @@ private fun QuickSettings(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (protocol == AetherProtocol.MASQUE) {
-            QuickRow("ترنسپورت") {
+            QuickRow(S(R.string.transport_3)) {
                 MiniSegmented(
                     options = listOf("h3" to "HTTP/3", "h2" to "HTTP/2"),
                     selected = transport,
@@ -523,7 +531,7 @@ private fun QuickSettings(
             }
         }
 
-        QuickRow("حالت اسکن") {
+        QuickRow(S(R.string.scan_mode_2)) {
             MiniSegmented(
                 // The enum's displayFa is a full sentence — fine in a dropdown, far too long
                 // for a segment. Same modes, named short.
@@ -535,10 +543,10 @@ private fun QuickSettings(
                 // so every candidate fails and the scan returns nothing. Useful on a clean
                 // connection, useless on the ones this app exists for.
                 options = listOf(
-                    AetherScan.TURBO.name to "توربو",
-                    AetherScan.BALANCED.name to "متعادل",
-                    AetherScan.THOROUGH.name to "کامل",
-                    AetherScan.IRONCLAD.name to "تضمینی",
+                    AetherScan.TURBO.name to S(R.string.turbo_2),
+                    AetherScan.BALANCED.name to S(R.string.balanced_2),
+                    AetherScan.THOROUGH.name to S(R.string.full_2),
+                    AetherScan.IRONCLAD.name to S(R.string.guaranteed_2),
                 ),
                 selected = scan.name,
                 enabled = !running,
@@ -548,14 +556,14 @@ private fun QuickSettings(
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ButtonLite(
-                text = "تنظیمات پیشرفته",
-                color = Color(0xFF2a2a2a),
+                text = S(R.string.advanced_settings_3),
+                color = SurfaceDark,
                 onClick = onOpenAdvanced,
                 modifier = Modifier.weight(1f),
             )
             ButtonLite(
-                text = "پاک کردن هویت",
-                color = Color(0xFF2a2a2a),
+                text = S(R.string.clear_the_identity),
+                color = SurfaceDark,
                 onClick = onReset,
                 modifier = Modifier.weight(1f),
             )
@@ -567,7 +575,7 @@ private fun QuickSettings(
 @Composable
 private fun QuickRow(label: String, content: @Composable () -> Unit) {
     Column(modifier = Modifier.fillMaxWidth()) {
-        Text(label, fontSize = 11.sp, color = Color(0xFF9a97a3))
+        Text(label, fontSize = 11.sp, color = TextMuted)
         Spacer(modifier = Modifier.height(6.dp))
         content()
     }
@@ -584,8 +592,8 @@ private fun MiniSegmented(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(11.dp))
-            .background(Color(0xFF1e1f22))
+            .clip(ControlShape)
+            .frostedGlass(androidx.compose.ui.graphics.RectangleShape)
             .padding(3.dp),
         horizontalArrangement = Arrangement.spacedBy(3.dp),
     ) {
@@ -594,7 +602,7 @@ private fun MiniSegmented(
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .clip(RoundedCornerShape(9.dp))
+                    .clip(RoundedCornerShape(8.dp))
                     .background(if (on) MaterialTheme.colorScheme.primary else Color.Transparent)
                     .clickable(enabled = enabled) { onSelected(value) }
                     .padding(vertical = 9.dp),
@@ -607,7 +615,7 @@ private fun MiniSegmented(
                     color = when {
                         on -> Color.White
                         !enabled -> Color(0xFF5F6368)
-                        else -> Color(0xFF9a97a3)
+                        else -> TextMuted
                     },
                 )
             }
@@ -636,12 +644,12 @@ private fun AetherProgressStrip(state: AetherState, protocol: AetherProtocol) {
                     modifier = Modifier
                         .weight(1f)
                         .height(3.dp)
-                        .clip(RoundedCornerShape(2.dp))
+                        .clip(RoundedCornerShape(8.dp))
                         .background(
                             when {
-                                activeIdx > idx -> Color(0xFF3ba55d)
+                                activeIdx > idx -> GreenOk
                                 activeIdx == idx -> MaterialTheme.colorScheme.primary
-                                else -> Color(0xFF2a2a2a)
+                                else -> SurfaceDark
                             }
                         )
                 )
@@ -649,7 +657,7 @@ private fun AetherProgressStrip(state: AetherState, protocol: AetherProtocol) {
         }
         Spacer(modifier = Modifier.height(6.dp))
         Text(
-            text = steps.getOrNull(activeIdx)?.second ?: "آماده",
+            text = steps.getOrNull(activeIdx)?.second ?: S(R.string.ready_4),
             fontSize = 10.sp,
             color = Color(0xFF5F6368),
             modifier = Modifier.align(Alignment.CenterHorizontally),
@@ -659,20 +667,20 @@ private fun AetherProgressStrip(state: AetherState, protocol: AetherProtocol) {
 
 private fun stagesFor(protocol: AetherProtocol): List<Pair<String, String>> = when (protocol) {
     AetherProtocol.MASQUE -> listOf(
-        "identity" to "هویت", "quickcheck" to "بررسی سرور قبلی",
-        "scan" to "اسکن گیت‌وی", "selected" to "انتخاب سرور",
-        "tunnel" to "برقراری تونل", "validate" to "اعتبارسنجی عبور داده",
-        "connected" to "اتصال",
+        "identity" to S(R.string.identity), "quickcheck" to S(R.string.checking_the_previous_server),
+        "scan" to S(R.string.gateway_scan), "selected" to S(R.string.choosing_a_server),
+        "tunnel" to S(R.string.bringing_the_tunnel_up_2), "validate" to S(R.string.verifying_data_passes),
+        "connected" to S(R.string.connect_3),
     )
     AetherProtocol.WG -> listOf(
-        "identity" to "هویت", "quickcheck" to "بررسی سرور قبلی",
-        "scan" to "اسکن اندپوینت", "selected" to "انتخاب سرور",
-        "handshake" to "دست‌دادن", "connected" to "اتصال",
+        "identity" to S(R.string.identity), "quickcheck" to S(R.string.checking_the_previous_server),
+        "scan" to S(R.string.endpoint_scan_2), "selected" to S(R.string.choosing_a_server),
+        "handshake" to S(R.string.handshake), "connected" to S(R.string.connect_3),
     )
     AetherProtocol.WARP_IN_WARP -> listOf(
-        "identity" to "هویت دوگانه", "scan" to "اسکن اندپوینت",
-        "selected" to "انتخاب سرور", "handshake" to "تونل بیرونی + داخلی",
-        "connected" to "اتصال",
+        "identity" to S(R.string.dual_identity), "scan" to S(R.string.endpoint_scan_2),
+        "selected" to S(R.string.choosing_a_server), "handshake" to S(R.string.outer_inner_tunnel),
+        "connected" to S(R.string.connect_3),
     )
 }
 
@@ -700,13 +708,13 @@ private fun AdvancedSettingsDialog(
     ) {
         Surface(
             color = MaterialTheme.colorScheme.background,
-            shape = RoundedCornerShape(20.dp),
+            shape = CardShape,
             modifier = Modifier.fillMaxSize(),
         ) {
             Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        "تنظیمات پیشرفته",
+                        S(R.string.advanced_settings_3),
                         fontWeight = FontWeight.Bold,
                         fontSize = 15.sp,
                         modifier = Modifier.weight(1f),
@@ -716,8 +724,8 @@ private fun AdvancedSettingsDialog(
                     IconButton(onClick = onDismiss) {
                         Icon(
                             Icons.Default.Close,
-                            contentDescription = "بستن",
-                            tint = Color(0xFF9a97a3),
+                            contentDescription = S(R.string.close_4),
+                            tint = TextMuted,
                         )
                     }
                 }
@@ -761,20 +769,20 @@ private fun AdvancedSettingsDialog(
 @Composable
 private fun HeaderCard() {
     Card(
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1a2233))
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = SurfaceDark)
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.Bolt, null, tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("موتور وایرگارد", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Text(S(R.string.wireguard_engine), fontWeight = FontWeight.Bold, fontSize = 16.sp)
             }
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                "موتور دور زدن سانسور مبتنی بر WARP کلادفلر برای شبکه‌های به‌شدت فیلترشده. " +
-                    "مثل نسخه‌ی ویندوز، سرور سالم را پیدا می‌کند، تونل رمزنگاری‌شده می‌سازد و " +
-                    "پراکسی SOCKS5 روی 127.0.0.1:${AetherEngine.AETHER_SOCKS_PORT} در دسترس قرار می‌دهد.",
+                S(R.string.a_censorship_circumvention_engine_built_on_cloudflare) +
+                    S(R.string.like_the_windows_build_it_finds_a) +
+                    S(R.string.exposes_a_socks5_proxy_on_127_0, AetherEngine.AETHER_SOCKS_PORT),
                 fontSize = 12.sp, lineHeight = 18.sp, color = Color(0xFFc9c5d0)
             )
         }
@@ -798,7 +806,7 @@ private fun TabRow(active: AetherProtocol, onSelect: (AetherProtocol) -> Unit) {
                 label = { Text(proto.displayFa, fontSize = 12.sp) },
                 colors = AssistChipDefaults.assistChipColors(
                     containerColor = if (selected) MaterialTheme.colorScheme.primary else Color(0xFF1e1f22),
-                    labelColor = if (selected) Color.White else Color(0xFF9a97a3)
+                    labelColor = if (selected) Color.White else TextMuted
                 ),
                 modifier = Modifier.weight(1f)
             )
@@ -815,33 +823,33 @@ private fun MasquePane(
     ech: String, onEch: (String) -> Unit,
 ) {
     SettingsCard {
-        SectionTitle("ترنسپورت")
+        SectionTitle(S(R.string.transport_3))
         SegmentedControl(options = listOf("h3" to "HTTP/3 (QUIC)", "h2" to "HTTP/2 (TCP)"),
             selected = transport, onSelected = onTransport)
-        SectionHint("اگر UDP محدود شده، HTTP/2 را انتخاب کن.")
+        SectionHint(S(R.string.if_udp_is_restricted_choose_http_2))
 
         Spacer(modifier = Modifier.height(10.dp))
-        SectionTitle("فرگمنت ClientHello (فقط روی HTTP/2)")
+        SectionTitle(S(R.string.clienthello_fragmentation_http_2_only))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(checked = fragment, onCheckedChange = onFragment,
                 colors = SwitchDefaults.colors(checkedThumbColor = MaterialTheme.colorScheme.primary))
             Spacer(modifier = Modifier.width(6.dp))
-            Text(if (fragment) "فعال" else "غیرفعال", fontSize = 12.sp)
+            Text(if (fragment) S(R.string.on_3) else S(R.string.off_3), fontSize = 12.sp)
         }
         Spacer(modifier = Modifier.height(6.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             TextFieldLite(value = fragmentSize, onValueChange = onFragmentSize,
-                placeholder = "اندازه 16-32", modifier = Modifier.weight(1f))
+                placeholder = S(R.string.size_16_32), modifier = Modifier.weight(1f))
             TextFieldLite(value = fragmentDelay, onValueChange = onFragmentDelay,
-                placeholder = "تأخیر 2-10", modifier = Modifier.weight(1f))
+                placeholder = S(R.string.delay_2_10), modifier = Modifier.weight(1f))
         }
-        SectionHint("دست‌دادن TLS را تکه‌تکه می‌فرستد تا DPI نتواند SNI را بخواند.")
+        SectionHint(S(R.string.sends_the_tls_handshake_in_pieces_so))
 
         Spacer(modifier = Modifier.height(10.dp))
-        SectionTitle("ECH (رمزنگاری SNI)")
-        DropdownLite(selected = ech, options = listOf("" to "خاموش", "auto" to "خودکار"),
+        SectionTitle(S(R.string.ech_encrypted_sni))
+        DropdownLite(selected = ech, options = listOf("" to S(R.string.off_4), "auto" to S(R.string.automatic_4)),
             onSelected = onEch)
-        SectionHint("اندپوینت MASQUE کلادفلر معمولاً ECH نمی‌پذیرد؛ خاموش بگذارید.")
+        SectionHint(S(R.string.cloudflare_s_masque_endpoint_usually_refuses_ech))
     }
 }
 
@@ -852,26 +860,26 @@ private fun WgPane(
     keepalive: String, onKeepalive: (String) -> Unit,
 ) {
     SettingsCard {
-        SectionTitle("پروفایل AetherNoize")
+        SectionTitle(S(R.string.aethernoize_profile))
         DropdownLite(selected = noize,
-            options = listOf("balanced" to "متعادل (پیش‌فرض)", "off" to "خاموش",
-                "light" to "سبک", "aggressive" to "تهاجمی (GFW)"),
+            options = listOf("balanced" to S(R.string.balanced_default), "off" to S(R.string.off_4),
+                "light" to S(R.string.light_2), "aggressive" to S(R.string.aggressive_gfw)),
             onSelected = onNoize)
-        SectionHint("بسته‌های جعلی اضافه می‌کند تا الگوی WireGuard شناسایی نشود.")
+        SectionHint(S(R.string.adds_decoy_packets_so_the_wireguard_pattern))
 
         Spacer(modifier = Modifier.height(10.dp))
-        SectionTitle("تلاش خودکار با پروفایل‌های دیگر")
+        SectionTitle(S(R.string.try_the_other_profiles_automatically))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(checked = retry, onCheckedChange = onRetry)
             Spacer(modifier = Modifier.width(6.dp))
-            Text("اگر پروفایل اول جواب نداد، بقیه را امتحان کن", fontSize = 12.sp)
+            Text(S(R.string.if_the_first_profile_does_not_work), fontSize = 12.sp)
         }
 
         Spacer(modifier = Modifier.height(10.dp))
-        SectionTitle("Keepalive (ثانیه)")
+        SectionTitle(S(R.string.keepalive_seconds))
         TextFieldLite(value = keepalive, onValueChange = onKeepalive,
             placeholder = "5", modifier = Modifier.fillMaxWidth())
-        SectionHint("عدد کمتر = پایدارتر پشت NAT، مصرف کمی بیشتر.")
+        SectionHint(S(R.string.a_lower_number_means_more_stability_behind))
     }
 }
 
@@ -881,19 +889,19 @@ private fun GooLPane(
     keepalive: String, onKeepalive: (String) -> Unit,
 ) {
     SettingsCard {
-        Text("یک تونل WireGuard داخل تونل WireGuard دیگر — یک لایه رمزنگاری اضافه.",
-            fontSize = 11.sp, color = Color(0xFF9a97a3), lineHeight = 17.sp)
+        Text(S(R.string.a_wireguard_tunnel_inside_another_wireguard_tunnel),
+            fontSize = 11.sp, color = TextMuted, lineHeight = 17.sp)
         Spacer(modifier = Modifier.height(8.dp))
-        WarningCard(text = "⚠️ این حالت دو هویت کلادفلر می‌سازد و سرعت را کاهش می‌دهد. اگر MASQUE کار می‌کند، آن را ترجیح دهید.")
+        WarningCard(text = S(R.string.this_mode_creates_two_cloudflare_identities_and))
         Spacer(modifier = Modifier.height(10.dp))
-        SectionTitle("پروفایل AetherNoize (تونل بیرونی)")
+        SectionTitle(S(R.string.aethernoize_profile_outer_tunnel))
         DropdownLite(selected = noize,
-            options = listOf("balanced" to "متعادل (پیش‌فرض)", "off" to "خاموش",
-                "light" to "سبک", "aggressive" to "تهاجمی"),
+            options = listOf("balanced" to S(R.string.balanced_default), "off" to S(R.string.off_4),
+                "light" to S(R.string.light_2), "aggressive" to S(R.string.aggressive_2)),
             onSelected = onNoize)
-        SectionHint("تونل داخلی همیشه بدون مبهم‌سازی است.")
+        SectionHint(S(R.string.the_inner_tunnel_is_always_unobfuscated))
         Spacer(modifier = Modifier.height(10.dp))
-        SectionTitle("Keepalive تونل بیرونی (ثانیه)")
+        SectionTitle(S(R.string.outer_tunnel_keepalive_seconds))
         TextFieldLite(value = keepalive, onValueChange = onKeepalive,
             placeholder = "5", modifier = Modifier.fillMaxWidth())
     }
@@ -908,27 +916,27 @@ private fun MasqueAdvancedPane(
     ech: String, onEch: (String) -> Unit,
 ) {
     SettingsCard {
-        SectionTitle("فرگمنت ClientHello (فقط روی HTTP/2)")
+        SectionTitle(S(R.string.clienthello_fragmentation_http_2_only))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(checked = fragment, onCheckedChange = onFragment,
                 colors = SwitchDefaults.colors(checkedThumbColor = MaterialTheme.colorScheme.primary))
             Spacer(modifier = Modifier.width(6.dp))
-            Text(if (fragment) "فعال" else "غیرفعال", fontSize = 12.sp)
+            Text(if (fragment) S(R.string.on_3) else S(R.string.off_3), fontSize = 12.sp)
         }
         Spacer(modifier = Modifier.height(6.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             TextFieldLite(value = fragmentSize, onValueChange = onFragmentSize,
-                placeholder = "اندازه 16-32", modifier = Modifier.weight(1f))
+                placeholder = S(R.string.size_16_32), modifier = Modifier.weight(1f))
             TextFieldLite(value = fragmentDelay, onValueChange = onFragmentDelay,
-                placeholder = "تأخیر 2-10", modifier = Modifier.weight(1f))
+                placeholder = S(R.string.delay_2_10), modifier = Modifier.weight(1f))
         }
-        SectionHint("دست‌دادن TLS را تکه‌تکه می‌فرستد تا DPI نتواند SNI را بخواند.")
+        SectionHint(S(R.string.sends_the_tls_handshake_in_pieces_so))
 
         Spacer(modifier = Modifier.height(10.dp))
-        SectionTitle("ECH (رمزنگاری SNI)")
-        DropdownLite(selected = ech, options = listOf("" to "خاموش", "auto" to "خودکار"),
+        SectionTitle(S(R.string.ech_encrypted_sni))
+        DropdownLite(selected = ech, options = listOf("" to S(R.string.off_4), "auto" to S(R.string.automatic_4)),
             onSelected = onEch)
-        SectionHint("اندپوینت MASQUE کلادفلر معمولاً ECH نمی‌پذیرد؛ خاموش بگذارید.")
+        SectionHint(S(R.string.cloudflare_s_masque_endpoint_usually_refuses_ech))
     }
 }
 
@@ -940,41 +948,41 @@ private fun SharedAdvancedPane(
     verbose: Boolean, onVerbose: (Boolean) -> Unit,
     noDataCheck: Boolean, onNoDataCheck: (Boolean) -> Unit,
 ) {
-    SettingsCard(title = "تنظیمات مشترک") {
-        SectionTitle("نسخه IP")
+    SettingsCard(title = S(R.string.shared_settings)) {
+        SectionTitle(S(R.string.ip_version))
         DropdownLiteE(selected = ip, options = AetherIp.values().toList(),
             label = { it.displayFa }, onSelected = onIp)
 
         Spacer(modifier = Modifier.height(10.dp))
-        SectionTitle("اتصال سریع به سرور قبلی")
+        SectionTitle(S(R.string.reconnect_quickly_to_the_previous_server))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(checked = quick, onCheckedChange = onQuick)
             Spacer(modifier = Modifier.width(6.dp))
-            Text("اگر سرور قبلی سالم بود، اسکن را رد کن", fontSize = 12.sp)
+            Text(S(R.string.if_the_previous_server_was_healthy_skip), fontSize = 12.sp)
         }
 
         Spacer(modifier = Modifier.height(10.dp))
-        SectionTitle("پذیرش سرور بدون تست عبور داده")
+        SectionTitle(S(R.string.accept_a_server_without_a_data_pass))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(checked = noDataCheck, onCheckedChange = onNoDataCheck)
             Spacer(modifier = Modifier.width(6.dp))
-            Text("سرور را فقط با دست‌دادن موفق بپذیر", fontSize = 12.sp)
+            Text(S(R.string.accept_a_server_on_a_successful_handshake), fontSize = 12.sp)
         }
         SectionHint(
-            "به‌طور پیش‌فرض، سرور تا وقتی واقعاً داده رد و بدل نکند پذیرفته نمی‌شود. " +
-                "اگر همهٔ سرورها با «closed before data-plane confirmation» رد می‌شوند، " +
-                "این را روشن کنید: اگر بعدش وصل شد ولی چیزی باز نشد، یعنی شبکه دادهٔ داخل " +
-                "تونل را می‌اندازد و باید h2 یا وایرگارد را امتحان کنید."
+            S(R.string.by_default_a_server_is_not_accepted) +
+                S(R.string.if_every_server_is_rejected_with_closed) +
+                S(R.string.turn_this_on_if_it_then_connects) +
+                S(R.string.the_tunnel_and_you_should_try_h2)
         )
 
         Spacer(modifier = Modifier.height(10.dp))
-        SectionTitle("لاگ کامل (debug)")
+        SectionTitle(S(R.string.full_log_debug))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(checked = verbose, onCheckedChange = onVerbose)
             Spacer(modifier = Modifier.width(6.dp))
-            Text("جزئیات بیشتر در لاگ هسته + نمایش باکس لاگ", fontSize = 12.sp)
+            Text(S(R.string.more_detail_in_the_core_log_and), fontSize = 12.sp)
         }
-        SectionHint("فقط برای عیب‌یابی روشن کنید.")
+        SectionHint(S(R.string.turn_it_on_for_troubleshooting_only))
     }
 }
 
@@ -986,47 +994,47 @@ private fun SharedPane(
     verbose: Boolean, onVerbose: (Boolean) -> Unit,
     noDataCheck: Boolean, onNoDataCheck: (Boolean) -> Unit,
 ) {
-    SettingsCard(title = "تنظیمات مشترک") {
-        SectionTitle("حالت اسکن")
+    SettingsCard(title = S(R.string.shared_settings)) {
+        SectionTitle(S(R.string.scan_mode_2))
         DropdownLiteE(selected = scan, options = AetherScan.values().toList(),
             label = { it.displayFa }, onSelected = onScan)
-        SectionHint("«متعادل» بعد از پیدا کردن اولین سرور متوقف نمی‌شود؛ می‌گردد تا ۶ تا پیدا کند.")
+        SectionHint(S(R.string.balanced_does_not_stop_at_the_first))
 
         Spacer(modifier = Modifier.height(10.dp))
-        SectionTitle("نسخه IP")
+        SectionTitle(S(R.string.ip_version))
         DropdownLiteE(selected = ip, options = AetherIp.values().toList(),
             label = { it.displayFa }, onSelected = onIp)
 
         Spacer(modifier = Modifier.height(10.dp))
-        SectionTitle("اتصال سریع به سرور قبلی")
+        SectionTitle(S(R.string.reconnect_quickly_to_the_previous_server))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(checked = quick, onCheckedChange = onQuick)
             Spacer(modifier = Modifier.width(6.dp))
-            Text("اگر سرور قبلی سالم بود، اسکن را رد کن", fontSize = 12.sp)
+            Text(S(R.string.if_the_previous_server_was_healthy_skip), fontSize = 12.sp)
         }
 
         Spacer(modifier = Modifier.height(10.dp))
-        SectionTitle("پذیرش سرور بدون تست عبور داده")
+        SectionTitle(S(R.string.accept_a_server_without_a_data_pass))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(checked = noDataCheck, onCheckedChange = onNoDataCheck)
             Spacer(modifier = Modifier.width(6.dp))
-            Text("سرور را فقط با دست‌دادن موفق بپذیر", fontSize = 12.sp)
+            Text(S(R.string.accept_a_server_on_a_successful_handshake), fontSize = 12.sp)
         }
         SectionHint(
-            "به‌طور پیش‌فرض، سرور تا وقتی واقعاً داده رد و بدل نکند پذیرفته نمی‌شود. " +
-                "اگر همهٔ سرورها با «closed before data-plane confirmation» رد می‌شوند، " +
-                "این را روشن کنید: اگر بعدش وصل شد ولی چیزی باز نشد، یعنی شبکه دادهٔ داخل " +
-                "تونل را می‌اندازد و باید h2 یا وایرگارد را امتحان کنید."
+            S(R.string.by_default_a_server_is_not_accepted) +
+                S(R.string.if_every_server_is_rejected_with_closed) +
+                S(R.string.turn_this_on_if_it_then_connects) +
+                S(R.string.the_tunnel_and_you_should_try_h2)
         )
 
         Spacer(modifier = Modifier.height(10.dp))
-        SectionTitle("لاگ کامل (debug)")
+        SectionTitle(S(R.string.full_log_debug))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(checked = verbose, onCheckedChange = onVerbose)
             Spacer(modifier = Modifier.width(6.dp))
-            Text("جزئیات بیشتر در لاگ هسته + نمایش باکس لاگ", fontSize = 12.sp)
+            Text(S(R.string.more_detail_in_the_core_log_and), fontSize = 12.sp)
         }
-        SectionHint("فقط برای عیب‌یابی روشن کنید.")
+        SectionHint(S(R.string.turn_it_on_for_troubleshooting_only))
     }
 }
 
@@ -1086,15 +1094,15 @@ private fun LogCard(engine: AetherEngine) {
         }
     }
 
-    SettingsCard(title = "لاگ هسته") {
+    SettingsCard(title = S(R.string.core_log)) {
         if (lines.isEmpty()) {
-            Text("هنوز خروجی‌ای نیست. برای دیدن لاگ، اتصال را شروع کنید.",
+            Text(S(R.string.no_output_yet_start_a_connection_to),
                 fontSize = 11.sp, color = Color(0xFF7a7783), lineHeight = 17.sp)
         } else {
             Box(modifier = Modifier
                 .fillMaxWidth()
                 .height(200.dp)
-                .background(Color(0xFF0e0f12), RoundedCornerShape(8.dp))
+                .frostedGlass(RoundedCornerShape(8.dp))
                 .padding(8.dp)) {
                 LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     items(lines) { line ->
@@ -1107,9 +1115,9 @@ private fun LogCard(engine: AetherEngine) {
                             // every line. Matches the stage colours used in StatusCard.
                             color = when {
                                 line.contains("panic", true) || line.contains("error", true) ||
-                                    line.contains("failed", true) || line.contains("خطا") ->
+                                    line.contains("failed", true) || line.contains(S(R.string.error_3)) ->
                                     Color(0xFFff9090)
-                                line.contains("connected", true) || line.contains("متصل") ->
+                                line.contains("connected", true) || line.contains(S(R.string.connected_5)) ->
                                     Color(0xFF7ee787)
                                 line.startsWith("[AETHER]") -> Color(0xFF9ecbff)
                                 else -> Color(0xFFb8b5c0)
@@ -1145,11 +1153,11 @@ private fun StatusCard(state: AetherState, @Suppress("UNUSED_PARAMETER") protoco
             }
         }
     }
-    SettingsCard(title = "وضعیت") {
+    SettingsCard(title = S(R.string.status_2)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(state.stageFa, fontWeight = FontWeight.Bold, fontSize = 14.sp,
                 color = when (state.stage) {
-                    AetherStage.CONNECTED -> Color(0xFF3ba55d)
+                    AetherStage.CONNECTED -> GreenOk
                     AetherStage.FAILED, AetherStage.CRASHED -> Color(0xFFff6b6b)
                     else -> MaterialTheme.colorScheme.onSurface
                 })
@@ -1157,24 +1165,24 @@ private fun StatusCard(state: AetherState, @Suppress("UNUSED_PARAMETER") protoco
             val badgeColor = when (state.stage) {
                 AetherStage.CONNECTED -> Color(0xFF1b3a22)
                 AetherStage.FAILED, AetherStage.CRASHED -> Color(0xFF3b1b1b)
-                else -> Color(0xFF2a2a2a)
+                else -> SurfaceDark
             }
             val badgeText = when (state.stage) {
-                AetherStage.CONNECTED -> "متصل"
+                AetherStage.CONNECTED -> S(R.string.connected_5)
                 AetherStage.STARTING, AetherStage.IDENTITY, AetherStage.QUICKCHECK,
                 AetherStage.SCAN, AetherStage.SELECTED, AetherStage.HANDSHAKE,
-                AetherStage.TUNNEL, AetherStage.VALIDATE, AetherStage.RECONNECTING -> "در حال کار"
-                AetherStage.FAILED, AetherStage.CRASHED -> "خطا"
-                AetherStage.STOPPED, AetherStage.IDLE -> "خاموش"
+                AetherStage.TUNNEL, AetherStage.VALIDATE, AetherStage.RECONNECTING -> S(R.string.working_3)
+                AetherStage.FAILED, AetherStage.CRASHED -> S(R.string.error_3)
+                AetherStage.STOPPED, AetherStage.IDLE -> S(R.string.off_4)
             }
             Box(modifier = Modifier
-                .background(badgeColor, RoundedCornerShape(10.dp))
+                .background(badgeColor, ControlShape)
                 .padding(horizontal = 10.dp, vertical = 3.dp)) {
                 Text(badgeText, fontSize = 11.sp,
                     color = when {
                         state.stage == AetherStage.CONNECTED -> Color(0xFF7ee787)
                         state.stage == AetherStage.FAILED || state.stage == AetherStage.CRASHED -> Color(0xFFff9090)
-                        else -> Color(0xFF9a97a3)
+                        else -> TextMuted
                     })
             }
         }
@@ -1182,20 +1190,20 @@ private fun StatusCard(state: AetherState, @Suppress("UNUSED_PARAMETER") protoco
         // Steps per protocol — same vocabulary as the desktop.
         val steps = when (protocol) {
             AetherProtocol.MASQUE -> listOf(
-                "identity" to "هویت", "quickcheck" to "بررسی سرور قبلی",
-                "scan" to "اسکن گیت‌وی", "selected" to "انتخاب سرور",
-                "tunnel" to "برقراری تونل", "validate" to "اعتبارسنجی عبور داده",
-                "connected" to "اتصال",
+                "identity" to S(R.string.identity), "quickcheck" to S(R.string.checking_the_previous_server),
+                "scan" to S(R.string.gateway_scan), "selected" to S(R.string.choosing_a_server),
+                "tunnel" to S(R.string.bringing_the_tunnel_up_2), "validate" to S(R.string.verifying_data_passes),
+                "connected" to S(R.string.connect_3),
             )
             AetherProtocol.WG -> listOf(
-                "identity" to "هویت", "quickcheck" to "بررسی سرور قبلی",
-                "scan" to "اسکن اندپوینت", "selected" to "انتخاب سرور",
-                "handshake" to "دست‌دادن", "connected" to "اتصال",
+                "identity" to S(R.string.identity), "quickcheck" to S(R.string.checking_the_previous_server),
+                "scan" to S(R.string.endpoint_scan_2), "selected" to S(R.string.choosing_a_server),
+                "handshake" to S(R.string.handshake), "connected" to S(R.string.connect_3),
             )
             AetherProtocol.WARP_IN_WARP -> listOf(
-                "identity" to "هویت دوگانه", "scan" to "اسکن اندپوینت",
-                "selected" to "انتخاب سرور", "handshake" to "تونل بیرونی + داخلی",
-                "connected" to "اتصال",
+                "identity" to S(R.string.dual_identity), "scan" to S(R.string.endpoint_scan_2),
+                "selected" to S(R.string.choosing_a_server), "handshake" to S(R.string.outer_inner_tunnel),
+                "connected" to S(R.string.connect_3),
             )
         }
         val current = state.stage.forUi()
@@ -1208,7 +1216,7 @@ private fun StatusCard(state: AetherState, @Suppress("UNUSED_PARAMETER") protoco
                 StepDot(done = done, active = active)
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(fa, fontSize = 12.sp,
-                    color = if (done) Color(0xFF3ba55d)
+                    color = if (done) GreenOk
                     else if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.7f) else Color(0xFF6a6773))
                 if (key == "scan" && active && scanElapsedSec > 0) {
                     Spacer(modifier = Modifier.width(6.dp))
@@ -1219,18 +1227,18 @@ private fun StatusCard(state: AetherState, @Suppress("UNUSED_PARAMETER") protoco
         if (state.stage == AetherStage.SCAN && scanElapsedSec >= 20) {
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                "این مرحله می‌تواند تا چند دقیقه طول بکشد؛ بعضی شبکه‌ها اتصال MASQUE را کند یا مسدود می‌کنند. اگر خیلی طول کشید می‌توانید دکمه اتصال را دوباره بزنید تا لغو شود.",
+                S(R.string.this_step_can_take_a_few_minutes),
                 fontSize = 11.sp,
-                color = Color(0xFF9a97a3),
+                color = TextMuted,
                 lineHeight = 16.sp,
             )
         }
         if (state.server != null || state.rtt != null || state.profile != null) {
             Spacer(modifier = Modifier.height(8.dp))
             Column {
-                state.server?.let { DetailRow("سرور", it) }
+                state.server?.let { DetailRow(S(R.string.server_2), it) }
                 state.rtt?.let { DetailRow("RTT", it) }
-                state.profile?.let { DetailRow("پروفایل", it) }
+                state.profile?.let { DetailRow(S(R.string.profile), it) }
                 DetailRow("SOCKS", state.socks)
             }
         }
@@ -1246,21 +1254,21 @@ private fun ConnectBar(
 ) {
     val running = state.running
     Card(
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1a1b1e))
+        shape = CardShape,
+        colors = CardDefaults.cardColors(containerColor = SurfaceDark)
     ) {
         Row(modifier = Modifier.padding(10.dp).fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically) {
             ButtonLite(
-                text = if (running) "توقف" else "اتصال",
+                text = if (running) S(R.string.stop_2) else S(R.string.connect_3),
                 color = if (running) Color(0xFFb3261e) else MaterialTheme.colorScheme.primary,
                 onClick = { if (running) onStop() else onConnect() },
                 modifier = Modifier.weight(1f)
             )
             ButtonLite(
-                text = "پاک کردن هویت",
-                color = Color(0xFF2a2a2a),
+                text = S(R.string.clear_the_identity),
+                color = SurfaceDark,
                 onClick = onReset,
                 modifier = Modifier.weight(1f)
             )
@@ -1273,8 +1281,8 @@ private fun ConnectBar(
 @Composable
 private fun SettingsCard(title: String? = null, content: @Composable () -> Unit) {
     Card(
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1e1f22))
+        shape = CardShape,
+        colors = CardDefaults.cardColors(containerColor = SurfaceDark)
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
             if (title != null) {
@@ -1302,7 +1310,7 @@ private fun SectionHint(text: String) {
 private fun WarningCard(text: String) {
     Box(modifier = Modifier
         .fillMaxWidth()
-        .background(Color(0xFF3a2e1b), RoundedCornerShape(8.dp))
+        .frostedGlass(RoundedCornerShape(8.dp))
         .padding(10.dp)) {
         Text(text, fontSize = 11.sp, color = Color(0xFFe0a800), lineHeight = 17.sp)
     }
@@ -1314,7 +1322,7 @@ private fun StepDot(done: Boolean, active: Boolean) {
         .size(13.dp)
         .background(
             when {
-                done -> Color(0xFF3ba55d)
+                done -> GreenOk
                 active -> MaterialTheme.colorScheme.primary
                 else -> Color(0xFF3a3a3a)
             },
@@ -1324,7 +1332,7 @@ private fun StepDot(done: Boolean, active: Boolean) {
 @Composable
 private fun DetailRow(label: String, value: String) {
     Row(modifier = Modifier.padding(vertical = 1.dp)) {
-        Text("$label: ", fontSize = 11.sp, color = Color(0xFF9a97a3))
+        Text("$label: ", fontSize = 11.sp, color = TextMuted)
         Text(value, fontSize = 11.sp, color = Color(0xFFe8eaed))
     }
 }
@@ -1333,18 +1341,18 @@ private fun DetailRow(label: String, value: String) {
 private fun SegmentedControl(options: List<Pair<String, String>>, selected: String, onSelected: (String) -> Unit) {
     Row(modifier = Modifier
         .fillMaxWidth()
-        .background(Color(0xFF131417), RoundedCornerShape(8.dp))
+        .frostedGlass(RoundedCornerShape(8.dp))
         .padding(3.dp)) {
         options.forEach { (key, label) ->
             val sel = key == selected
             Box(modifier = Modifier
                 .weight(1f)
-                .background(if (sel) MaterialTheme.colorScheme.primary else Color.Transparent, RoundedCornerShape(6.dp))
+                .background(if (sel) MaterialTheme.colorScheme.primary else Color.Transparent, RoundedCornerShape(8.dp))
                 .clickable { onSelected(key) }
                 .padding(vertical = 8.dp),
                 contentAlignment = Alignment.Center) {
                 Text(label, fontSize = 11.sp,
-                    color = if (sel) Color.White else Color(0xFF9a97a3))
+                    color = if (sel) Color.White else TextMuted)
             }
         }
     }
@@ -1361,11 +1369,7 @@ private fun TextFieldLite(
         singleLine = true,
         textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp, color = Color.White),
         modifier = modifier,
-        colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = MaterialTheme.colorScheme.primary,
-            unfocusedBorderColor = Color(0xFF2a2a2a),
-            cursorColor = MaterialTheme.colorScheme.primary,
-        )
+        colors = iosFieldColors()
     )
 }
 
@@ -1378,13 +1382,16 @@ private fun <T> DropdownLiteE(
     Box {
         Box(modifier = Modifier
             .fillMaxWidth()
-            .background(Color(0xFF131417), RoundedCornerShape(8.dp))
+            .frostedGlass(RoundedCornerShape(8.dp))
             .clickable { expanded = true }
             .padding(10.dp)) {
             Text(label(selected), fontSize = 12.sp, color = Color.White)
         }
         androidx.compose.material3.DropdownMenu(
-            expanded = expanded, onDismissRequest = { expanded = false }) {
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.iosMenu(),
+        ) {
             options.forEach { opt ->
                 androidx.compose.material3.DropdownMenuItem(
                     text = { Text(label(opt), fontSize = 12.sp) },
@@ -1410,7 +1417,7 @@ private fun ButtonLite(
     modifier: Modifier = Modifier,
 ) {
     Box(modifier = modifier
-        .background(color, RoundedCornerShape(10.dp))
+        .background(color, ControlShape)
         .clickable(onClick = onClick)
         // Horizontal padding matters when the caller passes no width — without it the box
         // hugs the text so tightly it stops looking (and behaving) like a button.

@@ -15,6 +15,8 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.utils.S
 
 private class NahanNonRetryableException(message: String) : Exception(message)
 
@@ -24,12 +26,11 @@ class NahanDeployer(private val context: Context) {
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .writeTimeout(20, TimeUnit.SECONDS)
-        .addInterceptor(com.mlmvpn.scanner.emergency.EmergencyInterceptor(context))
         .build()
 
     suspend fun deployNahan(account: CloudAccount, onProgress: (Int, String) -> Unit): Pair<Boolean, String> = withContext(Dispatchers.IO) {
         try {
-            val isCfat = account.token.startsWith("cfat_") || account.email.isEmpty()
+            val isCfat = com.mlmvpn.scanner.data.CloudAuth.useBearer(account)
             val authHeaders = Headers.Builder().apply {
                 if (isCfat) add("Authorization", "Bearer ${account.token}")
                 else {
@@ -168,7 +169,7 @@ class NahanDeployer(private val context: Context) {
             onProgress(60, "Uploading Nahan Worker...")
             var workerScript = ""
             try {
-                context.assets.open("nahan_worker.js").bufferedReader().use {
+                com.mlmvpn.scanner.store.StoreFiles.open(context, "nahan_worker.js").bufferedReader().use {
                     workerScript = it.readText()
                 }
             } catch (e: Exception) {
@@ -194,7 +195,8 @@ class NahanDeployer(private val context: Context) {
                 .addFormDataPart("worker.js", "worker.js", workerScript.toRequestBody("application/javascript+module".toMediaTypeOrNull()))
                 .build()
 
-            val workerName = AntiDpi.generateSafeWorkerName() + "-nhn"
+            val workerName = com.mlmvpn.scanner.data.PanelBuild.scriptName(account, "NHN")
+                ?: (AntiDpi.generateSafeWorkerName() + "-nhn")
             val uploadReq = Request.Builder()
                 .url("https://api.cloudflare.com/client/v4/accounts/${account.accountId}/workers/scripts/$workerName")
                 .headers(authHeaders)
@@ -223,6 +225,7 @@ class NahanDeployer(private val context: Context) {
             val finalUrl = "https://$workerName.$subdomain.workers.dev"
 
             account.nahanStatus = "deployed"
+            account.nahanVersion = com.mlmvpn.scanner.data.PanelBuild.NHN
             account.nahanWorkerUrl = finalUrl
             account.nahanDbId = databaseId
             account.nahanMasterKey = "admin" // Default master key
@@ -381,20 +384,20 @@ class NahanDeployer(private val context: Context) {
                                 configs.addAll(validNodes.map { AntiDpi.applySniCamouflage(it) })
                                 return@withContext configs // Success, exit early
                             } else {
-                                finalException = Exception("خروجی نامعتبر است.")
+                                finalException = Exception(S(R.string.the_output_is_invalid))
                                 retries--
                                 if (retries > 0) kotlinx.coroutines.delay(1500)
                             }
                         } catch (e: Exception) {
                             e.printStackTrace()
-                            finalException = Exception("خطا در رمزگشایی کانفیگ (خروجی نامعتبر است)")
+                            finalException = Exception(S(R.string.could_not_decode_the_config_the_output))
                             retries--
                             if (retries > 0) kotlinx.coroutines.delay(1500)
                         }
                     } else if (response.code == 403) {
-                        throw NahanNonRetryableException("خطای دسترسی (کد 403).") // Definitive error, do not retry
+                        throw NahanNonRetryableException(S(R.string.access_error_code_403)) // Definitive error, do not retry
                     } else {
-                        finalException = Exception("خطا در دریافت اطلاعات (کد ${response.code})")
+                        finalException = Exception(S(R.string.could_not_fetch_the_data_code, response.code))
                         retries--
                         if (retries > 0) kotlinx.coroutines.delay(1500)
                     }
@@ -409,6 +412,6 @@ class NahanDeployer(private val context: Context) {
                 if (retries > 0) kotlinx.coroutines.delay(1500)
             }
         }
-        throw finalException ?: Exception("خطای ناشناخته در دریافت نودها")
+        throw finalException ?: Exception(S(R.string.unknown_error_while_fetching_nodes))
     }
 }

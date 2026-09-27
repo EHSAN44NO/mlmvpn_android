@@ -9,16 +9,16 @@ import java.net.Proxy
 import javax.net.ssl.SSLSocketFactory
 
 enum class Platform(val displayName: String, val testUrl: String) {
-    INSTAGRAM("اینستاگرام", "https://graph.instagram.com"),
-    YOUTUBE("یوتیوب", "https://googlevideo.com"),
-    TIKTOK("تیک‌تاک", "https://api.tiktokv.com"),
-    TWITTER("ایکس", "https://api.twitter.com"),
-    WHATSAPP("واتس‌اپ", "https://g.whatsapp.net"),
-    GEMINI("جمنای", "https://generativelanguage.googleapis.com"),
-    ANTIGRAVITY("آنتی‌گراویتی", "https://api.antigravity.google"),
-    CLAUDE("کلاد", "https://api.anthropic.com"),
-    TRAE("تری", "https://api.trae.ai"),
-    CAPCUT("کپ‌کات", "https://api.capcut.com")
+    INSTAGRAM("Instagram", "https://graph.instagram.com"),
+    YOUTUBE("YouTube", "https://googlevideo.com"),
+    TIKTOK("TikTok", "https://api.tiktokv.com"),
+    TWITTER("X", "https://api.twitter.com"),
+    WHATSAPP("WhatsApp", "https://g.whatsapp.net"),
+    GEMINI("Gemini", "https://generativelanguage.googleapis.com"),
+    ANTIGRAVITY("Antigravity", "https://api.antigravity.google"),
+    CLAUDE("Claude", "https://api.anthropic.com"),
+    TRAE("Tere", "https://api.trae.ai"),
+    CAPCUT("CapCut", "https://api.capcut.com")
 }
 
 object PlatformTester {
@@ -43,11 +43,11 @@ object PlatformTester {
             val config = VpnConfig.parseUri(nodeUri) ?: return@withContext -1L
             // Generate Xray config for this node
             val jsonConfig = XrayJsonGenerator.generateConfig(
-                config,
-                localPort,
-                "1.1.1.1",
-                false,
-                false // includeTun = false
+                config = config,
+                localPort = localPort,
+                backendDns = "1.1.1.1",
+                allowLan = false,
+                includeTun = false,
             )
 
             // Initialize Core Environment

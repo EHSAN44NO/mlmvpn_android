@@ -2,8 +2,472 @@
 
 import org.json.JSONArray
 import org.json.JSONObject
+import com.mlmvpn.scanner.data.studio.config.ConfigBuilder
+import com.mlmvpn.scanner.data.studio.config.toConfigSpec
 
 object XrayJsonGenerator {
+
+    /**
+     * Whether to send the TLS handshake in its "unfiltered" shape. See [buildStream].
+     *
+     * Held here rather than passed in, because it has to reach ELEVEN call sites and most of them
+     * are measurement paths. A config must be measured exactly the way it will be connected, or
+     * the delay figure is about a handshake the user will never make -- so a parameter that some
+     * callers forget is worse than a value they cannot forget. Written in exactly two places:
+     * once at application start, and again whenever the switch is touched.
+     */
+    @Volatile
+    var tlsUnfilter: Boolean = false
+
+    /**
+     * The Gemini / Google apps switch. On unless the user turned it off, and off is the old
+     * behaviour exactly, everywhere it reaches.
+     *
+     * It does two things, and both matter only for Cloudflare-worker configs:
+     *  1. QUIC is refused at once instead of silently dropped -- see [QuicRefuser].
+     *  2. Google's servers reach the worker as an IPv4 ADDRESS, never as a name -- see
+     *     [googleByIpv4]. This is the half that makes Gemini open.
+     *
+     * Held here for the same reason as [tlsUnfilter], and written the same two ways: once at
+     * application start, and again whenever the switch is touched.
+     */
+    @Volatile
+    var googleFix: Boolean = true
+
+    /** Tag of the outbound that answers QUIC with a refusal. Checked for before adding a second one. */
+    const val QUIC_REFUSAL_TAG = "quic-refuse"
+
+    /** Tag of the tunnel copy that hands Google's servers to the worker by IPv4 address. */
+    const val GOOGLE_V4_TAG = "proxy-google"
+
+    /** Tag of the outbound to the user's Gemini exit. See [geminiExit]. */
+    const val GEMINI_EXIT_TAG = "gemini-exit"
+
+    /** Where the user's Gemini exit answers: its workers.dev host, WebSocket path and user id. */
+    data class GeminiExitRoute(val host: String, val path: String, val id: String) {
+        fun encode(): String = "$host|$path|$id"
+
+        companion object {
+            fun decode(value: String?): GeminiExitRoute? = value?.split('|')
+                ?.takeIf { it.size == 3 && it.all { part -> part.isNotBlank() } }
+                ?.let { GeminiExitRoute(it[0], it[1], it[2]) }
+        }
+    }
+
+    /**
+     * The user's Gemini exit, or null when none is set up.
+     *
+     * Handing Google an IPv4 address ([googleByIpv4]) fixed the IPv6 half of Gemini's refusal. The
+     * other half is WHERE the worker runs: it leaves from the Cloudflare data centre nearest the
+     * phone, and from Iran that is a European one whose exit Google places in Russia (measured
+     * 2026-09-25 -- Google's homepage said "Russia", Gemini's page carried Moscow time, and the
+     * same worker reached from a US line got the full page). The exit is a Worker on the user's
+     * own account whose Durable Object lives in North America (assets/gemini_exit_worker.js), so
+     * Gemini's traffic leaves from there. Only [GEMINI_DOMAINS]; the rest of Google keeps
+     * [googleByIpv4].
+     *
+     * Written at application start and again after a deploy, like [googleFix].
+     */
+    @Volatile
+    var geminiExit: GeminiExitRoute? = null
+
+    /**
+     * Gemini and Google's other AI services -- the ones that refuse by country. Each covers the
+     * name and everything under it.
+     */
+    private val GEMINI_DOMAINS = listOf(
+        "gemini.google.com", "gemini.google", "bard.google.com",
+        "aistudio.google.com", "makersuite.google.com", "notebooklm.google.com", "notebooklm.google",
+        "labs.google", "generativelanguage.googleapis.com", "alkalimakersuite-pa.clients6.google.com",
+        // The Gemini Android app's own backend ("Robin" is its codename).
+        "robinfrontend-pa.googleapis.com",
+    )
+
+    private fun geminiRules(): JSONArray = JSONArray().apply { GEMINI_DOMAINS.forEach { put("domain:$it") } }
+
+    /** Sends [GEMINI_DOMAINS] to the exit. Goes ahead of [googleRoute], which covers them too. */
+    private fun geminiRoute(): JSONObject = JSONObject().apply {
+        put("type", "field")
+        put("domain", geminiRules())
+        put("outboundTag", GEMINI_EXIT_TAG)
+    }
+
+    /**
+     * The outbound to the user's Gemini exit, reached the way [tunnel] reaches its worker: the same
+     * address and port (a clean IP that works on this line), the same TLS fingerprint and socket
+     * options -- so whatever gets the main tunnel past the filter gets this past it too. Only the
+     * server name, path and user change. Null when no exit is set up, or [tunnel] has no server to
+     * borrow.
+     *
+     * Names are passed through, not turned into addresses here: the exit resolves them itself, from
+     * North America, to IPv4 -- which picks the Google front end nearest IT rather than one near
+     * the phone, and never the IPv6 exit Google refuses.
+     */
+    private fun geminiExitOutbound(tunnel: JSONObject): JSONObject? {
+        val exit = geminiExit ?: return null
+        val settings = tunnel.optJSONObject("settings") ?: return null
+        val server = settings.optJSONArray("vnext")?.optJSONObject(0)
+            ?: settings.optJSONArray("servers")?.optJSONObject(0) ?: return null
+        val address = server.optString("address").takeIf { it.isNotBlank() } ?: return null
+        val theirs = tunnel.optJSONObject("streamSettings") ?: JSONObject()
+        val theirTls = theirs.optJSONObject("tlsSettings")
+        // A worker behind plain HTTP (port 80 and friends) cannot carry TLS on its port: use 443.
+        val port = if (theirs.optString("security") == "tls") server.optInt("port", 443) else 443
+        val stream = JSONObject().apply {
+            put("network", "ws")
+            put("security", "tls")
+            put("tlsSettings", JSONObject().apply {
+                put("serverName", AntiDpi.generateMixedCaseSNI(exit.host))
+                val fingerprint = theirTls?.optString("fingerprint").orEmpty()
+                if (theirTls != null && theirTls.has("cipherSuites")) {
+                    // The unfiltering swap: no fingerprint, the hand-picked ciphers instead.
+                    put("cipherSuites", theirTls.optString("cipherSuites"))
+                    theirTls.optString("maxVersion").takeIf { it.isNotBlank() }?.let { put("maxVersion", it) }
+                } else {
+                    put("fingerprint", fingerprint.ifBlank { "chrome" })
+                }
+                put("alpn", JSONArray().put("http/1.1"))
+            })
+            put("wsSettings", JSONObject().apply {
+                put("path", "/" + exit.path)
+                put("host", AntiDpi.generateMixedCaseSNI(exit.host))
+                theirs.optJSONObject("wsSettings")?.optJSONObject("headers")?.let { put("headers", JSONObject(it.toString())) }
+            })
+            theirs.optJSONObject("sockopt")?.let { put("sockopt", JSONObject(it.toString())) }
+        }
+        return JSONObject().apply {
+            put("tag", GEMINI_EXIT_TAG)
+            put("protocol", "vless")
+            put("settings", JSONObject().put("vnext", JSONArray().put(JSONObject().apply {
+                put("address", address)
+                put("port", port)
+                put("users", JSONArray().put(JSONObject().put("id", exit.id).put("encryption", "none")))
+            })))
+            put("streamSettings", stream)
+        }
+    }
+
+    /** Tag of the resolver Google's names are looked up with. See [googleDnsServer]. */
+    private const val GOOGLE_DNS_TAG = "google-dns"
+
+    /**
+     * The policy level the refusal outbound runs at. Any number no real config uses would do; see
+     * [addQuicRefusalPolicy] for what it changes and why it has to be a level of its own.
+     */
+    private const val QUIC_REFUSAL_LEVEL = 97
+
+    /** Transports a Cloudflare Worker is reached over. A worker has no UDP, so none carries QUIC. */
+    private val WORKER_TRANSPORTS = setOf("ws", "websocket", "httpupgrade", "xhttp", "splithttp")
+
+    /** Protocols that tunnel to a server, as opposed to leaving directly or answering locally. */
+    private val TUNNEL_PROTOCOLS = setOf("vless", "vmess", "trojan")
+
+    /**
+     * Google's own domains. Each covers the name and everything under it (`google` is the TLD:
+     * labs.google, gemini.google).
+     *
+     * YouTube -- youtube.com, googlevideo.com, ytimg.com -- is left out on purpose: it already
+     * works over the worker's IPv6 exit, and its video is the heaviest thing a phone sends, so
+     * there is nothing to gain from moving it.
+     */
+    private val GOOGLE_DOMAINS = listOf(
+        "google.com", "googleapis.com", "gstatic.com", "googleusercontent.com", "google",
+        "google.dev", "ggpht.com", "gvt1.com", "gvt2.com", "withgoogle.com",
+    )
+
+    /** [GOOGLE_DOMAINS] as Xray domain rules. */
+    private fun googleRules(): JSONArray = JSONArray().apply { GOOGLE_DOMAINS.forEach { put("domain:$it") } }
+
+    /** Whether an Xray domain rule -- "domain:x", "full:x" or a bare name -- names one of Google's. */
+    private fun isGoogleRule(rule: String): Boolean {
+        val host = rule.substringAfter(':').trim().lowercase()
+        return GOOGLE_DOMAINS.any { host == it || host.endsWith(".$it") }
+    }
+
+    /**
+     * A copy of the tunnel [proxy] that hands the worker an IPv4 address instead of a name.
+     *
+     * ## Why Gemini would not open
+     *
+     * A worker dials what it is given. Given a NAME, Cloudflare's `connect()` picks the address
+     * itself and prefers IPv6 wherever the site has one -- and Google has one everywhere -- so the
+     * connection leaves from the worker's IPv6 exit, a shared Cloudflare WARP range Google will not
+     * serve Gemini to. Measured through a live panel config on the phone (2026-09-23): by name,
+     * every request for gemini.google.com came back as Google's "unusual traffic" page, which the
+     * Gemini app shows as "not available in your country"; by IPv4 address, the same worker left
+     * from its IPv4 exit (104.28.x.x) and got the full Gemini page, twice out of two.
+     *
+     * The tunnel sent names because the sniffer puts them there: `destOverride` replaces every
+     * destination with the name from its TLS handshake, and must -- that is what rescues a
+     * connection the ISP's resolver poisoned. `targetStrategy: UseIPv4` turns the name back into an
+     * IPv4 address just before it leaves, looked up by [googleDnsServer] through the tunnel so the
+     * ISP cannot poison it. When that lookup fails Xray sends the name as before, so this can only
+     * ever help.
+     *
+     * NetDoctor (Dr.Net) gets the same effect from its whole design: sing-box resolves remotely
+     * with `ipv4_only` and does not replace destinations, so its worker is only ever given IPv4
+     * addresses. Here only Google is moved; everything else keeps the path it had.
+     */
+    private fun googleByIpv4(proxy: JSONObject): JSONObject =
+        JSONObject(proxy.toString())
+            .put("tag", GOOGLE_V4_TAG)
+            .put("targetStrategy", "UseIPv4")
+
+    /**
+     * The resolver for Google's names: DNS over HTTPS to 8.8.8.8, through the tunnel, IPv4 only.
+     *
+     * Through the tunnel because Iran's resolvers poison names, and [googleByIpv4] would hand the
+     * worker a poisoned address as faithfully as a real one. IPv4 only so an app asking for an
+     * address gets no IPv6 one to connect to in the first place. `skipFallback` keeps every other
+     * name off it, so nothing else changes resolver.
+     */
+    private fun googleDnsServer(): JSONObject = JSONObject().apply {
+        put("address", "https://8.8.8.8/dns-query")
+        put("domains", googleRules())
+        put("skipFallback", true)
+        put("queryStrategy", "UseIPv4")
+        put("tag", GOOGLE_DNS_TAG)
+    }
+
+    /** Sends [googleDnsServer]'s own queries through the tunnel tagged [tunnelTag]. */
+    private fun googleDnsRoute(tunnelTag: String): JSONObject = JSONObject().apply {
+        put("type", "field")
+        put("inboundTag", JSONArray().put(GOOGLE_DNS_TAG))
+        put("outboundTag", tunnelTag)
+    }
+
+    /** Sends [domains] through the [googleByIpv4] copy. */
+    private fun googleRoute(domains: JSONArray): JSONObject = JSONObject().apply {
+        put("type", "field")
+        put("domain", domains)
+        put("outboundTag", GOOGLE_V4_TAG)
+    }
+
+    /**
+     * The outbound that hands QUIC to [QuicRefuser], or null to keep the old silent drop: when the
+     * switch is off, or when the responder could not be opened.
+     */
+    private fun quicRefusal(): JSONObject? {
+        if (!googleFix) return null
+        val port = QuicRefuser.port() ?: return null
+        return JSONObject().apply {
+            put("protocol", "freedom")
+            put("tag", QUIC_REFUSAL_TAG)
+            put("settings", JSONObject().apply {
+                // freedom sends every packet of the flow here, and the answer goes back to the app
+                // stamped with the flow's own destination -- see QuicRefuser.
+                put("redirect", "127.0.0.1:$port")
+                put("userLevel", QUIC_REFUSAL_LEVEL)
+            })
+        }
+    }
+
+    /**
+     * A policy level that lets each refused flow go a few seconds after its answer.
+     *
+     * The default keeps an idle UDP flow for 300 s, and every refused attempt is a flow of its own: a
+     * socket and its goroutines, held for five minutes to carry nothing. The answer leaves in the
+     * first millisecond, so four idle seconds is already generous. Only this level is written; a
+     * config's own levels -- level 0, which every other connection runs at, above all -- are left
+     * exactly as they were.
+     */
+    private fun addQuicRefusalPolicy(json: JSONObject) {
+        val policy = json.optJSONObject("policy") ?: JSONObject().also { json.put("policy", it) }
+        val levels = policy.optJSONObject("levels") ?: JSONObject().also { policy.put("levels", it) }
+        val key = QUIC_REFUSAL_LEVEL.toString()
+        if (!levels.has(key)) {
+            levels.put(key, JSONObject().apply {
+                put("connIdle", 4)
+                put("uplinkOnly", 1)
+                put("downlinkOnly", 1)
+            })
+        }
+    }
+
+    /**
+     * Whether a whole config's tunnel can carry UDP, judged from its outbounds.
+     *
+     * The transport decides it, not the protocol: VLESS over WebSocket is a worker and VLESS over
+     * TCP is a server. So only a config whose every VLESS/VMess/Trojan outbound rides a worker
+     * transport is treated as unable -- a chain (BPB's worker in front of a real server), a WARP
+     * config or a REALITY one all carry UDP, and refusing their QUIC would throw away the faster
+     * protocol for nothing. A config with no tunnel at all (fragment-only, DNS-only) is left to
+     * whatever its author chose.
+     */
+    private fun carriesUdp(outbounds: JSONArray): Boolean {
+        var tunnels = 0
+        for (i in 0 until outbounds.length()) {
+            val outbound = outbounds.optJSONObject(i) ?: continue
+            when (outbound.optString("protocol").lowercase()) {
+                in TUNNEL_PROTOCOLS -> {
+                    tunnels++
+                    val network = outbound.optJSONObject("streamSettings")
+                        ?.optString("network").orEmpty().lowercase()
+                    if (network !in WORKER_TRANSPORTS) return true
+                }
+                "wireguard", "hysteria", "hysteria2", "tuic", "shadowsocks", "socks" -> return true
+            }
+        }
+        return tunnels == 0
+    }
+
+    /** The config's one tunnel outbound, or null when it has several (a balancer) or no tag. */
+    private fun singleTunnel(outbounds: JSONArray): JSONObject? {
+        var found: JSONObject? = null
+        for (i in 0 until outbounds.length()) {
+            val outbound = outbounds.optJSONObject(i) ?: continue
+            if (outbound.optString("protocol").lowercase() !in TUNNEL_PROTOCOLS) continue
+            if (found != null) return null
+            found = outbound
+        }
+        return found?.takeIf { it.optString("tag").isNotEmpty() }
+    }
+
+    /**
+     * [config] -- a whole Xray config the user imported -- with the Gemini / Google apps fix, or
+     * null when none of it applies: the switch is off, the config's tunnel is not a worker
+     * ([carriesUdp]), it already has the fix, or it cannot be read.
+     *
+     * Such configs bring their own routing, so each half is fitted around it:
+     *  - the QUIC refusal goes FIRST. Panel ones (BPB's Xray subscription) already send UDP/443 to a
+     *    `block` blackhole -- the same silent drop [generateConfig] used to make.
+     *  - the Google rule goes just before the first rule of theirs that uses the tunnel, so anything
+     *    they route elsewhere on purpose still goes there. Only for a config with one tunnel
+     *    outbound: with a balancer over several there is no single one to copy. Google's names get
+     *    [googleDnsServer] only where the config already has a DNS section -- adding one to a config
+     *    without would take its other names off the system resolver.
+     */
+    fun applyGoogleFix(config: String): String? {
+        if (!googleFix) return null
+        return try {
+            val json = JSONObject(config)
+            val outbounds = json.optJSONArray("outbounds") ?: return null
+            for (i in 0 until outbounds.length()) {
+                val tag = outbounds.optJSONObject(i)?.optString("tag")
+                if (tag == QUIC_REFUSAL_TAG || tag == GOOGLE_V4_TAG || tag == GEMINI_EXIT_TAG) return null
+            }
+            if (carriesUdp(outbounds)) return null
+
+            val routing = json.optJSONObject("routing") ?: JSONObject()
+            val theirs = routing.optJSONArray("rules") ?: JSONArray()
+            val rules = JSONArray()
+
+            val tunnel = singleTunnel(outbounds)
+            val tunnelTag = tunnel?.optString("tag").orEmpty()
+            // Where the Google rule goes: before their first rule into the tunnel, or last when the
+            // tunnel is their default outbound and no rule names it. -1: nowhere safe.
+            var googleAt = -1
+            if (tunnel != null) {
+                for (i in 0 until theirs.length()) {
+                    if (theirs.optJSONObject(i)?.optString("outboundTag") == tunnelTag) {
+                        googleAt = i
+                        break
+                    }
+                }
+                if (googleAt < 0 && outbounds.optJSONObject(0) === tunnel) googleAt = theirs.length()
+            }
+            val servers = json.optJSONObject("dns")?.optJSONArray("servers")
+            if (googleAt >= 0 && servers != null) {
+                servers.put(googleDnsServer())
+                rules.put(googleDnsRoute(tunnelTag))
+            }
+
+            val refusal = quicRefusal()
+            if (refusal != null) {
+                outbounds.put(refusal)
+                addQuicRefusalPolicy(json)
+                rules.put(JSONObject().apply {
+                    put("type", "field")
+                    put("network", "udp")
+                    put("port", "443")
+                    put("outboundTag", QUIC_REFUSAL_TAG)
+                })
+            }
+            if (googleAt >= 0) outbounds.put(googleByIpv4(tunnel!!))
+            val exit = if (googleAt >= 0) geminiExitOutbound(tunnel!!) else null
+            if (exit != null) outbounds.put(exit)
+            if (refusal == null && googleAt < 0) return null
+
+            for (i in 0..theirs.length()) {
+                if (i == googleAt) {
+                    if (exit != null) rules.put(geminiRoute())
+                    rules.put(googleRoute(googleRules()))
+                }
+                if (i < theirs.length()) rules.put(theirs.get(i))
+            }
+            routing.put("rules", rules)
+            json.put("routing", routing)
+            json.toString()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * A TLS 1.2 cipher list, and the ceiling that makes it mean anything.
+     *
+     * `cipherSuites` is Go's `tls.Config.CipherSuites`, and Go ignores it for TLS 1.3 -- the 1.3
+     * suites are not configurable. Setting a cipher list without also capping the version is
+     * therefore a setting that does nothing at all on any modern server, which is the failure
+     * mode this constant exists to avoid.
+     */
+    private const val UNFILTER_CIPHERS =
+        "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256:" +
+            "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256:" +
+            "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305:" +
+            "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305"
+
+    /**
+     * `streamSettings` for an outbound, from the one shared builder.
+     *
+     * This file used to construct `streamSettings` in **three** places -- `generateConfig`,
+     * `generateAntiSanctionConfig` and `generateMultiConfig` -- and the three had already drifted:
+     *
+     *  - only `generateConfig` handled **xhttp** at all. The other two emitted `network: "xhttp"`
+     *    with no `xhttpSettings`, so the mode fell back to a default that does not work through
+     *    Cloudflare (it buffers request bodies, so anything but `packet-up` hangs). An xhttp config
+     *    measured by `generateMultiConfig` was therefore being measured through a broken outbound.
+     *  - `generateMultiConfig` sent `User-Agent: Mozilla/5.0` where the other two sent a full
+     *    Chrome string -- a two-token user agent is a fingerprint of its own.
+     *
+     * Both are fixed by there being one builder rather than three. [ConfigBuilder] is also what
+     * Config Studio uses to *emit* configs, so the link this app hands out and the outbound it dials
+     * cannot describe the same server differently.
+     *
+     * What stays here is what is genuinely about **this device dialling**, and has no meaning in a
+     * config given to someone else: the unfiltering cipher swap below, and the `sockopt` pinning in
+     * `generateConfig`.
+     */
+    private fun buildStream(config: VpnConfig): JSONObject {
+        val stream = ConfigBuilder.buildStreamSettings(config.toConfigSpec())
+
+        // Unfiltering swaps uTLS for a hand-picked cipher list, and the fingerprint has to GO for
+        // that to mean anything: a fingerprint switches Xray to uTLS, which builds the ClientHello
+        // from a stored browser profile and ignores `cipherSuites` entirely -- so leaving it in
+        // place would make the whole switch inert. (PattNG solves the same problem the other way,
+        // with a patched core offering an `unsafe` fingerprint value; ours does not have one.)
+        if (tlsUnfilter) {
+            stream.optJSONObject("tlsSettings")?.apply {
+                remove("fingerprint")
+                put("cipherSuites", UNFILTER_CIPHERS)
+                put("maxVersion", "1.2")
+            }
+        }
+        return stream
+    }
+
+    /**
+     * The VLESS user object, carrying `flow` when the link asks for one.
+     *
+     * `xtls-rprx-vision` is not decoration: a server configured for it rejects a user that arrives
+     * without it. It was parsed out of the link and then dropped by all three builders below.
+     */
+    private fun vlessUser(config: VpnConfig): JSONObject = JSONObject().apply {
+        put("id", config.uuid)
+        put("encryption", "none")
+        if (config.flow.isNotBlank()) put("flow", config.flow)
+    }
+
     fun generateConfig(
         config: VpnConfig,
         localPort: Int,
@@ -16,7 +480,27 @@ object XrayJsonGenerator {
         warpHybrid: org.json.JSONObject? = null,
         dedicatedDnsUrl: String? = null,
         dedicatedDnsDomains: List<String> = emptyList(),
-        pinnedHostIps: Map<String, List<String>> = emptyMap()
+        pinnedHostIps: Map<String, List<String>> = emptyMap(),
+        // These two are LAST on purpose. Several callers pass the leading arguments
+        // positionally, so a parameter added anywhere above silently re-binds theirs --
+        // which is exactly what happened when they were first written in beside allowLan.
+        /**
+         * Password for the shared proxy, or null for an open one.
+         *
+         * Applied to the `mixed` inbound, which authenticates SOCKS5 and HTTP from the one
+         * `accounts` list -- so a client using either protocol is covered by a single value.
+         * Ignored entirely unless [allowLan] is on: an authenticated loopback proxy would lock
+         * the phone's own apps out of it for no gain.
+         */
+        lanPassword: String? = null,
+        /**
+         * Client addresses whose traffic is sent to the blackhole outbound.
+         *
+         * The blocklist is enforced in routing rather than at accept time because that is the
+         * only layer that sees the source address: the inbound is one shared listener, so a
+         * refused client and an allowed one arrive the same way.
+         */
+        lanBlocked: Set<String> = emptySet(),
     ): String {
         val json = JSONObject()
 
@@ -41,7 +525,20 @@ object XrayJsonGenerator {
             put("protocol", "mixed")
             put("tag", "socks")
             put("settings", JSONObject().apply {
-                put("auth", "noauth")
+                val password = lanPassword?.takeIf { allowLan && it.isNotBlank() }
+                if (password == null) {
+                    put("auth", "noauth")
+                } else {
+                    put("auth", "password")
+                    put(
+                        "accounts",
+                        JSONArray().put(
+                            JSONObject()
+                                .put("user", "mlm")
+                                .put("pass", password)
+                        ),
+                    )
+                }
                 put("udp", true)
             })
             put("sniffing", JSONObject().apply {
@@ -95,10 +592,7 @@ object XrayJsonGenerator {
             val vnext = JSONArray().put(JSONObject().apply {
                 put("address", config.address)
                 put("port", config.port)
-                put("users", JSONArray().put(JSONObject().apply {
-                    put("id", config.uuid)
-                    put("encryption", "none")
-                }))
+                put("users", JSONArray().put(vlessUser(config)))
             })
             mainOutbound.put("settings", JSONObject().put("vnext", vnext))
         } else if (config.protocol == "trojan") {
@@ -132,56 +626,8 @@ object XrayJsonGenerator {
             mainOutbound.put("settings", JSONObject().put("servers", servers))
         }
 
-        // Stream Settings
-        val streamSettings = JSONObject()
-        streamSettings.put("network", config.network)
-        if (config.tls.isNotEmpty() && config.tls != "none") {
-            streamSettings.put("security", config.tls)
-            val tlsSettings = JSONObject()
-            tlsSettings.put("serverName", if (config.sni.isNotEmpty()) config.sni else config.wsHost)
-            tlsSettings.put("fingerprint", "chrome") // ALWAYS KEEP CHROME FINGERPRINT FOR uTLS
-            
-            if (config.alpn.isNotEmpty()) {
-                val alpnArr = JSONArray()
-                config.alpn.split(",").forEach { alpnArr.put(it) }
-                tlsSettings.put("alpn", alpnArr)
-            }
-            streamSettings.put("tlsSettings", tlsSettings)
-        }
-
-        if (config.network == "ws") {
-            val wsSettings = JSONObject()
-            wsSettings.put("path", if (config.wsPath.isNotEmpty()) config.wsPath else "/")
-            val headers = JSONObject()
-            // Host goes in the independent "host" field only. The core logs a deprecation warning
-            // for a "Host" entry inside "headers" ("will be removed soon and being migrated to
-            // independent host"), and setting both means the same value in two places, one of
-            // which is on its way out.
-            if (config.wsHost.isNotEmpty()) {
-                wsSettings.put("host", config.wsHost)
-            }
-            headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-            wsSettings.put("headers", headers)
-            streamSettings.put("wsSettings", wsSettings)
-        }
-
-        if (config.network == "xhttp") {
-            val xhttpSettings = JSONObject()
-            xhttpSettings.put("host", if (config.xhttpHost.isNotEmpty()) config.xhttpHost else config.wsHost)
-            xhttpSettings.put("path", if (config.xhttpPath.isNotEmpty()) config.xhttpPath else "/")
-            // Apply the packet-up tuning carried in the URI's ?extra={...}. The app previously
-            // dropped this entirely, so packet-up ran with conservative defaults. On xray 26.x the
-            // tuning object lives under the "extra" key of xhttpSettings, so pass it through as-is.
-            if (config.xhttpExtra.isNotEmpty()) {
-                try { xhttpSettings.put("extra", JSONObject(config.xhttpExtra)) } catch (e: Exception) { }
-            }
-            // Cloudflare buffers request bodies, so stream-up/stream-one hang (TLS handshake
-            // timeout to the destination). packet-up is the only reliable mode on CF Workers.
-            // Force it after the extra-merge so an "auto"/"mode" carried in extra can't override.
-            val mode = if (config.xhttpMode.isNotEmpty() && config.xhttpMode != "auto") config.xhttpMode else "packet-up"
-            xhttpSettings.put("mode", mode)
-            streamSettings.put("xhttpSettings", xhttpSettings)
-        }
+        // Stream Settings -- built by the shared ConfigBuilder (see buildStream).
+        val streamSettings = buildStream(config)
 
         // The server address was already resolved by DomainPreResolver and its IPs are pinned
         // into dns.hosts below, so tell the outbound to dial by IP ("ForceIP" resolves through
@@ -216,13 +662,25 @@ object XrayJsonGenerator {
             put("tag", "direct")
         }
         outbounds.put(directOutbound)
-        
+
+        // Google's servers, handed to the worker by IPv4 address -- see googleByIpv4 for why that
+        // is what makes Gemini open. Worker transports only: a real server has its own exit and
+        // nothing to fix.
+        val googleV4 = googleFix && config.network.lowercase() in WORKER_TRANSPORTS
+        if (googleV4) outbounds.put(googleByIpv4(mainOutbound))
+        // Gemini itself, through the user's exit in North America when one is set up.
+        val geminiOut = if (googleV4) geminiExitOutbound(mainOutbound) else null
+        if (geminiOut != null) outbounds.put(geminiOut)
+
         json.put("outbounds", outbounds)
 
         // FakeDNS Configuration
         val dns = JSONObject()
         val servers = JSONArray()
         val isXhttp = config.network == "xhttp"
+
+        // Google's names: through the tunnel, IPv4 only. The lookup googleV4 depends on.
+        if (googleV4) servers.put(googleDnsServer())
 
         // For xhttp (MLM / CF-worker) configs, resolve everything EXCEPT the worker's own host
         // through an encrypted DoH server that egresses via the proxy (see the remote-dns routing
@@ -284,6 +742,17 @@ object XrayJsonGenerator {
         routing.put("domainStrategy", "AsIs")
         
         val rules = JSONArray()
+        // Blocked LAN clients, FIRST so nothing below can route them somewhere else. `source`
+        // matches the address the connection came from, which for a shared proxy is the other
+        // device -- the phone's own apps arrive from loopback and are never in this list.
+        if (allowLan && lanBlocked.isNotEmpty()) {
+            rules.put(JSONObject().apply {
+                put("type", "field")
+                put("inboundTag", JSONArray().put("socks"))
+                put("source", JSONArray().apply { lanBlocked.forEach { put(it) } })
+                put("outboundTag", "blocked")
+            })
+        }
         // Route user DNS queries to Xray's internal DNS
         rules.put(JSONObject().apply {
             put("type", "field")
@@ -301,6 +770,7 @@ object XrayJsonGenerator {
                 put("outboundTag", "proxy")
             })
         }
+        if (googleV4) rules.put(googleDnsRoute("proxy"))
         // Route Xray's internal DNS queries to direct to avoid UDP drops over proxy.
         // (For xhttp this now only matches the worker-host bootstrap resolver; the general
         // DoH resolver above is on 443 and goes through the proxy instead.)
@@ -331,20 +801,36 @@ object XrayJsonGenerator {
         // approach. Only UDP/443 and sniffed QUIC are refused -- game and voice traffic on other
         // UDP ports is untouched -- and it is skipped entirely for hybrid configs, whose whole
         // purpose is to carry UDP out through a WARP outbound instead.
+        //
+        // "Rejecting" was what this meant and not what `blocked` did. It is a blackhole: it answers
+        // nothing, and Xray's TUN sends no ICMP for it either, so every client sat out its own
+        // timer before trying TCP. Google's apps wait longest -- Gemini's never recovers -- which
+        // is why they would not open on a panel config at all. With the switch on, QUIC goes to
+        // the refusal outbound instead and is answered at once (see QuicRefuser); with it off, or
+        // if the responder could not open, this is the old drop exactly.
         if (warpHybrid == null) {
+            val quicSink = quicRefusal()?.let { refusal ->
+                outbounds.put(refusal)
+                addQuicRefusalPolicy(json)
+                QUIC_REFUSAL_TAG
+            } ?: "blocked"
             rules.put(JSONObject().apply {
                 put("type", "field")
                 put("network", "udp")
                 put("protocol", JSONArray().put("quic"))
-                put("outboundTag", "blocked")
+                put("outboundTag", quicSink)
             })
             rules.put(JSONObject().apply {
                 put("type", "field")
                 put("network", "udp")
                 put("port", 443)
-                put("outboundTag", "blocked")
+                put("outboundTag", quicSink)
             })
         }
+        // Google, by IPv4 address. After the QUIC rules, so Google's QUIC is still refused rather
+        // than carried, and after the block page, so a poisoned address still dies at once.
+        if (geminiOut != null) rules.put(geminiRoute())
+        if (googleV4) rules.put(googleRoute(googleRules()))
         routing.put("rules", rules)
         json.put("routing", routing)
         
@@ -381,6 +867,15 @@ object XrayJsonGenerator {
         localPort: Int,
         sanctionedDomains: List<String>,
         backendDns: String = "1.1.1.1",
+        /**
+         * Send everything in the tunnel to the worker, instead of only the listed domains.
+         *
+         * Set when the user has picked apps to un-sanction: MyVpnService then admits ONLY those
+         * packages into the tunnel, so there is nothing in here that is not meant for the worker.
+         * This is what makes app routing work where domain routing cannot -- it does not care
+         * whether the app speaks QUIC, resolves through its own DoH, or pins its IPs.
+         */
+        proxyEverything: Boolean = false,
         mtu: Int = 1280
     ): String {
         val json = JSONObject()
@@ -422,31 +917,11 @@ object XrayJsonGenerator {
         proxy.put("settings", JSONObject().put("vnext", JSONArray().put(JSONObject().apply {
             put("address", config.address)
             put("port", config.port)
-            put("users", JSONArray().put(JSONObject().apply {
-                put("id", config.uuid); put("encryption", "none")
-            }))
+            put("users", JSONArray().put(vlessUser(config)))
         })))
-        val stream = JSONObject()
-        stream.put("network", config.network)
-        if (config.tls.isNotEmpty() && config.tls != "none") {
-            stream.put("security", config.tls)
-            stream.put("tlsSettings", JSONObject().apply {
-                put("serverName", if (config.sni.isNotEmpty()) config.sni else config.wsHost)
-                put("fingerprint", "chrome")
-                if (config.alpn.isNotEmpty()) put("alpn", JSONArray().apply { config.alpn.split(",").forEach { put(it) } })
-            })
-        }
-        if (config.network == "ws") {
-            stream.put("wsSettings", JSONObject().apply {
-                put("path", if (config.wsPath.isNotEmpty()) config.wsPath else "/")
-                val headers = JSONObject()
-                // "host" only -- a "Host" header entry is the deprecated spelling (see generateConfig).
-                if (config.wsHost.isNotEmpty()) put("host", config.wsHost)
-                headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-                put("headers", headers)
-            })
-        }
-        proxy.put("streamSettings", stream)
+        // Was a ws-only copy of generateConfig's block, so an xhttp config reached the
+        // anti-sanction outbound with no xhttpSettings at all. See buildStream.
+        proxy.put("streamSettings", buildStream(config))
         proxy.put("tag", "proxy")
         outbounds.put(proxy)
         outbounds.put(JSONObject().apply {
@@ -514,6 +989,49 @@ object XrayJsonGenerator {
                 put("outboundTag", "direct")
             })
         }
+        // QUIC that would go to the worker, refused at once. The worker cannot carry it, and a
+        // silent drop leaves the very apps this feature exists for -- Gemini first -- waiting out a
+        // timer before they try TCP (see QuicRefuser). Only that QUIC: everything else here leaves
+        // `direct`, where QUIC works and refusing it would only cost speed.
+        val quicToWorker = when {
+            proxyEverything -> listOf(JSONObject())
+            sanctionedDomains.isNotEmpty() -> listOf(
+                JSONObject().put("ip", JSONArray().put("198.18.0.0/15")),
+                JSONObject().put("domain", JSONArray().apply { sanctionedDomains.forEach { put(it) } }),
+            )
+            else -> emptyList()
+        }
+        if (quicToWorker.isNotEmpty()) {
+            quicRefusal()?.let { refusal ->
+                outbounds.put(refusal)
+                addQuicRefusalPolicy(json)
+                quicToWorker.forEach { rule ->
+                    rules.put(rule.apply {
+                        put("type", "field")
+                        put("network", "udp")
+                        put("port", "443")
+                        put("outboundTag", QUIC_REFUSAL_TAG)
+                    })
+                }
+            }
+        }
+        // Google's sanctioned services -- Gemini, AI Studio and the rest -- handed to the worker by
+        // IPv4 address. By name the worker leaves from its IPv6 exit, which Google will not serve
+        // Gemini to; see googleByIpv4. Only the Google entries of the list, and ahead of the rules
+        // below that would send them by name, so the split itself is exactly what it was.
+        val googleTargets = when {
+            !googleFix -> JSONArray()
+            proxyEverything -> googleRules()
+            else -> JSONArray().apply { sanctionedDomains.filter { isGoogleRule(it) }.forEach { put(it) } }
+        }
+        if (googleTargets.length() > 0) {
+            outbounds.put(googleByIpv4(proxy))
+            geminiExitOutbound(proxy)?.let { exit ->
+                outbounds.put(exit)
+                rules.put(geminiRoute())
+            }
+            rules.put(googleRoute(googleTargets))
+        }
         if (sanctionedDomains.isNotEmpty()) {
             // Route by the fakedns pool's IP range directly, instead of relying on the
             // dispatcher reverse-mapping a fake IP back to its domain at routing time (traced
@@ -538,7 +1056,9 @@ object XrayJsonGenerator {
             })
         }
         rules.put(JSONObject().apply {
-            put("type", "field"); put("network", "tcp,udp"); put("outboundTag", "direct")
+            put("type", "field")
+            put("network", "tcp,udp")
+            put("outboundTag", if (proxyEverything) "proxy" else "direct")
         })
         // "AsIs" only ever matches by domain once one is known, and never falls back to the ip
         // rule above -- a live debug trace showed fakedns correctly resolving a sanctioned
@@ -598,10 +1118,7 @@ object XrayJsonGenerator {
                 val vnext = JSONArray().put(JSONObject().apply {
                     put("address", config.address)
                     put("port", config.port)
-                    put("users", JSONArray().put(JSONObject().apply {
-                        put("id", config.uuid)
-                        put("encryption", "none")
-                    }))
+                    put("users", JSONArray().put(vlessUser(config)))
                 })
                 outbound.put("settings", JSONObject().put("vnext", vnext))
             } else if (config.protocol == "trojan") {
@@ -635,37 +1152,11 @@ object XrayJsonGenerator {
                 outbound.put("settings", JSONObject().put("servers", servers))
             }
 
-            // Stream Settings
-            val streamSettings = JSONObject()
-            streamSettings.put("network", config.network)
-            if (config.tls.isNotEmpty() && config.tls != "none") {
-                streamSettings.put("security", config.tls)
-                val tlsSettings = JSONObject()
-                tlsSettings.put("serverName", if (config.sni.isNotEmpty()) config.sni else config.wsHost)
-                tlsSettings.put("fingerprint", "chrome")
-                
-                if (config.alpn.isNotEmpty()) {
-                    val alpnArr = JSONArray()
-                    config.alpn.split(",").forEach { alpnArr.put(it) }
-                    tlsSettings.put("alpn", alpnArr)
-                }
-                streamSettings.put("tlsSettings", tlsSettings)
-            }
-
-            if (config.network == "ws") {
-                val wsSettings = JSONObject()
-                wsSettings.put("path", if (config.wsPath.isNotEmpty()) config.wsPath else "/")
-                val headers = JSONObject()
-                // "host" only -- a "Host" header entry is the deprecated spelling (see generateConfig).
-                if (config.wsHost.isNotEmpty()) {
-                    wsSettings.put("host", config.wsHost)
-                }
-                headers.put("User-Agent", "Mozilla/5.0")
-                wsSettings.put("headers", headers)
-                streamSettings.put("wsSettings", wsSettings)
-            }
-            
-            outbound.put("streamSettings", streamSettings)
+            // Was a ws-only copy sending a two-token "Mozilla/5.0" user agent, so every config
+            // measured through this path was measured with a different TLS/HTTP profile than the
+            // one it would actually connect with -- and an xhttp config with no xhttpSettings at
+            // all. See buildStream.
+            outbound.put("streamSettings", buildStream(config))
             outbound.put("tag", tag)
             outbounds.put(outbound)
 
@@ -700,6 +1191,126 @@ object XrayJsonGenerator {
 
         return json.toString()
     }
+
+    /**
+     * The game booster's DNS-only session: the VPN routes nothing but the resolver address
+     * ([MyVpnService.GAME_ROUTE_DNS_ONLY]), so the only packets that ever arrive here are the
+     * game's DNS queries -- its gameplay never enters this process.
+     *
+     * Answers come from [staticHosts] first (the login hosts the booster already resolved over
+     * DoH and proved reachable), then from DNS over HTTPS -- never plain UDP 53, which Iranian
+     * carriers intercept whatever the destination. `UseIPv4` because the session blocks IPv6
+     * for the game, and an AAAA answer would only be a connection that fails slowly.
+     *
+     * TCP 853 is refused so Android's opportunistic Private DNS probe fails at once instead of
+     * timing out; everything else leaves `direct` (the first outbound), which in practice is only
+     * the DoH resolvers' own connections.
+     *
+     * [providerServers] -- (resolver address, names) pairs: an anti-sanction DNS the booster proved
+     * on this line, asked ONLY for the game's refused names (`skipFallback`, so it never answers
+     * anything else). [ispResolvers] -- the line's own resolvers, the default for every other name:
+     * they are the fastest and map CDNs to the nearest edge, where DoH to a foreign resolver was
+     * slow and mapped by the resolver's location. DoH by IP stays as the last resort. Without ISP
+     * resolvers the order is the previous one: DoH first.
+     */
+    fun generateGameDnsOnlyConfig(
+        mtu: Int,
+        staticHosts: Map<String, List<String>> = emptyMap(),
+        dedicatedDnsUrl: String? = null,
+        dedicatedDnsDomains: List<String> = emptyList(),
+        providerServers: List<Pair<String, List<String>>> = emptyList(),
+        ispResolvers: List<String> = emptyList(),
+        fragmentIps: List<String> = emptyList(),
+    ): String {
+        val json = JSONObject()
+        json.put("log", JSONObject().put("loglevel", "warning"))
+        json.put("inbounds", JSONArray().put(JSONObject().apply {
+            put("protocol", "tun")
+            put("tag", "tun-in")
+            put("settings", JSONObject().put("mtu", mtu))
+            // Nothing but DNS, and the fragmented hosts' TLS, arrives; there is nothing to sniff.
+            put("sniffing", JSONObject().put("enabled", false))
+        }))
+        json.put("outbounds", JSONArray()
+            .put(JSONObject().put("protocol", "freedom").put("tag", "direct"))
+            .put(JSONObject().put("protocol", "dns").put("tag", "dns-out"))
+            .put(JSONObject().put("protocol", "blackhole").put("tag", "block"))
+            .apply { if (fragmentIps.isNotEmpty()) put(gameFragmentOutbound()) })
+
+        val servers = JSONArray()
+        if (!dedicatedDnsUrl.isNullOrBlank() && dedicatedDnsDomains.isNotEmpty()) {
+            servers.put(JSONObject().apply {
+                put("address", dedicatedDnsUrl)
+                put("domains", JSONArray().apply { dedicatedDnsDomains.forEach { put("domain:$it") } })
+                put("skipFallback", true)
+            })
+        }
+        providerServers.forEach { (ip, names) ->
+            if (names.isEmpty()) return@forEach
+            servers.put(JSONObject().apply {
+                put("address", ip)
+                put("port", 53)
+                // `full:` for a proven host, `domain:` for a catalog suffix given as ".suffix".
+                put("domains", JSONArray().apply {
+                    names.forEach { n -> put(if (n.startsWith(".")) "domain:${n.removePrefix(".")}" else "full:$n") }
+                })
+                put("skipFallback", true)
+            })
+        }
+        ispResolvers.forEach { ip -> servers.put(JSONObject().put("address", ip).put("port", 53)) }
+        // The IP-addressed forms: the named ones (and 1.1.1.1) are filtered on Iranian lines.
+        servers.put("https://8.8.8.8/dns-query")
+        servers.put("https://1.1.1.1/dns-query")
+        json.put("dns", JSONObject().apply {
+            put("servers", servers)
+            put("queryStrategy", "UseIPv4")
+            if (staticHosts.isNotEmpty()) {
+                put("hosts", JSONObject().apply {
+                    staticHosts.forEach { (host, ips) ->
+                        if (ips.isNotEmpty()) put(host, if (ips.size == 1) ips[0] else JSONArray().apply { ips.forEach { put(it) } })
+                    }
+                })
+            }
+        })
+        json.put("routing", JSONObject().apply {
+            put("domainStrategy", "AsIs")
+            put("rules", JSONArray()
+                .put(JSONObject().put("type", "field").put("port", "53").put("outboundTag", "dns-out"))
+                .put(JSONObject().put("type", "field").put("network", "tcp").put("port", "853").put("outboundTag", "block"))
+                .apply {
+                    if (fragmentIps.isNotEmpty()) {
+                        put(JSONObject().put("type", "field")
+                            .put("ip", JSONArray().apply { fragmentIps.forEach { put(it) } })
+                            .put("outboundTag", GAME_FRAGMENT_TAG))
+                    }
+                })
+        })
+        return json.toString()
+    }
+
+    const val GAME_FRAGMENT_TAG = "frag"
+
+    /**
+     * The fragmenting outbound for sign-in hosts filtered on their TLS name: the TLS ClientHello
+     * leaves in pieces so the filter never sees the name in one segment. The shape and numbers are
+     * the bundled Iran profiles' own (`tcp-fragment-tls`, Serverless v50 "fragA"), which is what the
+     * app already ships as working in Iran; nothing is tuned here.
+     */
+    private fun gameFragmentOutbound(): JSONObject = JSONObject()
+        .put("tag", GAME_FRAGMENT_TAG)
+        .put("protocol", "freedom")
+        .put("streamSettings", JSONObject()
+            .put("finalmask", JSONObject().put("tcp", JSONArray()
+                .put(JSONObject().put("type", "fragment").put("settings", JSONObject()
+                    .put("packets", "tlshello")
+                    .put("lengths", JSONArray().put("6").put("98").put("1"))
+                    .put("delays", JSONArray().put("0"))
+                    .put("maxSplit", "0")))
+                .put(JSONObject().put("type", "fragment").put("settings", JSONObject()
+                    .put("packets", "1-1")
+                    .put("lengths", JSONArray().put("114").put("1"))
+                    .put("delays", JSONArray().put("1"))
+                    .put("maxSplit", "11"))))))
 
     /**
      * "DNS boost" config: a local tun VPN that ONLY changes DNS resolution and sends all

@@ -34,7 +34,27 @@ data class SavedServer(
     /** True until the user has seen it once, so the list can mark what just arrived. */
     var isNew: Boolean = true,
 ) {
-    val isDead: Boolean get() = testedAt > 0 && delay <= 0
+    /**
+     * Tested, and it failed.
+     *
+     * Deliberately `== FAILED` rather than `<= 0`: a row being measured right now also holds a
+     * non-positive delay, and treating that as dead put every in-flight row into the "down"
+     * count and into whatever "delete the down ones" would have removed. Worse, a measurement
+     * that never reported back left the row wearing that verdict permanently -- which is what
+     * "some configs are never tested" looked like from the outside.
+     */
+    val isDead: Boolean get() = testedAt > 0 && delay == FAILED
+
+    /** A measurement is in flight for this row. */
+    val isTesting: Boolean get() = delay == TESTING
+
+    companion object {
+        /** The measurement ran and the server did not answer. */
+        const val FAILED = -1
+
+        /** A measurement is in flight; not a verdict. */
+        const val TESTING = -2
+    }
 }
 
 object QuickSavedStore {
@@ -114,6 +134,11 @@ object QuickSavedStore {
         var added = 0
         val now = System.currentTimeMillis()
         for (n in nodes) {
+            // Pool servers are the app's own list and never touch the filesystem. Two reasons:
+            // they must not be exportable at all, and `android:allowBackup="true"` copies
+            // everything under filesDir into the user's Google Drive. They live in memory for
+            // the session and are fetched fresh next time.
+            if (n.source == MlmPoolClient.SOURCE) continue
             val existing = byId[n.id]
             if (existing != null) {
                 existing.delay = n.delay
@@ -167,6 +192,29 @@ object QuickSavedStore {
         save(context)
     }
 
+    /**
+     * Put rows that never got their result back to how they were.
+     *
+     * A row is marked [SavedServer.TESTING] before its measurement starts. If the run ends
+     * early -- stopped, or cancelled -- the rows it never reached would keep that marker
+     * forever and read as configs the app refuses to test. Clearing to "not tested" is honest:
+     * nothing was learned about them.
+     */
+    @Synchronized
+    fun clearTestingMarkers(context: Context, ids: Collection<String>? = null) {
+        val list = all(context) as MutableList
+        var touched = false
+        for (i in list.indices) {
+            val row = list[i]
+            if (!row.isTesting) continue
+            if (ids != null && row.id !in ids) continue
+            row.delay = SavedServer.FAILED
+            row.testedAt = 0L          // 0 == never measured, so isDead stays false
+            touched = true
+        }
+        if (touched) save(context)
+    }
+
     @Synchronized
     fun resort(context: Context) {
         (all(context) as MutableList).sortBy { if (it.delay > 0) it.delay else Int.MAX_VALUE }
@@ -205,4 +253,31 @@ object QuickSavedStore {
     fun clear(context: Context, keepInPool: Boolean = true) {
         remove(context, all(context).map { it.id }, keepInPool)
     }
+
+    // ---- who started the tunnel ------------------------------------------------------------
+
+    private const val PREFS = "quick_connect"
+    private const val KEY_LAST = "last_connected_id"
+
+    /**
+     * Remember that Quick Connect is what raised the current tunnel.
+     *
+     * The saved list used to answer this on its own: every server this screen could connect to
+     * was in it, so "the running node id is in the list" meant "we started it". Pool servers
+     * broke that, deliberately -- they are never written to disk -- and a pool connection
+     * therefore looked like a stranger's, which is why the home screen lit the V2Ray lamp
+     * instead of this one and why the connect button had to be told about them separately.
+     *
+     * An id is not a config: it identifies a row, carries no address, key or host, and cannot
+     * be turned back into anything connectable. Storing it breaks none of the rules that keep
+     * the pool's configs off the filesystem.
+     */
+    fun markConnected(context: Context, id: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putString(KEY_LAST, id).apply()
+    }
+
+    fun lastConnectedId(context: Context): String? =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_LAST, null)?.takeIf { it.isNotBlank() }
 }

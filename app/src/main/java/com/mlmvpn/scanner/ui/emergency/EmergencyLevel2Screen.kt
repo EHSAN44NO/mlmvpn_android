@@ -3,423 +3,531 @@ package com.mlmvpn.scanner.ui.emergency
 import android.app.Activity
 import android.content.Intent
 import android.net.VpnService
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.core.*
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Science
+import androidx.compose.material.icons.filled.Article
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.FlashOn
+import androidx.compose.material.icons.filled.NetworkCheck
+import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VerifiedUser
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
-import com.mlmvpn.scanner.ui.tlsPing
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.withContext
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mlmvpn.scanner.MyVpnService
-import com.mlmvpn.scanner.emergency.EmergencyColors
+import com.mlmvpn.scanner.R
 import com.mlmvpn.scanner.engines.gst.GstConfigManager
+import com.mlmvpn.scanner.engines.gst.GstDiagnostics
+import com.mlmvpn.scanner.engines.gst.GstLog
 import com.mlmvpn.scanner.engines.gst.GstRelay
+import com.mlmvpn.scanner.ui.home.HomeDestinations
+import com.mlmvpn.scanner.ui.settings.Ios
+import com.mlmvpn.scanner.ui.settings.IosScreen
+import com.mlmvpn.scanner.ui.settings.SettingsActionRow
+import com.mlmvpn.scanner.ui.settings.SettingsFooter
+import com.mlmvpn.scanner.ui.settings.SettingsGroup
+import com.mlmvpn.scanner.ui.settings.SettingsRow
+import com.mlmvpn.scanner.ui.settings.SettingsSectionHeader
 import com.therealaleph.mhrv.Native
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import com.mlmvpn.scanner.utils.S
 
-@OptIn(ExperimentalMaterial3Api::class)
+/** The NODE_ID this feature claims on [MyVpnService], and how the panel knows the tunnel is its. */
+private const val GST_NODE_ID = "GST_EMERGENCY"
+
+/** Where the panel currently is. Pushed pages, not dialogs -- see GstScreens.kt. */
+private sealed class GstPage {
+    object Panel : GstPage()
+    object NetworkPath : GstPage()
+    object Log : GstPage()
+    data class Relay(val index: Int) : GstPage()
+}
+
+/**
+ * The Google Apps Script tunnel, rebuilt on the app's own design.
+ *
+ * What it was: a Material top bar with an ArrowBack and an overflow menu holding four unrelated
+ * things, a `LazyColumn` of `Card`s, one `Card` per relay carrying a pencil and a bin as adjacent
+ * icon buttons, a 120dp circular `Button` welded to the bottom of the column, and three dialogs
+ * -- an AlertDialog log, a full-bleed Dialog with a TabRow over two checkbox lists, and a second
+ * AlertDialog listing relays that needed authorizing. Next to Settings, MASQUE, Tor and «ضد فیلتر
+ * SNI» it read as a different application.
+ *
+ * What it is now, in the order a user asks the questions: am I connected (the dial, which is most
+ * of the screen), can HTTPS actually work (the certificate, because nothing else matters until it
+ * can), which relays do I have and are they alive, and what can I change. Each of the three old
+ * dialogs became a pushed page, which is what lets the row that opens it show what it holds --
+ * the log's line count, the number of names and addresses selected -- without opening anything.
+ *
+ * ## What did NOT change
+ *
+ * Every engine call is the one that was here: the same `{"type":"gst"}` NODE_URI on
+ * [MyVpnService], the same Proxy Mode and Local Port passthrough, the same STOP action, the same
+ * [GstDiagnostics.testDeployment] probe, the same CA priming and export, and the same
+ * [GstConfigManager] storage. The wizard is still the only way a relay is created.
+ *
+ * The batch-authorize dialog is the one piece deliberately not carried over. It appeared after a
+ * test, listed "تأیید رله ۱/۲/۳" as buttons with no way to tell which relay was which, and closed
+ * for good if you dismissed it. The verdict now lands on the relay row it belongs to and stays
+ * there, and the authorize action lives on that relay's own page.
+ */
 @Composable
 fun EmergencyLevel2Screen(onBack: () -> Unit) {
     val context = LocalContext.current
-    var relays by remember { mutableStateOf(GstConfigManager.getRelays(context)) }
+    val scope = rememberCoroutineScope()
 
-    // First-run / empty state opens the step-by-step wizard directly.
+    var relays by remember { mutableStateOf(GstConfigManager.getRelays(context)) }
+    var page by remember { mutableStateOf<GstPage>(GstPage.Panel) }
+
+    // First run, or a panel left with nothing configured, opens the wizard directly.
     var showWizard by remember { mutableStateOf(relays.none { it.deploymentId.isNotBlank() }) }
     var wizardEditIndex by remember { mutableStateOf<Int?>(null) }
 
-    var showSettingsDialog by remember { mutableStateOf(false) }
-    var showLogDialog by remember { mutableStateOf(false) }
-    var showMenu by remember { mutableStateOf(false) }
-    var isCertInstalled by remember { mutableStateOf(false) }
-    var isPriming by remember { mutableStateOf(false) }
-    var isTesting by remember { mutableStateOf(false) }
-    var showBatchAuthDialog by remember { mutableStateOf(false) }
-    var needAuthUrls by remember { mutableStateOf<List<String>>(emptyList()) }
-    val isVpnRunning by MyVpnService.isRunningFlow.collectAsState()
-    val screenScope = rememberCoroutineScope()
+    // Last probe per relay, keyed by relay id so a reorder or a removal cannot mis-attribute one.
+    val reports = remember { mutableStateMapOf<String, GstDiagnostics.Report>() }
+    var testingAll by remember { mutableStateOf(false) }
+    var testingId by remember { mutableStateOf<String?>(null) }
 
-    // Starts the GST tunnel service, mirroring the app's Proxy Mode + Local Port settings.
-    val startGstService: () -> Unit = {
-        val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(context)
-        val isProxyMode = prefs.getBoolean("proxy_mode", false)
-        val localPort = com.mlmvpn.scanner.utils.LocalPort.getString(context)
-        val startIntent = Intent(context, MyVpnService::class.java).apply {
-            putExtra("NODE_URI", "{\"type\":\"gst\"}")
-            putExtra("NODE_ID", "GST_EMERGENCY")
-            putExtra("PROXY_MODE", isProxyMode)
-            putExtra("LOCAL_PORT", localPort)
-        }
-        context.startService(startIntent)
+    var certInstalled by remember { mutableStateOf(false) }
+    var priming by remember { mutableStateOf(false) }
+
+    val isRunning by MyVpnService.isRunningFlow.collectAsState()
+    val phase by MyVpnService.connectionPhaseFlow.collectAsState()
+    val activeNode by MyVpnService.connectedNodeIdFlow.collectAsState()
+    val logLines by GstLog.lines.collectAsState()
+
+    // Whether the tunnel currently up is OURS. `connectedNodeId` is assigned in the same statement
+    // that sets Phase.CONNECTING, so this is true from the first frame of a connect attempt.
+    val ownsTunnel = activeNode == GST_NODE_ID
+    val stage = when {
+        !ownsTunnel -> DialState.IDLE
+        phase == MyVpnService.Phase.CONNECTING -> DialState.STARTING
+        phase == MyVpnService.Phase.CONNECTED -> DialState.RUNNING
+        phase == MyVpnService.Phase.FAILED -> DialState.FAILED
+        else -> DialState.IDLE
     }
+    val takenByOther = isRunning && !ownsTunnel
 
-    val vpnPrepareLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { res -> if (res.resultCode == Activity.RESULT_OK) startGstService() }
+    val configured = relays.filter { it.deploymentId.isNotBlank() }
 
+    // The certificate can be installed and revoked from outside the app, so it is re-checked every
+    // time the screen comes back to the foreground rather than once at composition.
     val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
-                isCertInstalled = isCaInstalled(context)
+                certInstalled = isCaInstalled(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
+    LaunchedEffect(Unit) { certInstalled = isCaInstalled(context) }
 
-    LaunchedEffect(Unit) { isCertInstalled = isCaInstalled(context) }
+    // ---- engine ----------------------------------------------------------------------------
 
-    // Batch-test every configured relay in parallel; collects the ones needing a one-time
-    // browser authorization so the user can finish them.
-    val testAllRelays: () -> Unit = {
-        val valid = relays.filter { it.deploymentId.isNotBlank() }
-        if (valid.isEmpty()) {
-            android.widget.Toast.makeText(context, "ابتدا حداقل یک Deployment ID وارد کنید", android.widget.Toast.LENGTH_SHORT).show()
-        } else {
-            isTesting = true
-            screenScope.launch {
-                com.mlmvpn.scanner.engines.gst.GstLog.i("RelayTest", "شروع تست ${valid.size} رله...")
-                val reports = valid.mapIndexed { i, r ->
-                    async(Dispatchers.IO) {
-                        val rep = com.mlmvpn.scanner.engines.gst.GstDiagnostics.testDeployment(
-                            com.mlmvpn.scanner.engines.gst.GstDiagnostics.execUrl(r.deploymentId), r.authKey
-                        )
-                        com.mlmvpn.scanner.engines.gst.GstLog.i("RelayTest", "رله ${i + 1}: ${rep.message}")
-                        r to rep
-                    }
-                }.awaitAll()
-                val okCount = reports.count { it.second.result == com.mlmvpn.scanner.engines.gst.GstDiagnostics.Result.OK }
-                needAuthUrls = reports
-                    .filter { it.second.result == com.mlmvpn.scanner.engines.gst.GstDiagnostics.Result.REDIRECT_BLOCKED }
-                    .map { com.mlmvpn.scanner.engines.gst.GstDiagnostics.execUrl(it.first.deploymentId) }
-                isTesting = false
-                android.widget.Toast.makeText(context, "✅ $okCount از ${valid.size} رله سالم است", android.widget.Toast.LENGTH_LONG).show()
-                if (needAuthUrls.isNotEmpty()) showBatchAuthDialog = true else showLogDialog = true
+    fun startGstService() {
+        val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(context)
+        val startIntent = Intent(context, MyVpnService::class.java).apply {
+            putExtra("NODE_URI", "{\"type\":\"gst\"}")
+            putExtra("NODE_ID", GST_NODE_ID)
+            putExtra("PROXY_MODE", com.mlmvpn.scanner.utils.NetworkSettings.proxyMode(context))
+            putExtra("LOCAL_PORT", com.mlmvpn.scanner.utils.LocalPort.getString(context))
+        }
+        context.startService(startIntent)
+    }
+
+    val vpnPrepare = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { res -> if (res.resultCode == Activity.RESULT_OK) startGstService() }
+
+    fun connect() {
+        if (configured.isEmpty()) {
+            shortToast(context, S(R.string.create_a_relay_first))
+            return
+        }
+        if (!certInstalled) {
+            shortToast(context, S(R.string.without_the_certificate_https_sites_will_not))
+        }
+        val consent = runCatching { VpnService.prepare(context) }.getOrNull()
+        if (consent != null) vpnPrepare.launch(consent) else startGstService()
+    }
+
+    fun disconnect() {
+        // Just stop. This used to be followed by a deliberate relaunch of the whole app, because
+        // the tun2proxy core calls exit(255) from native code a few seconds after a normal
+        // teardown. tun2proxy now runs in the :tun process (Tun2proxyHostService), so that exit
+        // takes down only that process and this one carries on.
+        context.startService(Intent(context, MyVpnService::class.java).apply { action = "STOP" })
+        shortToast(context, S(R.string.disconnecting_2))
+    }
+
+    fun testRelay(relay: GstRelay) {
+        if (testingId != null || testingAll) return
+        testingId = relay.id
+        scope.launch {
+            val report = withContext(Dispatchers.IO) {
+                GstDiagnostics.testDeployment(
+                    GstDiagnostics.execUrl(relay.deploymentId),
+                    relay.authKey,
+                )
             }
+            reports[relay.id] = report
+            testingId = null
         }
     }
 
-    // ---- Wizard takes over the whole screen on first run / when adding-editing a relay ----
+    fun testAll() {
+        if (configured.isEmpty()) {
+            shortToast(context, S(R.string.there_is_no_relay_to_measure_yet))
+            return
+        }
+        if (testingAll) return
+        testingAll = true
+        scope.launch {
+            GstLog.i("RelayTest", S(R.string.testing_relays, configured.size))
+            val measured = configured
+                .mapIndexed { index, relay ->
+                    async(Dispatchers.IO) {
+                        val report = GstDiagnostics.testDeployment(
+                            GstDiagnostics.execUrl(relay.deploymentId),
+                            relay.authKey,
+                        )
+                        GstLog.i("RelayTest", S(R.string.relay_2, index + 1, report.message))
+                        relay.id to report
+                    }
+                }
+                .awaitAll()
+            measured.forEach { (id, report) -> reports[id] = report }
+            testingAll = false
+            val ok = measured.count { it.second.result == GstDiagnostics.Result.OK }
+            shortToast(
+                context,
+                S(R.string.of_relays_are_healthy, faDigits(ok.toString()), faDigits(configured.size.toString())),
+            )
+        }
+    }
+
+    fun removeRelay(index: Int) {
+        val updated = relays.toMutableList()
+        val removed = updated.removeAt(index)
+        relays = updated
+        reports.remove(removed.id)
+        GstConfigManager.saveRelays(context, updated)
+    }
+
+    // ---- wizard takes over the whole screen -------------------------------------------------
+
     if (showWizard) {
         GstSetupWizard(
             sharedAuthKey = relays.firstOrNull()?.authKey ?: "",
             editRelay = wizardEditIndex?.let { relays.getOrNull(it) },
             onComplete = { relay ->
                 val updated = relays.toMutableList()
-                val idx = wizardEditIndex
-                if (idx != null && idx < updated.size) {
-                    updated[idx] = relay
+                val index = wizardEditIndex
+                if (index != null && index < updated.size) {
+                    updated[index] = relay
                 } else {
-                    val blankIdx = updated.indexOfFirst { it.deploymentId.isBlank() }
-                    if (blankIdx >= 0) updated[blankIdx] = relay else updated.add(relay)
+                    val blank = updated.indexOfFirst { it.deploymentId.isBlank() }
+                    if (blank >= 0) updated[blank] = relay else updated.add(relay)
                 }
                 relays = updated
                 GstConfigManager.saveRelays(context, updated)
+                // A relay that just changed has no verdict any more; the old one described a
+                // different deployment id.
+                reports.remove(relay.id)
                 wizardEditIndex = null
                 showWizard = false
+                page = GstPage.Panel
             },
             onClose = {
                 showWizard = false
                 wizardEditIndex = null
-                // If they cancelled the very first setup with nothing configured, leave the screen.
+                // Cancelled the very first setup with nothing configured: there is no panel to
+                // show, so leave.
                 if (relays.none { it.deploymentId.isNotBlank() }) onBack()
-            }
+            },
         )
         return
     }
 
-    // Animate the connect button ONLY while connected (see git history: an unconditional
-    // infiniteRepeatable kept requesting frames after disconnect → native RenderThread crash).
-    val scale = if (isVpnRunning) {
-        val infiniteTransition = rememberInfiniteTransition(label = "connectPulse")
-        infiniteTransition.animateFloat(
-            initialValue = 1f,
-            targetValue = 1.05f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(1000, easing = LinearEasing),
-                repeatMode = RepeatMode.Reverse
-            ),
-            label = "connectPulseScale"
-        ).value
-    } else 1f
+    // ---- pushed pages -----------------------------------------------------------------------
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(EmergencyColors.GoogleBg)
-            .padding(top = com.mlmvpn.scanner.ui.LocalSystemTopPadding.current, bottom = com.mlmvpn.scanner.ui.LocalSystemBottomPadding.current)
-            .clickable(
-                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                indication = null
-            ) { }
+    BackHandler(enabled = page != GstPage.Panel) { page = GstPage.Panel }
+
+    when (val current = page) {
+        is GstPage.NetworkPath -> {
+            GstNetworkPathScreen(onBack = { page = GstPage.Panel })
+            return
+        }
+        is GstPage.Log -> {
+            GstLogScreen(onBack = { page = GstPage.Panel })
+            return
+        }
+        is GstPage.Relay -> {
+            val relay = relays.getOrNull(current.index)
+            if (relay == null) {
+                page = GstPage.Panel
+            } else {
+                GstRelayScreen(
+                    number = current.index + 1,
+                    relay = relay,
+                    report = reports[relay.id],
+                    testing = testingId == relay.id || testingAll,
+                    onTest = { testRelay(relay) },
+                    onEdit = { wizardEditIndex = current.index; showWizard = true },
+                    onRemove = { removeRelay(current.index) },
+                    onBack = { page = GstPage.Panel },
+                )
+                return
+            }
+        }
+        else -> Unit
+    }
+
+    // ---- the panel --------------------------------------------------------------------------
+
+    IosScreen(
+        title = stringResource(R.string.home_emergency_2),
+        onBack = onBack,
+        backLabel = S(R.string.home_2),
     ) {
-        // TopBar: back + title + single overflow menu (replaces the old confusing icon row).
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = EmergencyColors.GoogleMuted)
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("اضطراری ۲ (زیرساخت گوگل)", color = EmergencyColors.GoogleText, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-            }
-            Box {
-                IconButton(onClick = { showMenu = true }) {
-                    Icon(Icons.Default.MoreVert, contentDescription = "منو", tint = EmergencyColors.GoogleMuted)
-                }
-                DropdownMenu(
-                    expanded = showMenu,
-                    onDismissRequest = { showMenu = false },
-                    modifier = Modifier.background(EmergencyColors.GoogleSurface)
-                ) {
-                    DropdownMenuItem(
-                        text = { Text("تست اتصال همه‌ی رله‌ها", color = EmergencyColors.GoogleText) },
-                        leadingIcon = { Icon(Icons.Default.Science, null, tint = EmergencyColors.GoogleGreen) },
-                        enabled = !isTesting,
-                        onClick = { showMenu = false; testAllRelays() }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("گزارش زنده", color = EmergencyColors.GoogleText) },
-                        leadingIcon = { Icon(Icons.Default.Description, null, tint = EmergencyColors.GoogleMuted) },
-                        onClick = { showMenu = false; showLogDialog = true }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("تنظیمات پیشرفته (SNI/IP)", color = EmergencyColors.GoogleText) },
-                        leadingIcon = { Icon(Icons.Default.Settings, null, tint = EmergencyColors.GoogleMuted) },
-                        onClick = { showMenu = false; showSettingsDialog = true }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("دریافت / ویرایش کد اسکریپت", color = EmergencyColors.GoogleText) },
-                        leadingIcon = { Icon(Icons.Default.Code, null, tint = EmergencyColors.GoogleBlue) },
-                        onClick = { showMenu = false; wizardEditIndex = relays.indexOfFirst { it.deploymentId.isNotBlank() }.takeIf { it >= 0 }; showWizard = true }
-                    )
-                }
-            }
-        }
+        Spacer(Modifier.height(18.dp))
 
-        LazyColumn(
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.weight(1f)
-        ) {
-            // Certificate status + one-tap install that works WITHOUT connecting first
-            // (primes the CA by briefly running the core in proxy mode — see primeAndInstallCa).
-            item {
-                CertificateCard(
-                    isInstalled = isCertInstalled,
-                    isBusy = isPriming,
-                    onInstall = {
-                        isPriming = true
-                        screenScope.launch {
-                            val ok = primeCaCertificate(context)
-                            isPriming = false
-                            if (ok) installCaCertificate(context)
-                            else android.widget.Toast.makeText(context, "ساخت گواهی ناموفق بود؛ یک‌بار «اتصال» را بزنید و دوباره تلاش کنید.", android.widget.Toast.LENGTH_LONG).show()
-                        }
-                    }
-                )
-            }
+        Text(
+            "Google Apps Script",
+            color = Ios.SecondaryLabel,
+            fontSize = 13.sp,
+            modifier = Modifier.align(Alignment.CenterHorizontally),
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            S(R.string.traffic_goes_through_a_script_on_google) +
+                S(R.string.without_blocking_google_itself),
+            color = Ios.SecondaryLabel,
+            fontSize = 13.sp,
+            lineHeight = 20.sp,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 34.dp),
+        )
 
-            itemsIndexed(relays) { index, relay ->
-                DynamicRelayCard(
-                    deploymentId = relay.deploymentId,
-                    isActive = isVpnRunning && index == 0,
-                    onEdit = { wizardEditIndex = index; showWizard = true },
-                    onRemove = {
-                        val updated = relays.toMutableList()
-                        updated.removeAt(index)
-                        relays = updated
-                        GstConfigManager.saveRelays(context, updated)
-                    }
-                )
-            }
+        Spacer(Modifier.height(26.dp))
 
-            item {
-                Button(
-                    onClick = { wizardEditIndex = null; showWizard = true },
-                    modifier = Modifier.fillMaxWidth().height(50.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = EmergencyColors.GoogleSurface),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = "Add", tint = EmergencyColors.GoogleBlue)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("افزودن رله جدید (حساب گوگل دیگر)", color = EmergencyColors.GoogleBlue, fontWeight = FontWeight.Bold)
-                }
-            }
-        }
-
-        // Connect Button
-        Box(
-            modifier = Modifier.fillMaxWidth().padding(24.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Button(
-                onClick = {
-                    if (isVpnRunning) {
-                        // Just stop. This used to be followed by a deliberate relaunch of the whole
-                        // app, because the tun2proxy core calls exit(255) from native code a few
-                        // seconds after a normal teardown and the app would otherwise vanish to the
-                        // launcher on its own. tun2proxy now runs in the :tun process
-                        // (Tun2proxyHostService), so that exit takes down only that process and
-                        // this one carries on — no restart to stage, nothing for the user to see.
-                        val stopIntent = Intent(context, MyVpnService::class.java).apply { action = "STOP" }
-                        context.startService(stopIntent)
-                        android.widget.Toast.makeText(context, "در حال قطع اتصال…", android.widget.Toast.LENGTH_SHORT).show()
-                    } else {
-                        val hasValidRelay = relays.any { it.deploymentId.isNotBlank() }
-                        if (!hasValidRelay) {
-                            android.widget.Toast.makeText(context, "لطفاً شناسه استقرار (Deployment ID) را وارد کنید", android.widget.Toast.LENGTH_SHORT).show()
-                            return@Button
-                        }
-                        if (!isCertInstalled) {
-                            android.widget.Toast.makeText(
-                                context,
-                                "در حال اتصال… اگر سایت‌های HTTPS باز نشدند، گواهی امنیتی را از کارت بالای صفحه نصب کنید.",
-                                android.widget.Toast.LENGTH_LONG
-                            ).show()
-                        }
-                        val prep = try { VpnService.prepare(context) } catch (e: Exception) { null }
-                        if (prep != null) vpnPrepareLauncher.launch(prep) else startGstService()
-                    }
-                },
-                modifier = Modifier.size(120.dp).scale(scale),
-                shape = CircleShape,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isVpnRunning) EmergencyColors.GoogleRed else EmergencyColors.GoogleBlue
-                )
-            ) {
-                Text(
-                    text = if (isVpnRunning) "قطع اتصال" else "اتصال",
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White
-                )
-            }
-        }
-    }
-
-    if (showSettingsDialog) {
-        AdvancedScannerDialog(onDismiss = { showSettingsDialog = false })
-    }
-
-    if (showLogDialog) {
-        GstLogDialog(onDismiss = { showLogDialog = false })
-    }
-
-    if (showBatchAuthDialog) {
-        AlertDialog(
-            onDismissRequest = { showBatchAuthDialog = false },
-            containerColor = EmergencyColors.GoogleSurface,
-            title = { Text("${needAuthUrls.size} رله نیاز به تأیید دارند", color = EmergencyColors.GoogleText, fontWeight = FontWeight.Bold) },
-            text = {
-                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                    Text(
-                        "این رله‌ها ساخته شده‌اند اما هنوز تأیید (Authorize) نشده‌اند. برای هرکدام دکمه‌ی زیر " +
-                            "را بزنید، در مرورگر با همان حساب گوگل وارد شوید و Review Permissions → Advanced → Allow را بزنید. " +
-                            "بعد دوباره «تست اتصال همه‌ی رله‌ها» را بزنید.",
-                        color = EmergencyColors.GoogleMuted, fontSize = 13.sp
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    needAuthUrls.forEachIndexed { i, url ->
-                        Button(
-                            onClick = {
-                                val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
-                                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                try { context.startActivity(intent) } catch (_: Exception) {}
-                            },
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = EmergencyColors.GoogleBlue)
-                        ) { Text("تأیید رله ${i + 1}", color = Color.White) }
-                    }
+        EmergencyDial(
+            state = stage,
+            idleAccent = HomeDestinations.Blue,
+            idleIcon = Icons.Default.FlashOn,
+            idleLabel = S(R.string.connect_2),
+            runningLabel = S(R.string.disconnect_3),
+            onClick = {
+                when (stage) {
+                    DialState.RUNNING -> disconnect()
+                    DialState.STARTING -> disconnect()
+                    else -> connect()
                 }
             },
-            confirmButton = {
-                TextButton(onClick = { showBatchAuthDialog = false }) {
-                    Text("بستن", color = EmergencyColors.GoogleMuted)
-                }
-            }
+            modifier = Modifier.align(Alignment.CenterHorizontally),
         )
+
+        Spacer(Modifier.height(18.dp))
+
+        EmergencyStatusLine(
+            state = stage,
+            idleAccent = HomeDestinations.Blue,
+            headline = when {
+                takenByOther -> S(R.string.another_connection_is_active)
+                stage == DialState.RUNNING -> S(R.string.connected_3)
+                stage == DialState.STARTING -> S(R.string.connecting_4)
+                stage == DialState.FAILED -> S(R.string.could_not_connect_2)
+                else -> S(R.string.ready_3)
+            },
+            sub = when {
+                takenByOther ->
+                    S(R.string.tapping_the_button_disconnects_it_and_brings_2)
+                stage == DialState.RUNNING && !certInstalled ->
+                    S(R.string.the_tunnel_is_up_but_https_sites)
+                stage == DialState.FAILED ->
+                    S(R.string.tap_measure_all_relays_to_find_out)
+                else -> null
+            },
+            modifier = Modifier.align(Alignment.CenterHorizontally),
+        )
+
+        Spacer(Modifier.height(24.dp))
+
+        // The certificate comes first, and not because it is the most interesting thing here.
+        // The tunnel terminates TLS itself, so without this installed every HTTPS site fails --
+        // which used to look to the user like the tunnel not working at all.
+        SettingsSectionHeader(S(R.string.security_certificate))
+        SettingsGroup {
+            SettingsRow(
+                title = if (certInstalled) S(R.string.installed_2) else S(R.string.not_installed),
+                icon = if (certInstalled) Icons.Default.VerifiedUser else Icons.Default.Security,
+                tint = if (certInstalled) Ios.Green else Ios.Orange,
+                subtitle = if (certInstalled) {
+                    S(R.string.https_sites_open_correctly)
+                } else {
+                    S(R.string.without_it_https_sites_will_not_open)
+                },
+                showChevron = false,
+            )
+            if (!certInstalled) {
+                Separator()
+                SettingsActionRow(
+                    label = if (priming) S(R.string.building_the_certificate) else S(R.string.install_the_certificate_on_the_phone),
+                    icon = Icons.Default.Download,
+                    busy = priming,
+                    onClick = {
+                        priming = true
+                        scope.launch {
+                            val ok = primeCaCertificate(context)
+                            priming = false
+                            if (ok) {
+                                installCaCertificate(context)
+                            } else {
+                                shortToast(context, S(R.string.could_not_build_the_certificate_connect_once))
+                            }
+                        }
+                    },
+                )
+            }
+        }
+        if (!certInstalled) {
+            SettingsFooter(
+                S(R.string.this_tunnel_opens_and_closes_tls_itself) +
+                    S(R.string.certificate_the_file_is_saved_to_downloads) +
+                    S(R.string.install_that_file_from_there)
+            )
+        }
+
+        // The count leads rather than trailing after a separator: a Latin-neutral "·" wedged
+        // between two Persian words gets walked to the wrong end by bidi, which is how
+        // "رله‌های گوگل · ۳ رله" rendered as "رله ۳ · رله‌های گوگل".
+        SettingsSectionHeader(
+            if (configured.isEmpty()) S(R.string.google_relays)
+            else S(R.string.google_relays_2, faDigits(configured.size.toString()))
+        )
+        SettingsGroup {
+            if (relays.isEmpty()) {
+                SettingsRow(
+                    title = S(R.string.no_relay_added_yet),
+                    titleColor = Ios.SecondaryLabel,
+                    showChevron = false,
+                )
+                Separator()
+            }
+            relays.forEachIndexed { index, relay ->
+                val report = reports[relay.id]
+                SettingsRow(
+                    title = S(R.string.relay_3, faDigits((index + 1).toString())),
+                    icon = Icons.Default.Cloud,
+                    // The glyph IS the health lamp: grey until measured, then green, orange or red.
+                    tint = relayTone(report),
+                    subtitle = relay.deploymentId.takeIf { it.isNotBlank() }
+                        ?.let { shortDeploymentId(it) } ?: S(R.string.no_id),
+                    value = if (testingAll || testingId == relay.id) "…" else relayVerdict(report),
+                    onClick = { page = GstPage.Relay(index) },
+                )
+                Separator()
+            }
+            SettingsActionRow(
+                label = S(R.string.add_a_relay_another_google_account),
+                icon = Icons.Default.Add,
+                onClick = { wizardEditIndex = null; showWizard = true },
+            )
+            Separator()
+            SettingsActionRow(
+                label = if (testingAll) S(R.string.measuring_4) else S(R.string.measure_all_relays),
+                icon = Icons.Default.NetworkCheck,
+                busy = testingAll,
+                enabled = configured.isNotEmpty(),
+                onClick = { testAll() },
+            )
+        }
+        SettingsFooter(
+            S(R.string.each_relay_is_a_script_on_a) +
+                S(R.string.account_so_three_accounts_mean_three_times) +
+                S(R.string.the_healthy_relays_and_moves_to_the)
+        )
+
+        // Only once something has actually been measured. A permanent row saying "0 unhealthy"
+        // trains the user to stop reading it.
+        AnimatedVisibility(
+            visible = reports.values.any { it.result == GstDiagnostics.Result.REDIRECT_BLOCKED }
+        ) {
+            Column {
+                Spacer(Modifier.height(6.dp))
+                SettingsFooter(
+                    S(R.string.one_or_more_relays_exist_but_have) +
+                        S(R.string.and_tap_verify_in_the_browser_sign) +
+                        S(R.string.review_permissions_advanced_and_allow_in_that)
+                )
+            }
+        }
+
+        SettingsSectionHeader(S(R.string.settings_2))
+        SettingsGroup {
+            SettingsRow(
+                title = S(R.string.network_route_2),
+                icon = Icons.Default.Route,
+                tint = Ios.Indigo,
+                value = S(R.string.names, faDigits(GstConfigManager.getSelectedSniList(context).size.toString())) +
+                    S(R.string.ips, faDigits(GstConfigManager.getSelectedCleanIpList(context).size.toString())),
+                onClick = { page = GstPage.NetworkPath },
+            )
+            Separator()
+            SettingsRow(
+                title = S(R.string.live_report_2),
+                icon = Icons.Default.Article,
+                tint = Ios.Teal,
+                value = logLines.size.takeIf { it > 0 }?.let { faDigits(it.toString()) },
+                onClick = { page = GstPage.Log },
+            )
+        }
+        SettingsFooter(
+            S(R.string.if_it_will_not_connect_run_measure) +
+                S(R.string.the_deploy_or_authorize_step_in_the)
+        )
+
+        Spacer(Modifier.height(28.dp))
     }
 }
 
-@Composable
-private fun CertificateCard(isInstalled: Boolean, isBusy: Boolean, onInstall: () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = EmergencyColors.GoogleSurface),
-        shape = RoundedCornerShape(12.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, EmergencyColors.GoogleSurface2)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                if (isInstalled) Icons.Default.VerifiedUser else Icons.Default.Security,
-                contentDescription = null,
-                tint = if (isInstalled) EmergencyColors.GoogleGreen else EmergencyColors.GoogleRed
-            )
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    if (isInstalled) "گواهی امنیتی نصب شده" else "گواهی امنیتی نصب نشده",
-                    color = EmergencyColors.GoogleText, fontWeight = FontWeight.Bold, fontSize = 14.sp
-                )
-                Text(
-                    if (isInstalled) "سایت‌های HTTPS به‌درستی باز می‌شوند." else "برای باز شدن سایت‌های HTTPS لازم است.",
-                    color = EmergencyColors.GoogleMuted, fontSize = 12.sp
-                )
-            }
-            if (!isInstalled) {
-                if (isBusy) {
-                    CircularProgressIndicator(modifier = Modifier.size(24.dp), color = EmergencyColors.GoogleBlue, strokeWidth = 2.dp)
-                } else {
-                    Button(
-                        onClick = onInstall,
-                        colors = ButtonDefaults.buttonColors(containerColor = EmergencyColors.GoogleBlue),
-                        shape = RoundedCornerShape(10.dp)
-                    ) { Text("نصب", color = Color.White) }
-                }
-            }
-        }
-    }
-}
+// =================================================================================================
+// Certificate plumbing
+//
+// Unchanged from the previous version of this screen, and deliberately so: the priming trick below
+// is load-bearing and the reasons are in its own comment.
+// =================================================================================================
 
 /**
  * Ensures the MITM CA (filesDir/ca/ca.crt) exists so it can be installed WITHOUT the user
@@ -462,7 +570,7 @@ suspend fun primeCaCertificate(context: android.content.Context): Boolean = with
             kotlinx.coroutines.delay(100); waited += 100
         }
     } catch (e: Exception) {
-        com.mlmvpn.scanner.engines.gst.GstLog.e("CertPrime", "priming failed: ${e.message}")
+        GstLog.e("CertPrime", "priming failed: ${e.message}")
     } finally {
         if (handle != 0L) try { Native.stopProxy(handle) } catch (_: Exception) {}
     }
@@ -477,7 +585,7 @@ fun installCaCertificate(context: android.content.Context) {
     try {
         val caFile = java.io.File(context.filesDir, "ca/ca.crt")
         if (!caFile.exists()) {
-            android.widget.Toast.makeText(context, "گواهی ساخته نشده! یکبار دکمه اتصال را بزنید.", android.widget.Toast.LENGTH_LONG).show()
+            shortToast(context, S(R.string.no_certificate_has_been_built_tap_the))
             return
         }
         val resolver = context.contentResolver
@@ -499,69 +607,17 @@ fun installCaCertificate(context: android.content.Context) {
             caFile.copyTo(exportedCert, overwrite = true)
             android.media.MediaScannerConnection.scanFile(context, arrayOf(exportedCert.absolutePath), arrayOf("application/x-x509-ca-cert"), null)
         }
-        android.widget.Toast.makeText(context, "گواهی در پوشه دانلودها ذخیره شد. لطفاً آن را از تنظیمات گوشی نصب کنید.", android.widget.Toast.LENGTH_LONG).show()
+        android.widget.Toast.makeText(
+            context,
+            S(R.string.the_certificate_was_saved_to_downloads_please),
+            android.widget.Toast.LENGTH_LONG,
+        ).show()
         val intent = Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS)
         intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
         context.startActivity(intent)
     } catch (e: Exception) {
-        android.widget.Toast.makeText(context, "خطا: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+        shortToast(context, S(R.string.error, e.message))
     }
-}
-
-@Composable
-fun GstLogDialog(onDismiss: () -> Unit) {
-    val context = LocalContext.current
-    val clipboardManager = LocalClipboardManager.current
-    val entries by com.mlmvpn.scanner.engines.gst.GstLog.lines.collectAsState()
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = EmergencyColors.GoogleSurface,
-        title = { Text("لاگ زنده‌ی رله گوگل", color = EmergencyColors.GoogleText, fontWeight = FontWeight.Bold) },
-        text = {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 400.dp)
-                    .background(Color.Black, RoundedCornerShape(8.dp))
-                    .verticalScroll(rememberScrollState())
-                    .padding(12.dp)
-            ) {
-                if (entries.isEmpty()) {
-                    Text("هنوز لاگی ثبت نشده. «تست اتصال همه‌ی رله‌ها» را بزنید یا متصل شوید.",
-                        color = EmergencyColors.GoogleMuted, fontSize = 12.sp)
-                } else {
-                    Column {
-                        entries.forEach { e ->
-                            val color = when (e.level) {
-                                com.mlmvpn.scanner.engines.gst.GstLog.Level.E -> Color(0xFFFF6B6B)
-                                com.mlmvpn.scanner.engines.gst.GstLog.Level.W -> Color(0xFFFFD166)
-                                com.mlmvpn.scanner.engines.gst.GstLog.Level.I -> Color(0xFF8AB4F8)
-                                else -> Color(0xFF9AA0A6)
-                            }
-                            Text(e.format(), color = color, fontSize = 11.sp,
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(
-                        com.mlmvpn.scanner.engines.gst.GstLog.dump()))
-                    android.widget.Toast.makeText(context, "لاگ کپی شد", android.widget.Toast.LENGTH_SHORT).show()
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = EmergencyColors.GoogleBlue)
-            ) { Text("کپی لاگ") }
-        },
-        dismissButton = {
-            TextButton(onClick = { com.mlmvpn.scanner.engines.gst.GstLog.clear() }) {
-                Text("پاک کردن", color = EmergencyColors.GoogleMuted)
-            }
-        }
-    )
 }
 
 private fun isCaInstalled(context: android.content.Context): Boolean {
@@ -587,123 +643,4 @@ private fun isCaInstalled(context: android.content.Context): Boolean {
         e.printStackTrace()
     }
     return false
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun AdvancedScannerDialog(onDismiss: () -> Unit) {
-    val context = LocalContext.current
-    val allSnis = GstConfigManager.DEFAULT_SNI_LIST
-    val allIps = GstConfigManager.DEFAULT_IP_LIST
-
-    val selectedSnis = remember { mutableStateListOf(*GstConfigManager.getSelectedSniList(context).toTypedArray()) }
-    val selectedIps = remember { mutableStateListOf(*GstConfigManager.getSelectedCleanIpList(context).toTypedArray()) }
-
-    val pings = remember { mutableStateMapOf<String, Int>() }
-    var isScanning by remember { mutableStateOf(false) }
-    var selectedTab by remember { mutableStateOf(0) }
-
-    val coroutineScope = rememberCoroutineScope()
-
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
-    ) {
-        Surface(
-            modifier = Modifier.fillMaxWidth(0.95f).fillMaxHeight(0.8f).padding(top = com.mlmvpn.scanner.ui.LocalSystemTopPadding.current, bottom = com.mlmvpn.scanner.ui.LocalSystemBottomPadding.current),
-            shape = RoundedCornerShape(16.dp),
-            color = EmergencyColors.GoogleSurface
-        ) {
-            Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-                Text("اسکنر پیشرفته SNI و IP", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = EmergencyColors.GoogleText)
-                Spacer(modifier = Modifier.height(16.dp))
-
-                TabRow(
-                    selectedTabIndex = selectedTab,
-                    containerColor = Color.Transparent,
-                    contentColor = EmergencyColors.GoogleBlue
-                ) {
-                    Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("SNI ها") })
-                    Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("آی‌پی‌ها") })
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                LazyColumn(modifier = Modifier.weight(1f)) {
-                    val itemsList = if (selectedTab == 0) allSnis else allIps
-                    val selectedList = if (selectedTab == 0) selectedSnis else selectedIps
-
-                    itemsIndexed(itemsList) { _, item ->
-                        val ping = pings[item]
-                        val isChecked = selectedList.contains(item)
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth().clickable {
-                                if (isChecked) selectedList.remove(item) else selectedList.add(item)
-                            }.padding(vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Checkbox(
-                                checked = isChecked,
-                                onCheckedChange = { checked ->
-                                    if (checked) selectedList.add(item) else selectedList.remove(item)
-                                },
-                                colors = CheckboxDefaults.colors(checkedColor = EmergencyColors.GoogleBlue)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(item, color = EmergencyColors.GoogleText, fontSize = 14.sp)
-                                val desc = GstConfigManager.ITEM_DESCRIPTIONS[item]
-                                if (desc != null) {
-                                    Text(desc, color = EmergencyColors.GoogleMuted, fontSize = 10.sp)
-                                }
-                            }
-
-                            if (ping != null) {
-                                val color = if (ping > 0 && ping < 200) Color.Green else if (ping > 0 && ping < 9999) Color.Yellow else Color.Red
-                                Text(if (ping > 0 && ping < 9999) "${ping}ms" else "Timeout", color = color, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Button(
-                        onClick = {
-                            if (isScanning) return@Button
-                            isScanning = true
-                            coroutineScope.launch {
-                                val jobs = (allSnis + allIps).map { target ->
-                                    async(Dispatchers.IO) {
-                                        val time = tlsPing(target, 443, if (allSnis.contains(target)) target else "www.google.com")
-                                        pings[target] = time
-                                    }
-                                }
-                                jobs.awaitAll()
-                                isScanning = false
-                            }
-                        },
-                        enabled = !isScanning,
-                        colors = ButtonDefaults.buttonColors(containerColor = EmergencyColors.GoogleBlue)
-                    ) {
-                        Text(if (isScanning) "در حال اسکن..." else "اسکن همه")
-                    }
-
-                    Button(
-                        onClick = {
-                            GstConfigManager.saveSelectedSniList(context, selectedSnis)
-                            GstConfigManager.saveSelectedCleanIpList(context, selectedIps)
-                            android.widget.Toast.makeText(context, "ذخیره شد", android.widget.Toast.LENGTH_SHORT).show()
-                            onDismiss()
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = EmergencyColors.GoogleGreen)
-                    ) {
-                        Text("ذخیره و خروج")
-                    }
-                }
-            }
-        }
-    }
 }

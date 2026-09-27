@@ -38,7 +38,34 @@ internal object XrayCore {
             override fun shutdown(): Long = 0
             override fun startup(): Long = 0
         }
-        return libv2ray.Libv2ray.newCoreController(handler)
+        return libv2ray.Libv2ray.newCoreController(handler).also { c ->
+            // Per-app routing: a rule `"process": ["<uid>"]` asks this finder who owns each
+            // connection. Harmless for every config without such a rule — nothing calls it.
+            try { c.registerProcessFinder(UidProcessFinder(context.applicationContext)) } catch (_: Throwable) {}
+        }
+    }
+}
+
+/**
+ * Which app owns a connection, for Xray's `process` routing rules (AndroidLibXrayLite's
+ * ProcessFinder: the core turns the returned UID into the name it matches, so a rule lists UIDs).
+ *
+ * `getConnectionOwnerUid` answers only the app that owns the active VPN, only for connections on
+ * that VPN, and only on Android 10+; everything else is -1 — "not found", which no rule matches, so
+ * the connection simply takes the default route.
+ */
+private class UidProcessFinder(private val context: Context) : libv2ray.ProcessFinder {
+    private val cm by lazy { context.getSystemService(android.net.ConnectivityManager::class.java) }
+
+    override fun findProcessByConnection(network: String, srcIP: String, srcPort: Long, destIP: String, destPort: Long): Long {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) return -1
+        return try {
+            val proto = if (network == "udp") android.system.OsConstants.IPPROTO_UDP else android.system.OsConstants.IPPROTO_TCP
+            // Literals only (the core hands over addresses, never names), so no lookup happens here.
+            val local = java.net.InetSocketAddress(java.net.InetAddress.getByName(srcIP), srcPort.toInt())
+            val remote = java.net.InetSocketAddress(java.net.InetAddress.getByName(destIP), destPort.toInt())
+            cm?.getConnectionOwnerUid(proto, local, remote)?.toLong() ?: -1
+        } catch (_: Exception) { -1 }
     }
 }
 

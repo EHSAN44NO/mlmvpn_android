@@ -55,7 +55,7 @@ object VpnGateCsvParser {
                     android.util.Base64.decode(configBase64, android.util.Base64.DEFAULT),
                     Charsets.UTF_8,
                 )
-                OvpnProfileBuilder.remoteOf(ovpn)
+                remoteOf(ovpn)
             } catch (e: Exception) {
                 null
             }
@@ -85,4 +85,21 @@ object VpnGateCsvParser {
 
         return out
     }
+
+    /**
+     * The endpoint the profile names, for the row's display and its latency probe.
+     *
+     * VPN Gate ships each server's OpenVPN profile in the CSV, and its `remote` line is the
+     * only place the real hostname and port appear -- the CSV's own column carries an IP. The
+     * profile is not used for connecting (that is SoftEther's job); this reads one line out of
+     * it and nothing more, which is why it does not need the OpenVPN library that used to
+     * provide it.
+     */
+    private val RE_REMOTE = Regex("""^\s*remote\s+(\S+)\s+(\d+)""", RegexOption.MULTILINE)
+
+    private fun remoteOf(ovpn: String): Pair<String, Int>? =
+        RE_REMOTE.find(ovpn)?.let { m ->
+            val port = m.groupValues[2].toIntOrNull() ?: return null
+            m.groupValues[1] to port
+        }
 }

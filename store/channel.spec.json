@@ -1,0 +1,35 @@
+{
+  "_": [
+    "What the Android store's signed channel offers. `node scripts/store-channel.js build` turns this",
+    "into dist/store-channel/store-channel.json — every digest measured, the whole thing signed.",
+    "",
+    "Only items whose developer publishes no Android build belong here: our own engines (tunnelcore,",
+    "gst), tor and lyrebird, our own workers and data files. Aether, BPB, edgetunnel and the geo data",
+    "install straight from their developers' GitHub and need no entry.",
+    "",
+    "PIN WHAT HAS BEEN TESTED. An item's `id` is its StoreCatalog id. Per item: version, released,",
+    "notes, optional minApp (the app must be at least this) and forAppsBelow (only apps older than",
+    "this, i.e. ones that ship something older). Per artifact: name, format (raw | tar.gz | zip),",
+    "extract {pathInArchive: installedName}, optional abi, and exactly one of from.github / from.url /",
+    "from.file. A raw artifact installs under its catalogue file name (e.g. libtor.so, dns_worker.js).",
+    "",
+    "Example — our own tor build for arm64 phones:",
+    "  { \"id\": \"tor\", \"version\": \"0.4.9.12\", \"notes\": \"…\",",
+    "    \"artifacts\": [ { \"abi\": \"arm64-v8a\", \"name\": \"libtor-arm64.so\", \"format\": \"raw\",",
+    "                     \"extract\": { \"\": \"libtor.so\" }, \"from\": { \"file\": \"build/tor/arm64/libtor.so\" } } ] }"
+  ],
+  "channel": "stable",
+  "minApp": "1.2.35",
+  "items": [
+    {
+      "id": "openvpn",
+      "version": "1.0.1",
+      "minApp": "1.2.36",
+      "notes": "Official OpenVPN source 2986b58108726a7aff278a50caa0cff9c4cdf943; MLMVPN JNI API 1; Mbed TLS 3.6.7. Restart the app after updating. Accounts and profiles are preserved.",
+      "artifacts": [
+        { "abi": "arm64-v8a", "name": "openvpn-arm64-v8a.so", "format": "raw", "extract": { "": "libmlmopenvpn.so" }, "from": { "file": "app/src/main/jniLibs/arm64-v8a/libmlmopenvpn.so" } },
+        { "abi": "armeabi-v7a", "name": "openvpn-armeabi-v7a.so", "format": "raw", "extract": { "": "libmlmopenvpn.so" }, "from": { "file": "app/src/main/jniLibs/armeabi-v7a/libmlmopenvpn.so" } }
+      ]
+    }
+  ]
+}

@@ -25,7 +25,13 @@ object CountryLookup {
         var coreController: libv2ray.CoreController? = null
         try {
             val config = VpnConfig.parseUri(nodeUri) ?: return@withContext null
-            val jsonConfig = XrayJsonGenerator.generateConfig(config, localPort, "1.1.1.1", false, false)
+            val jsonConfig = XrayJsonGenerator.generateConfig(
+                config = config,
+                localPort = localPort,
+                backendDns = "1.1.1.1",
+                allowLan = false,
+                includeTun = false,
+            )
 
             val keyBytes = ByteArray(32)
             java.security.SecureRandom().nextBytes(keyBytes)
@@ -44,14 +50,26 @@ object CountryLookup {
             kotlinx.coroutines.delay(1200)
 
             val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", localPort))
-            val conn = URL(GEOIP_URL).openConnection(proxy) as javax.net.ssl.HttpsURLConnection
-            conn.connectTimeout = 5000
-            conn.readTimeout = 5000
-            val body = try {
-                conn.inputStream.bufferedReader().use { it.readText() }
-            } finally {
-                conn.disconnect()
-            }
+            // The bundled OkHttp, not HttpURLConnection.
+            //
+            // HttpURLConnection is backed by the PLATFORM's own copy of OkHttp, and on Android 8.0
+            // that copy has a race in its connection pool: the cleanup thread reads the address of
+            // a socket that has already been released and throws
+            // `NullPointerException: ... java.net.InetAddress.toString() on a null object
+            // reference` from `com.android.okhttp.ConnectionPool.cleanup`. It happens on a thread
+            // this app does not own, with not one frame of ours in the stack, so nothing here can
+            // catch it -- a user hit it seconds after opening the V2Ray list, which is where this
+            // lookup runs once per node. Nothing can be done about the platform's copy; the answer
+            // is not to use it. The app already ships its own OkHttp, whose pool does not have the
+            // bug, and this call site is the only one that reaches Cloudflare through the tunnel.
+            val client = okhttp3.OkHttpClient.Builder()
+                .proxy(proxy)
+                .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                .build()
+            val body = client.newCall(okhttp3.Request.Builder().url(GEOIP_URL).build())
+                .execute()
+                .use { it.body?.string().orEmpty() }
 
             val json = JSONObject(body)
             val code = json.optString("country_code", "")
