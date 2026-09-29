@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "version": 5,
+ "version": 6,
  "note": "MAE service registry. Hints are priors only; MAE learns the truth per network. Data only -- never code. Probe signatures measured from MCI on 2026-09-29 (IPv4 vs IPv6 differ for OpenAI/Anthropic).",
  "services": [
   {
@@ -234,7 +234,9 @@
   {
    "id": "googleflow",
    "nameKey": "googleflow",
-   "packages": [],
+   "packages": [
+    "com.google.android.apps.labs.whisk"
+   ],
    "domains": [
     "flow.google",
     "flow.google.com",

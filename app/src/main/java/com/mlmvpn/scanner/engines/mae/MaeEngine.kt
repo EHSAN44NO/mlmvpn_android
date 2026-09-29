@@ -141,10 +141,39 @@ object MaeEngine {
             ServiceRegistry.parse("{\"schema\":1,\"services\":[]}")
         }
         store = MaeStore(app.filesDir)
+        adoptKnownApps()
         worker = scope.launch { runQueue() }
         // Whatever went stale while the app was closed is re-checked in the background, so the
         // list is current before the user taps Connect.
         scope.launch { refreshStale() }
+    }
+
+    /**
+     * An installed app added before the registry knew it (Google Flow's app is
+     * `com.google.android.apps.labs.whisk`) becomes the registry's entry, so it gets that entry's
+     * domains, probes and hints -- the US exit, the Google bundle -- instead of a guessed domain.
+     * What was learned about the unknown app is dropped: it was learned about the wrong thing.
+     */
+    private fun adoptKnownApps() {
+        val s = store.current
+        val adopt = s.customApps.mapNotNull { (id, a) -> registry.services.firstOrNull { a.pkg in it.packages }?.let { id to it.id } }.toMap()
+        if (adopt.isEmpty()) return
+        Log.i(TAG, "known apps adopted: ${adopt.values}")
+        store.update { st ->
+            fun gone(k: String) = adopt.keys.any { k == it || k.startsWith("$it|") || k.contains("|$it|") }
+            val selected = st.selected.map { sel -> adopt[sel.id]?.let { sel.copy(id = it) } ?: sel }.distinctBy { it.id }
+            st.copy(
+                selected = selected,
+                customApps = st.customApps - adopt.keys,
+                policies = st.policies.filterKeys { !gone(it) },
+                diagnoses = st.diagnoses.filterKeys { !gone(it) },
+                egress = st.egress.filterKeys { !gone(it) },
+                proofs = st.proofs.filterKeys { !gone(it) },
+                metrics = st.metrics.filterKeys { !gone(it) },
+                repairs = st.repairs.filterKeys { !gone(it) },
+                siteHosts = st.siteHosts - adopt.keys,
+            )
+        }
     }
 
     // ---------------------------------------------------------------- services
