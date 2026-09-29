@@ -35,6 +35,36 @@ fun changelogVersions(isFa: Boolean): List<ChangelogVersion> =
         if (isFa) {
             listOf(
                 ChangelogVersion(
+                    "نسخه 1.2.37",
+                    listOf(
+                        ChangelogItem(
+                            "موتور تازه: «موتور تطبیقی MLM» (آزمایشی)",
+                            "اپلیکیشن‌ها و سایت‌هایی را که بیشتر استفاده می‌کنید انتخاب کنید؛ موتور برای هر کدام روی هر اینترنت جداگانه بهترین راه را پیدا می‌کند: مستقیم، سرورلس، وارپ یا یک خروجی خارجی. هر اپلیکیشن مسیر خودش را دارد و بقیه سرعت سرورلس را نگه می‌دارند. با «باز نشد» (👎) سیستم دوباره می‌سنجد و از دومین بار می‌پرسد مشکل چیست تا هر بار راه تازه‌ای امتحان کند. اپلیکیشن‌های نصب‌شدهٔ گوشی را هم می‌شود اضافه کرد.",
+                            Icons.Default.AutoAwesome
+                        ),
+                        ChangelogItem(
+                            "جمینای و گوگل فلو با «خروجی آمریکا»",
+                            "کانفیگ‌های کلادفلر از نزدیک‌ترین مرکز کلادفلر بیرون می‌روند و گوگل آن را ایران می‌بیند (خطای 1060). موتور تطبیقی خروجی آمریکا را روی حساب کلادفلر خودتان خودکار می‌سازد و جمینای و فلو را از آن می‌فرستد؛ سرویس‌های دیگر گوگلِ همان حساب هم همراهشان می‌روند. سنجیده روی گوشی: جمینای روی ایرانسل جواب داد و فلو روی همراه اول باز شد.",
+                            Icons.Default.Public
+                        ),
+                        ChangelogItem(
+                            "کلیدهای کلادفلر امن‌تر",
+                            "کلیدهای حساب کلادفلر حالا با کلید امن خود اندروید رمز می‌شوند، در پشتیبان‌گیری اندروید نمی‌روند و از گزارش‌های خطا پاک می‌شوند.",
+                            Icons.Default.Lock
+                        ),
+                        ChangelogItem(
+                            "وصل‌نشدن دوباره بعد از قطعی اینترنت",
+                            "بعد از قطع و وصل شدن اینترنت، اتصال گاهی دیگر برنمی‌گشت. حالا حدود ۳ ثانیه بعد خودش دوباره وصل می‌شود.",
+                            Icons.Default.Refresh
+                        ),
+                        ChangelogItem(
+                            "رفع دو مشکل اندروید ۸ و ۹",
+                            "خطای «دانلود» هنگام نصب گواهی گوگل اسکریپت، و بسته شدن ناگهانی OpenVPN روی اندروید ۸.",
+                            Icons.Default.BugReport
+                        ),
+                    ),
+                ),
+                ChangelogVersion(
                     "نسخه 1.2.36",
                     listOf(
                         ChangelogItem(
@@ -1557,6 +1587,36 @@ fun changelogVersions(isFa: Boolean): List<ChangelogVersion> =
             )
         } else {
             listOf(
+                ChangelogVersion(
+                    "Version 1.2.37",
+                    listOf(
+                        ChangelogItem(
+                            "New engine: MLM Adaptive Engine (experimental)",
+                            "Pick the apps and sites you use most; the engine finds the best route for each one on each network: direct, Serverless, WARP or a foreign exit. Each app gets its own route while everything else keeps Serverless speed. “Didn't open” (👎) re-checks it, and from the second time asks what is wrong so every attempt is a different approach. Installed apps can be added too.",
+                            Icons.Default.AutoAwesome
+                        ),
+                        ChangelogItem(
+                            "Gemini and Google Flow through the US exit",
+                            "Cloudflare configs leave from the Cloudflare centre nearest the phone, which Google places in Iran (error 1060). The adaptive engine sets up the US exit on your own Cloudflare account automatically and sends Gemini and Flow through it, with the rest of the same Google account. Measured on the phone: Gemini answered on Irancell and Flow opened on MCI.",
+                            Icons.Default.Public
+                        ),
+                        ChangelogItem(
+                            "Cloudflare keys are safer",
+                            "Cloudflare account keys are now encrypted with Android's own secure key, left out of Android backups, and removed from crash reports.",
+                            Icons.Default.Lock
+                        ),
+                        ChangelogItem(
+                            "Reconnects after a network drop",
+                            "After the internet dropped and came back, the connection sometimes never returned. It now reconnects by itself in about 3 seconds.",
+                            Icons.Default.Refresh
+                        ),
+                        ChangelogItem(
+                            "Two Android 8/9 fixes",
+                            "The “download error” when installing the Google Script certificate, and OpenVPN closing suddenly on Android 8.",
+                            Icons.Default.BugReport
+                        ),
+                    ),
+                ),
                 ChangelogVersion(
                     "Version 1.2.36",
                     listOf(

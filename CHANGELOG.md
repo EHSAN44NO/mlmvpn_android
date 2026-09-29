@@ -4,12 +4,17 @@ All notable changes to the MLM VPN Android app are documented here. Dates are in
 
 فارسی این فایل در ادامه (پایین همین صفحه) آمده است.
 
-## [Unreleased]
+## [1.2.37] — 2026-09-30
 
 ### Added
 - **MAE («موتور تطبیقی MLM», MLM Adaptive Engine), experimental.** A meta-engine on the existing Xray core: the user picks the services they care about, MAE probes each one per network (staged: a few KB per route, RTT for survivors, one throughput sample for the top two), diagnoses on independent axes (censorship, geo restriction, DNS/TCP/TLS interference, service down; a bare 403 is never a verdict), and routes each service separately on top of the unchanged Serverless v48 config -- one balancer per service, so a repair re-points that service only (`OverrideBalancerTarget` over a Unix-socket API when the one-time spike proves it works on the phone; reconnect otherwise). Foreign exits are candidates until the service's own probe passes through them per address family; the first is a VLESS-over-WebSocket Worker deployed to the user's own Cloudflare account (`assets/mae_egress_worker.js`, new code). "Didn't open" is an incident that re-probes and re-routes at top priority. Measured on the phone (MCI, 2026-09-29): Serverless/fragment reached nothing, so MAE picked a working DoH (`8.8.8.8` direct) and sent unknown traffic direct; ChatGPT and Claude were served on IPv4 and refused on IPv6, so they go direct over IPv4; Gemini, YouTube, Instagram, Facebook and Telegram go through the Worker (exits BG/RO); a Gemini route switch during a YouTube stream kept all 25 YouTube responses on one connection; no measurable overhead versus no VPN. Architecture and status: `MAE_ARCHITECTURE.md`, `MAE_IMPLEMENTATION_STATE.md`.
 
+- **MAE: Gemini and Google Flow through the "US exit".** A Worker leaves from the Cloudflare colo nearest the phone, and Google places that in Iran (Gemini's page carries `"rtQCxc":-210`, Iran's time zone) and refuses every prompt ("Something went wrong (1060)"). MAE now uses the app's US exit (a Durable Object in North America on the user's own Cloudflare account) as a route of its own, reached through the user's Cloudflare config that works on the network; it is set up automatically the first time Gemini or Flow is checked, through a working route where Cloudflare's API is blocked (Irancell). While either needs a foreign exit, all of Google's account domains (`googleapis.com`, `google.com`, `gstatic.com` ...) go with it -- the Gemini app's backend is `robinfrontend-pa.googleapis.com` -- and YouTube keeps its own route. The probe reads Google's own verdict from the page (`FL1an` / `MuJWjd` / `rtQCxc`). Measured on the phone: the Gemini app answered on Irancell; Flow opened on MCI with its traffic through the US exit.
+- **MAE: Google Flow** (`flow.google.com`); its Android app (`com.google.android.apps.labs.whisk`) is recognised, and an app added from the installed list before the registry knew it becomes the registry's entry.
 ### Fixed
+- **MAE: smoother screen, fewer tunnel drops.** State is written off the main thread and batched; the rows, the network key and the manage page's route list are worked out off the main thread; connect builds its config in the background. Reconnects needed by background checks are made once, after the checks quiet down, instead of one per learned domain.
+- **MAE: a failed proof no longer wipes a good exit.** An exit that merely missed one echo keeps its proof for a day, and an app that must not look Iranian never falls back to a local route.
+- **Gemini exit Worker** writes a copy of the first payload, never a view of the request buffer.
 - **Google Script («گوگل اسکریپت»): "download error" when installing the certificate on Android 8/9.** The copy into the public Downloads folder needs a storage permission the app does not hold. Below Android 11 the system's own certificate installer is now opened with the certificate loaded (as domain fronting already did).
 - **OpenVPN crash on Android 8 ("Socket Closed" on `ovpn-relay-down`).** The relay's helper threads read a socket the other side had just closed, outside any catch. They now catch and end quietly.
 - **VPN stayed down after a network drop (every engine on MyVpnService).** The watchdog's own STOP called `stopSelf`, which destroyed the service -- and the reconnect scheduled 3 s later with it. The internal-reconnect STOP no longer stops the service; measured on the phone: Wi-Fi off/on reconnects in ~3 s.
@@ -551,10 +556,13 @@ Optimized specifically for degraded/censored network conditions (server creation
 
 نسخه‌بندی این فایل مطابق `versionName` در [`app/build.gradle`](app/build.gradle) است. برای جزئیات کامل‌تر و به‌روزتر هر نسخه، داخل خود اپ به «درباره ما → لیست تغییرات» مراجعه کنید.
 
-### [منتشرنشده]
+### [1.2.37] — 2026-09-30
 
 **افزوده‌شده:**
 - **MAE (موتور تطبیقی MLM)، آزمایشی.** کاربر سرویس‌های مهمش را انتخاب می‌کند؛ MAE برای هر سرویس روی هر شبکه جداگانه مسیرها را می‌سنجد، علت مشکل را چندبعدی تشخیص می‌دهد (فیلتر، محدودیت کشوری، اختلال DNS/TCP/TLS) و هر سرویس را از سریع‌ترین مسیر سالم خودش می‌فرستد؛ بقیهٔ ترافیک همان مسیر Serverless می‌ماند. خروجی خارجی روی حساب Cloudflare خود کاربر ساخته می‌شود و فقط وقتی برای سرویسی استفاده می‌شود که خود آن سرویس از همان مسیر پذیرفته باشد. دکمهٔ «باز نشد» مسیر همان سرویس را فوراً بررسی و اصلاح می‌کند.
+- **جمینای و گوگل فلو با «خروجی آمریکا».** کانفیگ‌های کلادفلر از نزدیک‌ترین مرکز کلادفلر بیرون می‌روند و گوگل آن را ایران می‌بیند (خطای 1060 در جمینای). MAE حالا خروجی آمریکای برنامه را روی حساب کلادفلر خودتان خودکار می‌سازد (روی ایرانسل از یک مسیر سالم) و جمینای و فلو را از آن می‌فرستد؛ همهٔ سرویس‌های گوگلِ همان حساب هم همراهشان می‌روند و یوتیوب جدا می‌ماند. سنجیده روی گوشی: برنامهٔ جمینای روی ایرانسل جواب داد و فلو روی همراه اول باز شد.
+- **گوگل فلو** به فهرست اضافه شد و برنامهٔ اندرویدش شناخته می‌شود.
+- **موتور تطبیقی روان‌تر:** کارهای سنگین از روی صفحه برداشته شد و قطع و وصل‌های پشت‌سرهمِ هنگام راه‌اندازی یکی شد.
 
 **امنیت:**
 - کلیدهای Cloudflare حالا با کلید Android Keystore رمز می‌شوند، در بکاپ اندروید نمی‌روند، و در گزارش‌های کرش پاک می‌شوند.
