@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 and older. Cloud credentials and MAE state never leave the device: the credentials
+     are sealed with a Keystore key that is not backed up anyway, and MAE state is per-network. -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="cloud_accounts_prefs.xml" />
+    <exclude domain="file" path="mae/" />
+    <!-- Carried over from psiphontunnel.aar, whose rules this file replaces. -->
+    <exclude domain="file" path="ca.psiphon.PsiphonTunnel.tunnel-core" />
+</full-backup-content>

@@ -25,6 +25,10 @@ class CloudManager private constructor(private val context: Context) {
         /** Marks that the one-off cleanup in [clearVerdictsFromTheBrokenProbe] has run. */
         private const val KEY_VERIFY_RESET = "verify_verdicts_reset_v1"
 
+        /** The account list: sealed by [SecureStore], or the pre-1.2.37 plaintext it replaces. */
+        private const val KEY_SEALED = "accounts_sealed"
+        private const val KEY_PLAIN = "accounts_list"
+
         /** The Gemini exit's Durable Object class, its creating migration tag, and where it lives. */
         private const val GEMINI_EXIT_CLASS = "GeminiExit"
         private const val GEMINI_EXIT_DO_TAG = "v1"
@@ -37,7 +41,7 @@ class CloudManager private constructor(private val context: Context) {
         }
     }
 
-    private val client = OkHttpClient.Builder()
+    private val client = OkHttpClient.Builder().dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns()).protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1)
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .writeTimeout(20, TimeUnit.SECONDS)
@@ -59,8 +63,31 @@ class CloudManager private constructor(private val context: Context) {
         }
     }
 
+    /**
+     * The saved account list as JSON. Newer installs keep it sealed by [SecureStore] under
+     * [KEY_SEALED]; the older plaintext [KEY_PLAIN] is still read so an update loses nothing, and
+     * the next [saveAccounts] seals it and deletes the plaintext.
+     */
+    private fun readAccountsJson(): String {
+        prefs.getString(KEY_SEALED, null)?.let { sealed ->
+            SecureStore.open(sealed)?.let { return it }
+            Log.w("CloudManager", "sealed account list unreadable; falling back")
+        }
+        return prefs.getString(KEY_PLAIN, "[]") ?: "[]"
+    }
+
+    private fun writeAccountsJson(json: String) {
+        val sealed = SecureStore.seal(json)
+        if (sealed != null) {
+            prefs.edit().putString(KEY_SEALED, sealed).remove(KEY_PLAIN).apply()
+        } else {
+            // Keystore unusable on this device: keep the old behaviour rather than drop accounts.
+            prefs.edit().putString(KEY_PLAIN, json).remove(KEY_SEALED).apply()
+        }
+    }
+
     fun loadAccounts() {
-        val jsonStr = prefs.getString("accounts_list", "[]") ?: "[]"
+        val jsonStr = readAccountsJson()
         try {
             val arr = org.json.JSONArray(jsonStr)
             val list = mutableListOf<CloudAccount>()
@@ -141,6 +168,8 @@ class CloudManager private constructor(private val context: Context) {
             accounts.clear()
             accounts.addAll(list)
             clearVerdictsFromTheBrokenProbe()
+            // One-time move of a pre-1.2.37 plaintext list into the sealed slot.
+            if (prefs.contains(KEY_PLAIN) && SecureStore.available) saveAccounts()
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -242,7 +271,7 @@ class CloudManager private constructor(private val context: Context) {
             }
             arr.put(obj)
         }
-        prefs.edit().putString("accounts_list", arr.toString()).apply()
+        writeAccountsJson(arr.toString())
         _accountsFlow.value = accounts.toList()
     }
 

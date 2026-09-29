@@ -1,5 +1,6 @@
 package com.mlmvpn.scanner
 
+import com.mlmvpn.scanner.utils.SecretRedactor
 import android.app.Application
 import android.util.Log
 import java.io.File
@@ -88,7 +89,7 @@ object CrashReporter {
                 Log.e(TAG, "VM SHUTTING DOWN (deliberate exit)\nhook stack:\n  $who\n\nthreads:\n$others")
                 try {
                     File(logDir, "exit-${stamp.format(Date())}.txt")
-                        .writeText("VM shutdown\n\nhook:\n  $who\n\nthreads:\n$others")
+                        .writeText(SecretRedactor.redact("VM shutdown\n\nhook:\n  $who\n\nthreads:\n$others"))
                 } catch (_: Throwable) {}
             })
         } catch (t: Throwable) {
@@ -119,7 +120,8 @@ object CrashReporter {
      * report is worse than none, because it looks like a report.
      */
     @Synchronized
-    private fun writeReport(text: String) {
+    private fun writeReport(raw: String) {
+        val text = SecretRedactor.redact(raw)
         val name = "crash-${stamp.format(Date())}-${reportSequence.incrementAndGet()}" +
             "-${Thread.currentThread().name.take(24).replace(Regex("[^A-Za-z0-9_-]"), "_")}.txt"
         val target = File(logDir, name)
@@ -167,7 +169,8 @@ object CrashReporter {
                 appendLine()
             }
         }
-        return if (body.length <= maxChars) body else body.take(maxChars) + "\n… (truncated)"
+        val clean = SecretRedactor.redact(body)
+        return if (clean.length <= maxChars) clean else clean.take(maxChars) + "\n… (truncated)"
     }
 
     /**
@@ -204,8 +207,9 @@ object CrashReporter {
             ?: return false
         return com.mlmvpn.scanner.quick.MlmPoolClient.reportCrash(
             context,
-            summary = signatureOf(text),
-            body = text,
+            // Reports written before redaction existed are cleaned here too.
+            summary = SecretRedactor.redact(signatureOf(text)),
+            body = SecretRedactor.redact(text),
         )
     }
 
@@ -319,7 +323,7 @@ object CrashReporter {
                 }
             }
             Log.e(TAG, text)
-            File(logDir, "lastexit-${stamp.format(Date())}.txt").writeText(text)
+            File(logDir, "lastexit-${stamp.format(Date())}.txt").writeText(SecretRedactor.redact(text))
 
             val newest = exits[0]
             // Ours or the bug? If we marked a deliberate exit within a minute of it, it was ours.
@@ -346,7 +350,7 @@ object CrashReporter {
      * it is a string append, not I/O.
      */
     fun note(message: String) {
-        val line = "${SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date())}  $message"
+        val line = "${SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date())}  ${SecretRedactor.redact(message)}"
         synchronized(breadcrumbs) {
             breadcrumbs.addLast(line)
             while (breadcrumbs.size > MAX_BREADCRUMBS) breadcrumbs.removeFirst()

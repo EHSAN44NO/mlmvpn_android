@@ -76,6 +76,15 @@ private class UidProcessFinder(private val context: Context) : libv2ray.ProcessF
 class VlessXrayInjector(private val fd: Int) : IVpnEngine {
     private var controller: libv2ray.CoreController? = null
 
+    companion object {
+        /**
+         * The core carrying the VPN (fd != 0) right now, for in-process traffic counters
+         * (`queryStats`). Probe/test cores run with fd 0 and never appear here.
+         */
+        @Volatile var active: libv2ray.CoreController? = null
+            private set
+    }
+
     /** Copy geosite.dat / geoip.dat from assets into filesDir if missing (xray reads them from there). */
     private fun ensureGeoData(context: Context) {
         for (filename in listOf("geosite.dat", "geoip.dat")) {
@@ -108,6 +117,7 @@ class VlessXrayInjector(private val fd: Int) : IVpnEngine {
             val c = XrayCore.newController(context)
             c.startLoop(config, fd)
             controller = c
+            if (fd != 0) active = c
             com.mlmvpn.scanner.engines.gst.GstLog.i("VlessXrayInjector", "xray core started OK (fd=$fd)")
             true
         } catch (e: Exception) {
@@ -120,6 +130,7 @@ class VlessXrayInjector(private val fd: Int) : IVpnEngine {
     }
 
     override fun stop() {
+        if (active === controller) active = null
         try { controller?.stopLoop() } catch (e: Exception) {
             Log.e("VlessXrayInjector", "Error stopping Xray core", e)
         }

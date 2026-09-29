@@ -239,7 +239,13 @@ class MyVpnService : VpnService() {
                 //
                 // stopSelf(startId) is the API for exactly this: it is a no-op if a newer
                 // start command has arrived, so a reconnect keeps the service alive.
-                stopSelf(startId)
+                //
+                // Except the watchdog's own STOP: its restart is still 3 s away inside
+                // triggerReconnect(), so no newer start command exists yet, and stopping here
+                // destroyed the service -- and serviceScope with it -- cancelling the restart.
+                // Measured on the phone (2026-09-29): Wi-Fi off/on left every engine on this
+                // service disconnected for good. The pending restart keeps the service in use.
+                if (intent?.getBooleanExtra("INTERNAL_RECONNECT", false) != true) stopSelf(startId)
             }
             return START_NOT_STICKY
         }
@@ -734,7 +740,9 @@ class MyVpnService : VpnService() {
                         // that generateConfig builds in has to be fitted in here -- only where the
                         // tunnel is a worker, and not at all with the switch off. See
                         // XrayJsonGenerator.applyGoogleFix.
-                        val startConfig = com.mlmvpn.scanner.utils.XrayJsonGenerator.applyGoogleFix(finalConfig)
+                        // MAE decides Google/Gemini routing itself, per service and per network.
+                        val isMae = jsonRemarks == com.mlmvpn.scanner.engines.mae.compile.MaeConfigCompiler.REMARKS
+                        val startConfig = (if (isMae) null else com.mlmvpn.scanner.utils.XrayJsonGenerator.applyGoogleFix(finalConfig))
                             ?.also {
                                 com.mlmvpn.scanner.engines.gst.GstLog.i(
                                     "MyVpnService", "Gemini / Google apps fix applied to this config"
@@ -755,12 +763,16 @@ class MyVpnService : VpnService() {
                             connectionPhaseFlow.value = Phase.CONNECTED
                         }
                     } else {
-                        val config = com.mlmvpn.scanner.utils.VpnConfig.parseUri(nodeUri)
-                        if (config == null) {
+                        val parsed = com.mlmvpn.scanner.utils.VpnConfig.parseUri(nodeUri)
+                        if (parsed == null) {
                             Log.e("MyVpnService", "Failed to parse VLESS URI")
                             stopSelf()
                             return@withLock
                         }
+                        // Self-healing (CfEdgeHeal): a Cloudflare-fronted config whose IPv4 edge
+                        // carries nothing on this network is moved to a Cloudflare IPv6 edge, same
+                        // Worker, same name -- measured, and only when it is actually needed.
+                        val config = com.mlmvpn.scanner.data.CfEdgeHeal.heal(this@MyVpnService, parsed)
                         
                         Log.d("MyVpnService", "VLESS Config: addr=${config.address}:${config.port} sni=${config.sni} host=${config.wsHost} path=${config.wsPath}")
 

@@ -1,6 +1,7 @@
 package com.mlmvpn.scanner.ui.home
 
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Cloud
@@ -144,6 +145,7 @@ object HomeDestinations {
         // «گف»: Geph's own network and engine, with the Windows desktop's artwork.
         HomeApp("geph",              R.string.home_geph,          Icons.Default.Public,        Blue,   imageRes = R.drawable.ic_app_geph),
         HomeApp("quick",             R.string.home_quick,         Icons.Default.RocketLaunch,  Blue),
+        HomeApp("mae",               R.string.mae_short,          Icons.Default.AutoAwesome,   Blue),
         // A cloud server on the user's own GitHub allowance, reached through a Worker on their own
         // Cloudflare -- the Windows app's «گیت‌هاب تانل», whole. Beside Quick Connect: both are
         // "get me online", and this one is the fast one when the free networks are slow.
@@ -236,7 +238,7 @@ object HomeDestinations {
      */
     val BOARD_DEFAULT: List<String> = listOf(
         "masque", "wireguard", "warp_on_warp", "warp",
-        "psiphon", "tor", "geph", "quick",
+        "psiphon", "tor", "geph", "quick", "mae",
         "github", "freeconfig",
         "game", "vpngate", "openvpn", "configstudio",
         "store", "antisanction", "iran", "fronting",

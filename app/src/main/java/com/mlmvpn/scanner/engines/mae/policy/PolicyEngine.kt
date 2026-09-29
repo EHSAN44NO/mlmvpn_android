@@ -1,0 +1,138 @@
+package com.mlmvpn.scanner.engines.mae.policy
+
+import com.mlmvpn.scanner.engines.mae.model.Diagnosis
+import com.mlmvpn.scanner.engines.mae.model.FamilyPolicy
+import com.mlmvpn.scanner.engines.mae.model.Health
+import com.mlmvpn.scanner.engines.mae.model.ObservedRequirements
+import com.mlmvpn.scanner.engines.mae.model.ServiceDef
+import com.mlmvpn.scanner.engines.mae.model.ServicePolicy
+import com.mlmvpn.scanner.engines.mae.route.RouteKind
+import com.mlmvpn.scanner.engines.mae.route.RouteProvider
+import com.mlmvpn.scanner.engines.mae.store.MaeState
+
+/**
+ * Glue between what is remembered ([MaeState]) and the scorer: builds each service's candidates
+ * for the current network and turns the scorer's answer into a stored [ServicePolicy].
+ * Pure; the engine calls it after every discovery and on every network change.
+ */
+object PolicyEngine {
+    /** A policy is re-verified after this long, stretched for policies that keep proving right. */
+    fun ttlMs(confidence: Double): Long = (2 * 3600_000L * (1 + 4 * confidence.coerceIn(0.0, 1.0))).toLong()
+
+    fun isStale(p: ServicePolicy?, now: Long): Boolean =
+        p == null || now - p.decidedAt > ttlMs(p.confidence)
+
+    fun requirements(state: MaeState, service: ServiceDef, net: String): ObservedRequirements {
+        val d = state.diagnoses[MaeState.sk(service.id, net)] ?: Diagnosis()
+        return ObservedRequirements.fromDiagnosis(d, service.hints)
+    }
+
+    fun candidates(
+        state: MaeState,
+        service: ServiceDef,
+        net: String,
+        providers: List<RouteProvider>,
+        health: (String) -> Health,
+    ): List<Candidate> = providers.map { p ->
+        val m = state.metrics[MaeState.rk(p.id, service.id, net)] ?: com.mlmvpn.scanner.engines.mae.model.RouteMetrics()
+        // Families this service was actually served on through this route, on this network.
+        val accepted = FamilyPolicy.values().filter { f ->
+            state.proofs["${p.id}:$f|${service.id}|$net"]?.serviceAccepted == true
+        }.toSet()
+        Candidate(
+            routeId = p.id,
+            kind = p.kind,
+            metrics = m,
+            health = health(p.id),
+            cost = p.cost,
+            quotaLimited = p.caps.quotaLimited,
+            usable = if (m.lastTestedAt == 0L) null else m.lastOkAt == m.lastTestedAt,
+            acceptedFamilies = accepted,
+        )
+    }
+
+    fun decide(
+        state: MaeState,
+        service: ServiceDef,
+        net: String,
+        providers: List<RouteProvider>,
+        health: (String) -> Health,
+        now: Long,
+    ): Pair<Decision, ServicePolicy?> {
+        val key = MaeState.sk(service.id, net)
+        val current = state.policies[key]
+        val req = requirements(state, service, net)
+        val decision = RouteScorer.decide(
+            req = req,
+            failMode = service.hints.failMode,
+            heavy = service.hints.heavy,
+            candidates = candidates(state, service, net, providers, health),
+            current = current?.routeId,
+            pinned = current?.takeIf { it.pinned }?.routeId,
+        )
+        val policy = when (decision) {
+            is Decision.Use -> ServicePolicy(
+                serviceId = service.id, netKey = net, routeId = decision.routeId, family = decision.family,
+                confidence = if (current?.routeId == decision.routeId) current.confidence else 0.5,
+                why = decision.why, decidedAt = now, pinned = current?.pinned == true,
+            )
+            is Decision.Block -> null
+        }
+        return decision to policy
+    }
+
+    /**
+     * Folds one discovery into the state and re-decides the service's route. Returns the new state
+     * and the decision. [incident] records the repair attempt in the incident log.
+     */
+    fun mergeDiscovery(
+        state: MaeState,
+        service: ServiceDef,
+        net: String,
+        result: DiscoveryResult,
+        providers: (MaeState) -> List<RouteProvider>,
+        health: (String) -> Health,
+        now: Long,
+        incident: Boolean = false,
+    ): Pair<MaeState, Decision> {
+        val key = MaeState.sk(service.id, net)
+        var metrics = state.metrics
+        result.metrics.forEach { (rid, m) -> metrics = metrics + (MaeState.rk(rid, service.id, net) to m) }
+        var proofs = state.proofs
+        result.proofs.forEach { p -> proofs = proofs + ("${p.routeId}|${service.id}|$net" to p) }
+        var next = state.copy(
+            diagnoses = state.diagnoses + (key to result.diagnosis),
+            metrics = metrics, proofs = proofs,
+            egress = state.egress + (key to result.egress),
+        )
+        val (decision, policy) = decide(next, service, net, providers(next), health, now)
+        next = if (policy != null) next.copy(policies = next.policies + (key to policy)) else next.copy(policies = next.policies - key)
+        if (incident) {
+            val outcome = when (decision) { is Decision.Use -> "route ${decision.routeId}"; is Decision.Block -> "no route" }
+            next = next.copy(incidents = next.incidents + com.mlmvpn.scanner.engines.mae.store.Incident(service.id, net, now, outcome))
+        }
+        return next to decision
+    }
+
+    /**
+     * The user's verdict on the current route. "Opened" is a bounded boost (never a lock);
+     * "didn't open" is a failure on the route's record, a confidence cut and an unpin -- the
+     * engine then re-discovers the service at top priority.
+     */
+    fun recordFeedback(state: MaeState, serviceId: String, net: String, opened: Boolean, now: Long): MaeState {
+        val key = MaeState.sk(serviceId, net)
+        val p = state.policies[key] ?: return state
+        val mk = MaeState.rk(p.routeId, serviceId, net)
+        val m = (state.metrics[mk] ?: com.mlmvpn.scanner.engines.mae.model.RouteMetrics()).record(opened, null, now)
+        val policy = if (opened) p.copy(confidence = (p.confidence + 0.1).coerceAtMost(0.95))
+        else p.copy(confidence = (p.confidence - 0.3).coerceAtLeast(0.0), pinned = false)
+        return state.copy(policies = state.policies + (key to policy), metrics = state.metrics + (mk to m))
+    }
+
+    /** UDP of a service leaves only by its own route: when that route is TCP-only and abroad, UDP is blocked. */
+    fun blockUdp(decision: Decision, providers: List<RouteProvider>, req: ObservedRequirements): Boolean {
+        if (decision !is Decision.Use) return true
+        val p = providers.firstOrNull { it.id == decision.routeId } ?: return false
+        return p.kind == RouteKind.FOREIGN && !p.caps.udp || (req.wantsForeign && !p.caps.udp)
+    }
+}

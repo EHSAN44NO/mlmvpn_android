@@ -1,0 +1,514 @@
+{
+ "schema": 1,
+ "version": 2,
+ "note": "MAE service registry. Hints are priors only; MAE learns the truth per network. Data only -- never code. Probe signatures measured from MCI on 2026-09-29 (IPv4 vs IPv6 differ for OpenAI/Anthropic).",
+ "services": [
+  {
+   "id": "youtube",
+   "nameKey": "youtube",
+   "packages": [
+    "com.google.android.youtube",
+    "app.revanced.android.youtube",
+    "com.google.android.apps.youtube.music"
+   ],
+   "domains": [
+    "youtube.com",
+    "youtu.be",
+    "googlevideo.com",
+    "ytimg.com",
+    "youtubei.googleapis.com",
+    "youtube-nocookie.com",
+    "ggpht.com"
+   ],
+   "probes": [
+    {
+     "url": "https://www.youtube.com/generate_204"
+    }
+   ],
+   "hints": {
+    "likelyCensored": true,
+    "prefersQuic": true,
+    "heavy": true
+   }
+  },
+  {
+   "id": "instagram",
+   "nameKey": "instagram",
+   "packages": [
+    "com.instagram.android",
+    "com.instagram.lite"
+   ],
+   "domains": [
+    "instagram.com",
+    "cdninstagram.com",
+    "ig.me",
+    "instagr.am"
+   ],
+   "probes": [
+    {
+     "url": "https://www.instagram.com/",
+     "okSignatures": [
+      "instagram"
+     ]
+    }
+   ],
+   "hints": {
+    "likelyCensored": true,
+    "heavy": true
+   }
+  },
+  {
+   "id": "telegram",
+   "nameKey": "telegram",
+   "packages": [
+    "org.telegram.messenger",
+    "org.telegram.messenger.web",
+    "org.thunderdog.challegram",
+    "org.telegram.plus"
+   ],
+   "domains": [
+    "telegram.org",
+    "t.me",
+    "telegram.me",
+    "telesco.pe",
+    "tdesktop.com",
+    "telegra.ph"
+   ],
+   "ipRanges": [
+    "91.108.4.0/22",
+    "91.108.8.0/22",
+    "91.108.12.0/22",
+    "91.108.16.0/22",
+    "91.108.20.0/22",
+    "91.108.56.0/22",
+    "95.161.64.0/20",
+    "149.154.160.0/20",
+    "185.76.151.0/24",
+    "2001:b28:f23d::/48",
+    "2001:b28:f23f::/48",
+    "2001:67c:4e8::/48"
+   ],
+   "probes": [
+    {
+     "url": "https://telegram.org/",
+     "okSignatures": [
+      "telegram"
+     ]
+    }
+   ],
+   "hints": {
+    "likelyCensored": true,
+    "usesUdp": true
+   }
+  },
+  {
+   "id": "whatsapp",
+   "nameKey": "whatsapp",
+   "packages": [
+    "com.whatsapp",
+    "com.whatsapp.w4b"
+   ],
+   "domains": [
+    "whatsapp.com",
+    "whatsapp.net",
+    "wa.me"
+   ],
+   "probes": [
+    {
+     "url": "https://www.whatsapp.com/",
+     "okSignatures": [
+      "whatsapp"
+     ]
+    }
+   ],
+   "hints": {
+    "likelyCensored": true,
+    "usesUdp": true
+   }
+  },
+  {
+   "id": "chatgpt",
+   "nameKey": "chatgpt",
+   "packages": [
+    "com.openai.chatgpt"
+   ],
+   "domains": [
+    "chatgpt.com",
+    "openai.com",
+    "oaistatic.com",
+    "oaiusercontent.com",
+    "chat.openai.com"
+   ],
+   "probes": [
+    {
+     "url": "https://api.openai.com/v1/models",
+     "geoSignatures": [
+      "unsupported_country",
+      "country, region, or territory not supported"
+     ],
+     "okSignatures": [
+      "invalid_request_error",
+      "bearer authentication",
+      "api key"
+     ]
+    }
+   ],
+   "hints": {
+    "likelyGeoRestricted": true,
+    "affinitySensitive": true,
+    "failMode": "CLOSED"
+   }
+  },
+  {
+   "id": "gemini",
+   "nameKey": "gemini",
+   "packages": [
+    "com.google.android.apps.bard"
+   ],
+   "domains": [
+    "gemini.google.com",
+    "bard.google.com",
+    "generativelanguage.googleapis.com",
+    "aistudio.google.com",
+    "alkalimakersuite-pa.clients6.google.com",
+    "proactivebackend-pa.googleapis.com"
+   ],
+   "probes": [
+    {
+     "url": "https://generativelanguage.googleapis.com/v1beta/models",
+     "geoSignatures": [
+      "<title>error 403 (forbidden)",
+      "user location is not supported",
+      "not supported in your country"
+     ],
+     "okSignatures": [
+      "unregistered callers",
+      "api_key_invalid",
+      "api key",
+      "permission_denied"
+     ]
+    }
+   ],
+   "hints": {
+    "likelyGeoRestricted": true,
+    "affinitySensitive": true,
+    "failMode": "CLOSED"
+   }
+  },
+  {
+   "id": "claude",
+   "nameKey": "claude",
+   "packages": [
+    "com.anthropic.claude"
+   ],
+   "domains": [
+    "claude.ai",
+    "anthropic.com",
+    "claudeusercontent.com"
+   ],
+   "probes": [
+    {
+     "url": "https://api.anthropic.com/v1/models",
+     "geoSignatures": [
+      "request not allowed",
+      "unsupported_country",
+      "app-unavailable-in-region"
+     ],
+     "okSignatures": [
+      "authentication_error",
+      "x-api-key"
+     ]
+    }
+   ],
+   "hints": {
+    "likelyGeoRestricted": true,
+    "affinitySensitive": true,
+    "failMode": "CLOSED"
+   }
+  },
+  {
+   "id": "tiktok",
+   "nameKey": "tiktok",
+   "packages": [
+    "com.zhiliaoapp.musically",
+    "com.ss.android.ugc.trill",
+    "com.zhiliaoapp.musically.go"
+   ],
+   "domains": [
+    "tiktok.com",
+    "tiktokv.com",
+    "tiktokcdn.com",
+    "byteoversea.com",
+    "ibytedtos.com",
+    "tiktokcdn-us.com",
+    "muscdn.com"
+   ],
+   "probes": [
+    {
+     "url": "https://www.tiktok.com/",
+     "geoSignatures": [
+      "not available in your region",
+      "not available in your country"
+     ],
+     "okSignatures": [
+      "tiktok"
+     ]
+    }
+   ],
+   "hints": {
+    "likelyCensored": true,
+    "likelyGeoRestricted": true,
+    "heavy": true
+   }
+  },
+  {
+   "id": "x",
+   "nameKey": "x",
+   "packages": [
+    "com.twitter.android"
+   ],
+   "domains": [
+    "x.com",
+    "twitter.com",
+    "twimg.com",
+    "t.co"
+   ],
+   "probes": [
+    {
+     "url": "https://x.com/",
+     "okSignatures": [
+      "x.com",
+      "twitter"
+     ]
+    }
+   ],
+   "hints": {
+    "likelyCensored": true
+   }
+  },
+  {
+   "id": "discord",
+   "nameKey": "discord",
+   "packages": [
+    "com.discord"
+   ],
+   "domains": [
+    "discord.com",
+    "discord.gg",
+    "discordapp.com",
+    "discordapp.net",
+    "discord.media"
+   ],
+   "probes": [
+    {
+     "url": "https://discord.com/api/v9/experiments",
+     "okSignatures": [
+      "fingerprint",
+      "assignments"
+     ]
+    }
+   ],
+   "hints": {
+    "likelyCensored": true,
+    "usesUdp": true
+   }
+  },
+  {
+   "id": "spotify",
+   "nameKey": "spotify",
+   "packages": [
+    "com.spotify.music",
+    "com.spotify.lite"
+   ],
+   "domains": [
+    "spotify.com",
+    "scdn.co",
+    "spotifycdn.com",
+    "spotify.link"
+   ],
+   "probes": [
+    {
+     "url": "https://open.spotify.com/",
+     "geoSignatures": [
+      "not available in your country",
+      "location: https://www.spotify.com/"
+     ],
+     "okSignatures": [
+      "spotify"
+     ]
+    }
+   ],
+   "hints": {
+    "likelyCensored": true,
+    "likelyGeoRestricted": true,
+    "heavy": true
+   }
+  },
+  {
+   "id": "github",
+   "nameKey": "github",
+   "packages": [
+    "com.github.android"
+   ],
+   "domains": [
+    "github.com",
+    "githubusercontent.com",
+    "githubassets.com",
+    "github.io"
+   ],
+   "probes": [
+    {
+     "url": "https://github.com/",
+     "okSignatures": [
+      "github"
+     ]
+    }
+   ],
+   "hints": {}
+  },
+  {
+   "id": "google",
+   "nameKey": "google",
+   "packages": [
+    "com.google.android.googlequicksearchbox",
+    "com.android.vending"
+   ],
+   "domains": [
+    "google.com",
+    "googleapis.com",
+    "gstatic.com",
+    "gvt1.com"
+   ],
+   "probes": [
+    {
+     "url": "https://www.google.com/generate_204"
+    }
+   ],
+   "hints": {}
+  },
+  {
+   "id": "reddit",
+   "nameKey": "reddit",
+   "packages": [
+    "com.reddit.frontpage"
+   ],
+   "domains": [
+    "reddit.com",
+    "redd.it",
+    "redditmedia.com",
+    "redditstatic.com"
+   ],
+   "probes": [
+    {
+     "url": "https://www.reddit.com/robots.txt",
+     "okSignatures": [
+      "user-agent"
+     ]
+    }
+   ],
+   "hints": {
+    "likelyCensored": true
+   }
+  },
+  {
+   "id": "facebook",
+   "nameKey": "facebook",
+   "packages": [
+    "com.facebook.katana",
+    "com.facebook.lite",
+    "com.facebook.orca"
+   ],
+   "domains": [
+    "facebook.com",
+    "fbcdn.net",
+    "fb.com",
+    "messenger.com",
+    "fbsbx.com"
+   ],
+   "probes": [
+    {
+     "url": "https://www.facebook.com/robots.txt",
+     "okSignatures": [
+      "user-agent"
+     ]
+    }
+   ],
+   "hints": {
+    "likelyCensored": true
+   }
+  },
+  {
+   "id": "threads",
+   "nameKey": "threads",
+   "packages": [
+    "com.instagram.barcelona"
+   ],
+   "domains": [
+    "threads.net",
+    "threads.com"
+   ],
+   "probes": [
+    {
+     "url": "https://www.threads.net/",
+     "okSignatures": [
+      "threads"
+     ]
+    }
+   ],
+   "hints": {
+    "likelyCensored": true
+   }
+  },
+  {
+   "id": "twitch",
+   "nameKey": "twitch",
+   "packages": [
+    "tv.twitch.android.app"
+   ],
+   "domains": [
+    "twitch.tv",
+    "ttvnw.net",
+    "jtvnw.net",
+    "twitchcdn.net"
+   ],
+   "probes": [
+    {
+     "url": "https://www.twitch.tv/robots.txt",
+     "okSignatures": [
+      "user-agent"
+     ]
+    }
+   ],
+   "hints": {
+    "likelyCensored": true,
+    "heavy": true
+   }
+  },
+  {
+   "id": "microsoft",
+   "nameKey": "microsoft",
+   "packages": [
+    "com.microsoft.office.outlook",
+    "com.microsoft.teams",
+    "com.microsoft.copilot"
+   ],
+   "domains": [
+    "microsoft.com",
+    "live.com",
+    "office.com",
+    "microsoftonline.com",
+    "copilot.microsoft.com",
+    "bing.com"
+   ],
+   "probes": [
+    {
+     "url": "https://www.microsoft.com/robots.txt",
+     "okSignatures": [
+      "user-agent"
+     ]
+    }
+   ],
+   "hints": {}
+  }
+ ]
+}
