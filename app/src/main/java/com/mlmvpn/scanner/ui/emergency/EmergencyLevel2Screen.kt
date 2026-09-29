@@ -424,8 +424,11 @@ fun EmergencyLevel2Screen(onBack: () -> Unit) {
         if (!certInstalled) {
             SettingsFooter(
                 S(R.string.this_tunnel_opens_and_closes_tls_itself) +
-                    S(R.string.certificate_the_file_is_saved_to_downloads) +
-                    S(R.string.install_that_file_from_there)
+                    if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) {
+                        S(R.string.gst_cert_direct_install_footer)
+                    } else {
+                        S(R.string.certificate_the_file_is_saved_to_downloads) + S(R.string.install_that_file_from_there)
+                    }
             )
         }
 
@@ -586,6 +589,21 @@ fun installCaCertificate(context: android.content.Context) {
         val caFile = java.io.File(context.filesDir, "ca/ca.crt")
         if (!caFile.exists()) {
             shortToast(context, S(R.string.no_certificate_has_been_built_tap_the))
+            return
+        }
+        // Below Android 11 the system's own installer takes the certificate directly -- the same
+        // route the domain-fronting certificate uses. No file, no storage permission.
+        //
+        // The Downloads copy below it failed on Android 8/9: writing the public Downloads folder
+        // directly needs WRITE_EXTERNAL_STORAGE, which the app does not hold, so users saw only
+        // an error toast (reported 2026-09-29 from Android 8.0 phones).
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) {
+            val intent = android.security.KeyChain.createInstallIntent().apply {
+                putExtra(android.security.KeyChain.EXTRA_CERTIFICATE, caFile.readBytes())
+                putExtra(android.security.KeyChain.EXTRA_NAME, "MLM VPN Google Script CA")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
             return
         }
         val resolver = context.contentResolver

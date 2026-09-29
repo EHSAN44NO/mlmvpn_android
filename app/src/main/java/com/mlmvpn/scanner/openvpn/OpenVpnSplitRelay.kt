@@ -70,17 +70,30 @@ class OpenVpnSplitRelay(
             // stays the normal one and the clamp can be lifted once the handshake is through.
             val clamped = clamp(up, HANDSHAKE_WINDOW)
             val trace = Trace(t0)
+            // Both helper threads catch everything. They run beside the main pump, and a socket
+            // the other side (or stop()) has already closed makes even getInputStream() throw --
+            // "IOException: Socket Closed" on an uncaught thread killed the whole app (crash
+            // reports from Android 8, 2026-09-29, where that ordering is common on slower phones).
             if (clamped) thread(name = "ovpn-relay-unclamp", isDaemon = true) {
-                while (!closed && trace.downBytes < UNCLAMP_AFTER_BYTES &&
-                    System.currentTimeMillis() - t0 < UNCLAMP_AFTER_MS) Thread.sleep(100)
-                clamp(up, OPEN_WINDOW)
-                Log.i(TAG, "window opened after ${System.currentTimeMillis() - t0} ms, ${trace.downBytes} B down")
+                try {
+                    while (!closed && trace.downBytes < UNCLAMP_AFTER_BYTES &&
+                        System.currentTimeMillis() - t0 < UNCLAMP_AFTER_MS) Thread.sleep(100)
+                    clamp(up, OPEN_WINDOW)
+                    Log.i(TAG, "window opened after ${System.currentTimeMillis() - t0} ms, ${trace.downBytes} B down")
+                } catch (e: Exception) {
+                    Log.w(TAG, "unclamp: ${e.message}")
+                }
             }
             thread(name = "ovpn-relay-down", isDaemon = true) {
-                pump(up.getInputStream(), client.getOutputStream(), trace)
-                if (trace.downBytes < HANDSHAKE_BYTES) skip(host)
-                Log.i(TAG, "server closed after ${System.currentTimeMillis() - t0} ms; ${trace.summary()}")
-                runCatching { client.shutdownOutput() }
+                try {
+                    pump(up.getInputStream(), client.getOutputStream(), trace)
+                    if (trace.downBytes < HANDSHAKE_BYTES) skip(host)
+                    Log.i(TAG, "server closed after ${System.currentTimeMillis() - t0} ms; ${trace.summary()}")
+                } catch (e: Exception) {
+                    Log.w(TAG, "relay down: ${e.message}")
+                } finally {
+                    runCatching { client.shutdownOutput() }
+                }
             }
             upSplit(client.getInputStream(), up.getOutputStream(), trace)
             // The core gave up on a server that answered at most the reset: the known cut.

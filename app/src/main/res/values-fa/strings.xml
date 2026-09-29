@@ -4873,4 +4873,5 @@
     <string name="mae_service_threads">تردز</string>
     <string name="mae_service_twitch">توییچ</string>
     <string name="mae_service_microsoft">مایکروسافت</string>
+    <string name="gst_cert_direct_install_footer">بشناسد. اندروید پنجرهٔ نصب گواهی را خودش باز می‌کند؛ فقط تأیید کنید (ممکن است اول قفل صفحه بخواهد).</string>
 </resources>

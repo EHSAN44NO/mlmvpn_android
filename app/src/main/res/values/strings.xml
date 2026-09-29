@@ -4881,4 +4881,5 @@ After that it builds the combinations itself, measures every one with a real req
     <string name="mae_service_threads">Threads</string>
     <string name="mae_service_twitch">Twitch</string>
     <string name="mae_service_microsoft">Microsoft</string>
+    <string name="gst_cert_direct_install_footer">certificate. Android opens its own certificate installer: just confirm it (it may ask you to set a screen lock first).</string>
 </resources>
