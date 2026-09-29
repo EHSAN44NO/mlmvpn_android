@@ -266,4 +266,23 @@ class MaeScenarioTest {
         val (_, dg) = PolicyEngine.mergeDiscovery(MaeState(), gem, net, runBlocking { Discovery(gemNet, now = { 1L }).run(gem, routes) }, { provs }, healthy, 1L)
         assertEquals("worker", (dg as Decision.Use).routeId)
     }
+
+    @Test fun `an exit that misses one echo keeps its proof - a fail-closed app never falls to a local route`() {
+        val net = "n1"
+        val warpRoute = com.mlmvpn.scanner.engines.mae.route.WarpRoute("k", "p", "172.16.0.2", "", listOf(0, 0, 0), "162.159.192.1:2408")
+        val provs = listOf(DirectRoute, ServerlessRoute, FragmentRoute, warpRoute, worker)
+        val routes = FakeNet.routes() + ProbeRoute("warp", RouteKind.BYPASS, FamilyPolicy.V4_ONLY, 7)
+        val gem = FakeNet.service("gemini", ServiceHints(likelyGeoRestricted = true, failMode = FailMode.CLOSED))
+        val good = FakeNet().route("direct", Behave.GEO_403_SIGNATURE).route("serverless", Behave.TCP_TIMEOUT).route("fragment", Behave.TCP_TIMEOUT)
+            .route("warp", Behave.GEO_403_SIGNATURE, family = FamilyPolicy.V4_ONLY)
+            .route("worker", Behave.OK, rttMs = 180, family = FamilyPolicy.V4_ONLY).echo("worker", FamilyPolicy.V4_ONLY, "BG")
+        val (s1, d1) = PolicyEngine.mergeDiscovery(MaeState(), gem, net, runBlocking { Discovery(good, now = { 1L }).run(gem, routes) }, { provs }, healthy, 1L)
+        assertEquals("worker", (d1 as Decision.Use).routeId)
+        // A minute later every exit misses its echo (nothing answers at all).
+        val glitch = FakeNet().route("direct", Behave.GEO_403_SIGNATURE).route("serverless", Behave.TCP_TIMEOUT).route("fragment", Behave.TCP_TIMEOUT)
+            .route("warp", Behave.TCP_TIMEOUT, family = FamilyPolicy.V4_ONLY).route("worker", Behave.TCP_TIMEOUT, family = FamilyPolicy.V4_ONLY)
+        val (s2, d2) = PolicyEngine.mergeDiscovery(s1, gem, net, runBlocking { Discovery(glitch, now = { 60_000L }).run(gem, routes, forceForeign = true) }, { provs }, healthy, 60_000L)
+        assertEquals("worker", (d2 as Decision.Use).routeId)
+        assertTrue(s2.egress[MaeState.sk("gemini", net)] is com.mlmvpn.scanner.engines.mae.model.ForeignEgressStatus.Proven)
+    }
 }

@@ -39,6 +39,8 @@ object MaeConfigCompiler {
          * abroad on a TCP-only route: their QUIC falls back to TCP rather than leave directly.
          */
         val blockUdp: Boolean,
+        /** Extra domains this service claims (its account family) because it exits abroad. */
+        val bundle: List<String> = emptyList(),
     )
 
     fun balancerTag(serviceId: String) = "svc-" + serviceId.replace(Regex("[^A-Za-z0-9_-]"), "_")
@@ -103,9 +105,14 @@ object MaeConfigCompiler {
         // `googleapis.com`, whatever order the services were picked in.
         data class Emit(val depth: Int, val json: JSONObject)
         val emits = mutableListOf<Emit>()
+        // Domains claimed by a service's bundle leave every other service's list: Google's own
+        // `googleapis.com` must follow Gemini abroad, not stay on Google's local route. More
+        // specific domains of other apps (YouTube's `youtubei.googleapis.com`) keep their own.
+        val claimed = routes.flatMap { it.bundle }.toSet()
         for (r in routes) {
             val s = r.service
-            val byDepth = s.domains.groupBy { depth(it) }
+            val own = (s.domains.filter { d -> r.bundle.contains(d) || d !in claimed } + r.bundle).distinct()
+            val byDepth = own.groupBy { depth(it) }
             fun both(net: String, bal: String) {
                 byDepth.forEach { (dep, ds) -> emits += Emit(dep, rule(ds.map { "domain:$it" }, null, net, null, bal)) }
                 if (s.ipRanges.isNotEmpty()) emits += Emit(-1, rule(null, s.ipRanges, net, null, bal))
@@ -136,7 +143,7 @@ object MaeConfigCompiler {
         routing.put("rules", merged)
         if (balancers.length() > 0) routing.put("balancers", balancers)
 
-        addFakeDns(json, routes.filter { it.decision is Decision.Use }.flatMap { it.service.domains })
+        addFakeDns(json, routes.filter { it.decision is Decision.Use }.flatMap { it.service.domains + it.bundle }.distinct())
 
         if (apiSocketPath != null) addApi(json, apiSocketPath)
         return json.toString()

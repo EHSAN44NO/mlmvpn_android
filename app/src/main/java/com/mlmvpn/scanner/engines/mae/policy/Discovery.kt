@@ -75,12 +75,23 @@ class Discovery(
         forceForeign: Boolean = false,
     ): DiscoveryResult = coroutineScope {
         val gate = Semaphore(budget.maxConcurrent)
+        // Every probe must pass: an API that answers is not the app working (Gemini's API said
+        // "fine" through an exit whose web app still refused the country).
+        suspend fun observeAll(r: ProbeRoute): com.mlmvpn.scanner.engines.mae.probe.Observation {
+            var first: com.mlmvpn.scanner.engines.mae.probe.Observation? = null
+            for (p in service.probes) {
+                val o = prober.observe(r, p)
+                if (first == null) first = o
+                if (!o.usable) return o
+            }
+            return first!!
+        }
         val spec = service.probes.firstOrNull()
             ?: return@coroutineScope DiscoveryResult(Diagnosis(), emptyList(), emptyMap(), emptyList(), ForeignEgressStatus.Untested, emptySet())
 
         // --- Stage A, local
         val local = routes.filter { it.kind != RouteKind.FOREIGN }
-        val obs = local.map { r -> async { gate.withPermit { prober.observe(r, spec) } } }.map { it.await() }.toMutableList()
+        val obs = local.map { r -> async { gate.withPermit { observeAll(r) } } }.map { it.await() }.toMutableList()
 
         // Local routes' per-family results are kept too: on some networks IPv4 and IPv6 of the
         // SAME direct path are different countries to a service.
@@ -112,7 +123,7 @@ class Discovery(
                 async {
                     gate.withPermit {
                         val echo = echoes.getOrPut(key(r)) { prober.egress(r) }
-                        val o = prober.observe(r, spec).copy(exitAlive = echo != null)
+                        val o = observeAll(r).copy(exitAlive = echo != null)
                         Triple(r, echo, o)
                     }
                 }
@@ -127,11 +138,13 @@ class Discovery(
                     FamilyPolicy.V6_ONLY -> echo?.isV6 == true
                     FamilyPolicy.BOTH -> echo != null
                 }
-                val accepted = abroad && familyHonoured && o.usable
+                val cloudflare = service.hints.refusesCloudflare && echo != null && CloudflareRanges.contains(echo.ip)
+                val accepted = abroad && familyHonoured && o.usable && !cloudflare
                 val reason = when {
-                    echo == null -> "exit not reachable / no echo"
+                    echo == null -> NO_ECHO
                     !familyHonoured -> "asked for ${r.family}, exit used the other family"
                     !abroad -> "exit country ${echo.country ?: "unknown"}"
+                    cloudflare -> "exit is on Cloudflare, which this service refuses"
                     !o.usable -> if (o.refusedCountry) "service refused this exit" else "service not reached (${o.tls})"
                     else -> "accepted (${echo.country})"
                 }
@@ -181,6 +194,10 @@ class Discovery(
             else -> ForeignEgressStatus.NoneFound(rejected)
         }
         DiscoveryResult(diagnosis, obs, metrics, proofs, egress, finalists.map { it.routeId }.toSet())
+    }
+
+    companion object {
+        const val NO_ECHO = "exit not reachable / no echo"
     }
 
     private fun key(r: ProbeRoute) = "${r.routeId}:${r.family}"

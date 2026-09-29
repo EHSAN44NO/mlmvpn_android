@@ -73,8 +73,15 @@ object RouteScorer {
         }
 
         if (valid.isEmpty()) {
-            return if (req.wantsForeign && failMode == FailMode.CLOSED) {
-                Decision.Block("needs a foreign exit and none is proven for it; blocked rather than leak")
+            return if (failMode == FailMode.CLOSED) {
+                // An app that must not be seen from an Iranian IP never takes the local fast
+                // default: a foreign exit the app has not refused is kept (its proof may just have
+                // missed a probe), and only with none is it blocked. Irancell, 2026-09-30: Gemini
+                // on the "fast default" said "not available in your country".
+                val abroad = alive.filter { it.kind == RouteKind.FOREIGN && it.usable != false }
+                    .maxByOrNull { score(it, heavy) }
+                if (abroad != null) Decision.Use(abroad.routeId, familyFor(abroad), 0.0, "no proof right now; an app that must not look Iranian keeps a foreign exit")
+                else Decision.Block("needs a foreign exit and none is available; blocked rather than leak")
             } else {
                 // Nothing proven: keep the fast base route. A plain site slow is better than dead.
                 val fallback = alive.firstOrNull { it.kind == RouteKind.BYPASS } ?: alive.firstOrNull()

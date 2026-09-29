@@ -250,6 +250,35 @@ class MaeUnitsTest {
         assertEquals(msg.size + 5, framed.size)
     }
 
+    @Test fun `bundle - Google's account domains follow Gemini abroad, YouTube keeps its own`() {
+        val registry = ServiceRegistry.parse(File("src/main/assets/mae/services.json").readText())
+        val gem = registry.get("gemini")!!
+        val routes = listOf(
+            MaeConfigCompiler.ServiceRoute(registry.get("google")!!, Decision.Use("fragment", FamilyPolicy.BOTH, 1.0, ""), false),
+            MaeConfigCompiler.ServiceRoute(registry.get("youtube")!!, Decision.Use("fragment", FamilyPolicy.BOTH, 1.0, ""), false),
+            MaeConfigCompiler.ServiceRoute(gem, Decision.Use("worker", FamilyPolicy.V4_ONLY, 1.0, ""), true, gem.bundle),
+        )
+        val r = rules(JSONObject(MaeConfigCompiler.compile(base, providers, routes)))
+        fun owner(domain: String) = r.firstOrNull { it.optJSONArray("domain")?.toString()?.contains("\"domain:$domain\"") == true }?.optString("balancerTag")
+        assertEquals("svc-gemini", owner("googleapis.com"))
+        assertEquals("svc-gemini", owner("google.com"))
+        assertEquals("svc-gemini", owner("robinfrontend-pa.googleapis.com"))
+        assertEquals("svc-youtube", owner("youtube.com"))
+        // Without the bundle, Google keeps its own domains.
+        val plain = rules(JSONObject(MaeConfigCompiler.compile(base, providers, routes.map { it.copy(bundle = emptyList()) })))
+        assertEquals("svc-google", plain.firstOrNull { it.optJSONArray("domain")?.toString()?.contains("\"domain:googleapis.com\"") == true }?.optString("balancerTag"))
+    }
+
+    @Test fun `Cloudflare ranges - worker exits are recognised, others are not`() {
+        val cf = com.mlmvpn.scanner.engines.mae.policy.CloudflareRanges
+        assertTrue(cf.contains("104.21.5.5"))
+        assertTrue(cf.contains("104.28.12.9"))
+        assertTrue(cf.contains("2606:4700:3036::1"))
+        assertFalse(cf.contains("142.251.152.119"))
+        assertFalse(cf.contains("2a01:4f8::1"))
+        assertFalse(cf.contains("not-an-ip.example"))
+    }
+
     @Test fun `no outbound tag is a prefix of another (balancer selectors match by prefix)`() {
         val tags = providers.flatMap { p -> p.families.map { p.tag(it) } }.distinct() + listOf("block", "tcp-direct", "udp-direct", "tcp-fragment")
         val ours = providers.flatMap { p -> p.families.map { p.tag(it) } }.distinct()

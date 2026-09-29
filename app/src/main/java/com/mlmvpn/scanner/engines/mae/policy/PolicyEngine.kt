@@ -2,6 +2,7 @@ package com.mlmvpn.scanner.engines.mae.policy
 
 import com.mlmvpn.scanner.engines.mae.model.Diagnosis
 import com.mlmvpn.scanner.engines.mae.model.FamilyPolicy
+import com.mlmvpn.scanner.engines.mae.model.ForeignEgressStatus
 import com.mlmvpn.scanner.engines.mae.model.Health
 import com.mlmvpn.scanner.engines.mae.model.ObservedRequirements
 import com.mlmvpn.scanner.engines.mae.model.ServiceDef
@@ -16,6 +17,9 @@ import com.mlmvpn.scanner.engines.mae.store.MaeState
  * Pure; the engine calls it after every discovery and on every network change.
  */
 object PolicyEngine {
+    /** How long a proof of acceptance outlives an exit that merely failed to answer. */
+    const val PROOF_GRACE_MS = 24 * 3600_000L
+
     /** A policy is re-verified after this long, stretched for policies that keep proving right. */
     fun ttlMs(confidence: Double): Long = (2 * 3600_000L * (1 + 4 * confidence.coerceIn(0.0, 1.0))).toLong()
 
@@ -122,14 +126,30 @@ object PolicyEngine {
         plan: RepairPlan? = null,
     ): Pair<MaeState, Decision> {
         val key = MaeState.sk(service.id, net)
-        var metrics = state.metrics
-        result.metrics.forEach { (rid, m) -> metrics = metrics + (MaeState.rk(rid, service.id, net) to m) }
         var proofs = state.proofs
-        result.proofs.forEach { p -> proofs = proofs + ("${p.routeId}|${service.id}|$net" to p) }
+        val kept = HashSet<String>()
+        result.proofs.forEach { p ->
+            val k = "${p.routeId}|${service.id}|$net"
+            // An exit that did not answer at all says nothing about the service: a proof of
+            // acceptance from the last day survives it (Irancell, 2026-09-30: every exit missed
+            // its echo once right after an install, and Gemini fell back to an Iranian route).
+            val old = proofs[k]
+            val transient = !p.serviceAccepted && p.reason == Discovery.NO_ECHO
+            if (transient && old != null && old.serviceAccepted && now - old.at < PROOF_GRACE_MS) kept += p.routeId.substringBefore(':')
+            else proofs = proofs + (k to p)
+        }
+        // ...and neither does it count as the route failing, for a route whose proof was kept.
+        var metrics = state.metrics
+        result.metrics.forEach { (rid, m) -> if (rid !in kept) metrics = metrics + (MaeState.rk(rid, service.id, net) to m) }
+        val keptEgress = (state.egress[key] as? ForeignEgressStatus.Proven)?.takeIf { old ->
+            val none = result.egress as? ForeignEgressStatus.NoneFound
+            none != null && none.rejected.values.all { it == Discovery.NO_ECHO } &&
+                proofs.any { (k, p) -> k.startsWith("${old.routeId}:") && k.endsWith("|${service.id}|$net") && p.serviceAccepted }
+        }
         var next = state.copy(
             diagnoses = state.diagnoses + (key to result.diagnosis),
             metrics = metrics, proofs = proofs,
-            egress = state.egress + (key to result.egress),
+            egress = state.egress + (key to (keptEgress ?: result.egress)),
         )
         val (decision, policy) = decide(next, service, net, providers(next), health, now, plan)
         next = if (policy != null) next.copy(policies = next.policies + (key to policy)) else next.copy(policies = next.policies - key)

@@ -4888,4 +4888,5 @@
     <string name="mae_repair_fixed_level">راه‌حل %2$d از ۵ برای %1$s آماده شد. دوباره امتحان کنید.</string>
     <string name="mae_repair_exhausted">برای %1$s پنج رویکرد مختلف امتحان شد. اگر هنوز کار نمی‌کند، یک کانفیگ خارجی شخصی اضافه کنید یا خودِ حساب را بررسی کنید.</string>
     <string name="mae_repair_started">بررسی دوبارهٔ %1$s شروع شد…</string>
+    <string name="mae_service_googleflow">گوگل فلو</string>
 </resources>

@@ -631,13 +631,14 @@ object MaeEngine {
             val decision = stored?.let { Decision.Use(it.routeId, it.family, 0.0, it.why) }
                 ?: PolicyEngine.decide(state, def, net, providers, { breaker.health(it, now) }, now).first
             val req = PolicyEngine.requirements(state, def, net)
-            MaeConfigCompiler.ServiceRoute(def, decision, PolicyEngine.blockUdp(decision, providers, req))
+            val abroad = (decision as? Decision.Use)?.let { d -> providers.firstOrNull { it.id == d.routeId }?.kind == RouteKind.FOREIGN } == true
+            MaeConfigCompiler.ServiceRoute(def, decision, PolicyEngine.blockUdp(decision, providers, req), if (abroad) def.bundle else emptyList())
         }
         val config = MaeConfigCompiler.compile(base(), providers, routes, if (withApi) apiSocket().absolutePath else null,
             state.dnsPaths[net], defaultVia(state, net), verbose = File(File(app.filesDir, "mae"), "debug").exists())
         // Structure = what needs a new config; everything else is a balancer target, switched live.
         val structure = providers.joinToString { it.id } + "#" + state.dnsPaths[net] + "#" + defaultVia(state, net) +
-            "#" + routes.filter { MaeConfigCompiler.targetsFor(it, providers) != null }.joinToString { it.service.id + ":" + it.service.domains.hashCode() + ":" + it.service.ipRanges.hashCode() }
+            "#" + routes.filter { MaeConfigCompiler.targetsFor(it, providers) != null }.joinToString { it.service.id + ":" + it.service.domains.hashCode() + ":" + it.service.ipRanges.hashCode() + ":" + it.bundle.hashCode() }
         val targets = routes.flatMap { r ->
             val (tcp, udp) = MaeConfigCompiler.targetsFor(r, providers) ?: return@flatMap emptyList()
             listOf(MaeConfigCompiler.balancerTag(r.service.id) to tcp, MaeConfigCompiler.udpBalancerTag(r.service.id) to udp)
@@ -664,6 +665,10 @@ object MaeEngine {
         runCatching { apiSocket().delete() }
         val c = compileNow(withApi = store.current.liveApiWorks != false)
         applied = c
+        // Debug builds with the `debug` flag keep the last config for inspection (no secrets
+        // beyond what the app already holds in its own private files).
+        val dir = File(app.filesDir, "mae")
+        if (File(dir, "debug").exists()) runCatching { File(dir, "last_config.json").writeText(c.config) }
         return c.config
     }
 

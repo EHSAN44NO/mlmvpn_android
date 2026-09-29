@@ -19,6 +19,12 @@ data class ServiceHints(
     val prefersQuic: Boolean = false,
     val affinitySensitive: Boolean = false,
     val heavy: Boolean = false,
+    /**
+     * The service refuses exits on Cloudflare's network even where their IP geolocates abroad.
+     * Measured (Irancell, 2026-09-30): Gemini loaded through a Worker-based VLESS exit ("RO")
+     * and then answered every prompt with "Something went wrong (1060)".
+     */
+    val refusesCloudflare: Boolean = false,
     val failMode: FailMode = FailMode.OPEN,
 )
 
@@ -46,6 +52,14 @@ data class ServiceDef(
     val probes: List<ProbeSpec> = emptyList(),
     val hints: ServiceHints = ServiceHints(),
     val custom: Boolean = false,
+    /**
+     * Domains that must leave by THIS app's exit whenever it needs a foreign one, even though
+     * they are not the app's own: the account's other services, which the provider checks for
+     * the same country. Measured (Irancell, 2026-09-29): the Gemini app's backend is
+     * `robinfrontend-pa.googleapis.com`; left on Google's Iranian route, Gemini said "not
+     * available in your country" while its own domains were abroad.
+     */
+    val bundle: List<String> = emptyList(),
 )
 
 /**

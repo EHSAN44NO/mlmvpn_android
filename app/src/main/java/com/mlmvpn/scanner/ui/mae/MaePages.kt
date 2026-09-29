@@ -50,7 +50,7 @@ internal fun MaeOnboarding(onBack: () -> Unit, onDone: (List<String>) -> Unit, o
     val installed = remember {
         val pm = context.packageManager
         all.filter { s ->
-            s.packages.any { p -> runCatching { pm.getPackageInfo(p, 0); true }.getOrDefault(false) }
+            s.packages.isEmpty() || s.packages.any { p -> runCatching { pm.getPackageInfo(p, 0); true }.getOrDefault(false) }
         }.map { it.id }.toSet()
     }
     var picked by remember { mutableStateOf(installed) }
@@ -133,7 +133,7 @@ internal fun MaeManageScreen(onBack: () -> Unit, openPicker: Boolean = false) {
     val installedIds = remember {
         val pm = context.packageManager
         MaeEngine.registry.services.filter { s ->
-            s.packages.any { p -> runCatching { pm.getPackageInfo(p, 0); true }.getOrDefault(false) }
+            s.packages.isEmpty() || s.packages.any { p -> runCatching { pm.getPackageInfo(p, 0); true }.getOrDefault(false) }
         }.map { it.id }.toSet()
     }
     if (showPicker) {

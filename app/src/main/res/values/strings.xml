@@ -4896,4 +4896,5 @@ After that it builds the combinations itself, measures every one with a real req
     <string name="mae_repair_fixed_level">Approach %2$d of 5 for %1$s is ready. Try again.</string>
     <string name="mae_repair_exhausted">Five different approaches were tried for %1$s. If it still fails, add a foreign config of your own, or check the account itself.</string>
     <string name="mae_repair_started">Checking %1$s again…</string>
+    <string name="mae_service_googleflow">Google Flow</string>
 </resources>

@@ -53,6 +53,7 @@ class ServiceRegistry private constructor(
                 displayName = o.optString("displayName", o.getString("id")),
                 packages = o.optJSONArray("packages").strings(),
                 domains = o.optJSONArray("domains").strings().mapNotNull { DomainNormalizer.normalize(it) },
+                bundle = o.optJSONArray("bundle").strings().mapNotNull { DomainNormalizer.normalize(it) },
                 ipRanges = o.optJSONArray("ipRanges").strings(),
                 probes = o.optJSONArray("probes")?.let { p ->
                     (0 until p.length()).map { j ->
@@ -71,6 +72,7 @@ class ServiceRegistry private constructor(
                     prefersQuic = h.optBoolean("prefersQuic"),
                     affinitySensitive = h.optBoolean("affinitySensitive"),
                     heavy = h.optBoolean("heavy"),
+                    refusesCloudflare = h.optBoolean("refusesCloudflare"),
                     failMode = if (h.optString("failMode") == "CLOSED") FailMode.CLOSED else FailMode.OPEN,
                 ),
             )

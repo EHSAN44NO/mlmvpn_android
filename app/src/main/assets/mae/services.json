@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "version": 2,
+ "version": 3,
  "note": "MAE service registry. Hints are priors only; MAE learns the truth per network. Data only -- never code. Probe signatures measured from MCI on 2026-09-29 (IPv4 vs IPv6 differ for OpenAI/Anthropic).",
  "services": [
   {
@@ -171,7 +171,11 @@
     "generativelanguage.googleapis.com",
     "aistudio.google.com",
     "alkalimakersuite-pa.clients6.google.com",
-    "proactivebackend-pa.googleapis.com"
+    "proactivebackend-pa.googleapis.com",
+    "robinfrontend-pa.googleapis.com",
+    "signaler-pa.googleapis.com",
+    "gemini.google",
+    "notebooklm.google.com"
    ],
    "probes": [
     {
@@ -179,7 +183,9 @@
      "geoSignatures": [
       "<title>error 403 (forbidden)",
       "user location is not supported",
-      "not supported in your country"
+      "not supported in your country",
+      "در کشورتان پشتیبانی نمی‌شود",
+      "در کشور شما در دسترس نیست"
      ],
      "okSignatures": [
       "unregistered callers",
@@ -187,13 +193,85 @@
       "api key",
       "permission_denied"
      ]
+    },
+    {
+     "url": "https://gemini.google.com/app",
+     "geoSignatures": [
+      "<title>error 403 (forbidden)",
+      "not available in your country",
+      "isn't supported in your country",
+      "not supported in your country",
+      "در کشورتان پشتیبانی نمی‌شود",
+      "در کشور شما در دسترس نیست"
+     ],
+     "okSignatures": [
+      "location: https://accounts.google.com"
+     ]
     }
    ],
    "hints": {
     "likelyGeoRestricted": true,
     "affinitySensitive": true,
-    "failMode": "CLOSED"
-   }
+    "failMode": "CLOSED",
+    "refusesCloudflare": true
+   },
+   "bundle": [
+    "google.com",
+    "googleapis.com",
+    "gstatic.com",
+    "googleusercontent.com",
+    "gvt1.com",
+    "gvt2.com",
+    "ggpht.com",
+    "googleadservices.com",
+    "clients6.google.com",
+    "withgoogle.com",
+    "google.dev"
+   ]
+  },
+  {
+   "id": "googleflow",
+   "nameKey": "googleflow",
+   "packages": [],
+   "domains": [
+    "labs.google",
+    "labs.google.com",
+    "aisandbox-pa.googleapis.com",
+    "flow-content.google"
+   ],
+   "probes": [
+    {
+     "url": "https://labs.google/fx/tools/flow",
+     "geoSignatures": [
+      "<title>error 403 (forbidden)",
+      "not available in your country",
+      "not available in your region",
+      "isn't available",
+      "در کشورتان پشتیبانی نمی‌شود",
+      "در کشور شما در دسترس نیست"
+     ],
+     "okSignatures": []
+    }
+   ],
+   "hints": {
+    "likelyGeoRestricted": true,
+    "affinitySensitive": true,
+    "failMode": "CLOSED",
+    "refusesCloudflare": true
+   },
+   "bundle": [
+    "google.com",
+    "googleapis.com",
+    "gstatic.com",
+    "googleusercontent.com",
+    "gvt1.com",
+    "gvt2.com",
+    "ggpht.com",
+    "googleadservices.com",
+    "clients6.google.com",
+    "withgoogle.com",
+    "google.dev"
+   ]
   },
   {
    "id": "claude",
