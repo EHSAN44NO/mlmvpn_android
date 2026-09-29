@@ -29,6 +29,7 @@ import com.mlmvpn.scanner.engines.mae.route.CircuitBreaker
 import com.mlmvpn.scanner.engines.mae.route.DirectRoute
 import com.mlmvpn.scanner.engines.mae.route.FragmentRoute
 import com.mlmvpn.scanner.engines.mae.route.RouteKind
+import com.mlmvpn.scanner.engines.mae.route.UsExitRoute
 import com.mlmvpn.scanner.engines.mae.route.RouteProvider
 import com.mlmvpn.scanner.engines.mae.route.ServerlessRoute
 import com.mlmvpn.scanner.engines.mae.route.UserConfigRoute
@@ -343,7 +344,64 @@ object MaeEngine {
         add(DirectRoute); add(ServerlessRoute); add(FragmentRoute)
         state.warp?.let { w -> MaeWarp.route(w, state.warpEndpoint[net] ?: 0)?.let { add(it) } }
         state.worker?.let { w -> MaeEgressDeployer.uuidOf(w)?.let { add(WorkerRoute(w.url, it)) } }
-        addAll(userConfigRoutes(state, net))
+        val configs = userConfigRoutes(state, net)
+        addAll(configs)
+        usExitRoute(state, net, configs)?.let { add(it) }
+    }
+
+    /**
+     * The US exit, when one is set up: reached through the user's config that has most recently
+     * carried anything on this network (its clean address works on this line), else the first.
+     */
+    private fun usExitRoute(state: MaeState, net: String, configs: List<RouteProvider>): RouteProvider? {
+        val exit = com.mlmvpn.scanner.utils.NetworkSettings.geminiExit(app) ?: return null
+        if (configs.isEmpty()) return null
+        fun lastOk(id: String) = state.metrics.filterKeys { it.startsWith("$id|") && it.endsWith("|$net") }.values.maxOfOrNull { it.lastOkAt } ?: 0L
+        val via = configs.maxByOrNull { lastOk(it.id) } ?: return null
+        // The both-families variant: the exit resolves names itself, from North America, to IPv4.
+        val tunnel = via.outbounds().firstOrNull { it.optString("tag") == via.tag(FamilyPolicy.BOTH) } ?: return null
+        return com.mlmvpn.scanner.utils.XrayJsonGenerator.geminiExitOutboundVia(tunnel, exit)?.let { UsExitRoute(it) }
+    }
+
+    @Volatile private var usExitFailedAt = 0L
+
+    /** Bumped whenever assets/gemini_exit_worker.js changes in a way a deployed exit must get. */
+    private val USX_SCRIPT_VERSION = 2
+    private val KEY_USX_VER = "usx_script_ver"
+
+    /**
+     * Sets up the US exit on the user's Cloudflare account the first time an app that needs it
+     * (Gemini, Google Flow) is checked -- the same helper as the app's «خروجی آمریکا برای جمنای»,
+     * so a setup from either place serves both. Failure is retried after an hour.
+     */
+    private suspend fun ensureUsExit(def: ServiceDef, ports: Map<String, Int>, providers: List<RouteProvider>): Boolean {
+        if (!def.hints.usExit) return false
+        val prefs = app.getSharedPreferences("mae", Context.MODE_PRIVATE)
+        // An exit set up with an older script is set up again (same name, path and user id, so
+        // nothing that points at it changes).
+        if (com.mlmvpn.scanner.utils.NetworkSettings.geminiExit(app) != null && prefs.getInt(KEY_USX_VER, 0) >= USX_SCRIPT_VERSION) return false
+        if (System.currentTimeMillis() - usExitFailedAt < 3600_000L) return false
+        val manager = CloudManager(app)
+        val account = manager.accounts.firstOrNull() ?: run { Log.i(TAG, "US exit: no Cloudflare account"); return false }
+        // Cloudflare's API is blocked on some networks (Irancell, 2026-09-30: timeout directly):
+        // through the bypass routes first (they reach Cloudflare fastest), then directly, then
+        // through the foreign exits.
+        fun proxies(kind: RouteKind) = providers.filter { it.kind == kind }
+            .mapNotNull { p -> ports[p.tag(FamilyPolicy.BOTH)] ?: p.families.firstNotNullOfOrNull { ports[p.tag(it)] } }
+            .distinct()
+            .map { java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", it)) }
+        val vias: List<java.net.Proxy?> = proxies(RouteKind.BYPASS) + listOf(null) + proxies(RouteKind.FOREIGN)
+        for (via in vias) {
+            val (ok, why) = manager.deployGeminiExit(account, via = via)
+            if (ok) {
+                prefs.edit().putInt(KEY_USX_VER, USX_SCRIPT_VERSION).apply()
+                Log.i(TAG, "US exit set up (${if (via == null) "directly" else "through a route"})")
+                return true
+            }
+            Log.w(TAG, "US exit not set up ${if (via == null) "directly" else "through a route"}: ${why.take(80)}")
+        }
+        usExitFailedAt = System.currentTimeMillis()
+        return false
     }
 
     private val userOutboundCache = HashMap<String, JSONObject?>()
@@ -494,9 +552,13 @@ object MaeEngine {
         testing.value = testing.value + def.id
         try {
             ensureWarp()
-            val all = providers(store.current, net)
+            var all = providers(store.current, net)
             val dns = dnsPathFor(net, all)
-            val ports = ensureProbeCore(all, dns)
+            var ports = ensureProbeCore(all, dns)
+            if (ensureUsExit(def, ports, all)) {
+                all = providers(store.current, net)
+                ports = ensureProbeCore(all, dns)
+            }
             val plan = if (job.incident) store.current.repairs[MaeState.sk(def.id, net)]?.let { com.mlmvpn.scanner.engines.mae.policy.RepairLadder.plan(it) } else null
             // A deep repair tries routes still in backoff, too: the user is waiting on this app.
             val providers = if (plan?.deep == true) all else all.filter { breaker.allow(it.id, now) }

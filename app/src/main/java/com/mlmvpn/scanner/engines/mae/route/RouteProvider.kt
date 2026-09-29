@@ -227,6 +227,27 @@ class UserConfigRoute(
  * Worker an address of that family. With no strategy the name goes through and the Worker
  * resolves it.
  */
+/**
+ * The US exit: a Durable Object in North America on the user's own Cloudflare account (the
+ * app's «خروجی آمریکا برای جمنای»), reached through one of the user's own Cloudflare configs
+ * -- same clean address, TLS and socket options, so whatever gets that config past the filter
+ * gets this past it too. Google then sees a US address instead of the colo nearest the phone.
+ * [outbound] is built by [com.mlmvpn.scanner.utils.XrayJsonGenerator.geminiExitOutboundVia].
+ */
+class UsExitRoute(private val outbound: JSONObject) : RouteProvider {
+    override val id = ID
+    override val kind = RouteKind.FOREIGN
+    override val caps = Capabilities(udp = false, quotaLimited = true, noCloudflareDestinations = true)
+    override val cost = 0.35
+    override fun tag(family: FamilyPolicy) = TAG
+    override fun outbounds() = listOf(JSONObject(outbound.toString()).put("tag", TAG))
+
+    companion object {
+        const val ID = "usexit"
+        const val TAG = "mae-usx"
+    }
+}
+
 class WorkerRoute(
     private val host: String,
     private val uuid: String,

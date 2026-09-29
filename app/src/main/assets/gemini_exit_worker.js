@@ -100,10 +100,13 @@ function serve(ws, id, early, dial = connect) {
           socket = dial({ hostname: host, port: req.port });
           writer = socket.writable.getWriter();
           pump(socket, ws, req.version).then(shut, shut);
-          if (req.payload.byteLength) await writer.write(req.payload);
+          // A copy, never a view: a socket writer may send a view's whole underlying buffer, which
+          // put the VLESS header in front of every first packet (Google and Apache both answered
+          // "400 Bad Request"; a TLS ClientHello simply failed).
+          if (req.payload.byteLength) await writer.write(req.payload.slice());
           return;
         }
-        await writer.write(chunk);
+        await writer.write(chunk.slice());
       })
       .catch(shut);
   };

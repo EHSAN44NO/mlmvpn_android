@@ -150,7 +150,11 @@ class NetProber(private val context: Context) : Prober {
     override suspend fun egress(route: ProbeRoute): EgressEcho? = withContext(Dispatchers.IO) {
         // The address comes from the route itself (plain TCP, so a Worker `connect()` path is
         // exercised exactly as traffic uses it); the country from two unrelated services.
-        val ip = plainGet(route, "api64.ipify.org", "/")?.trim()?.takeIf { it.length in 3..45 } ?: return@withContext null
+        // ipify sits behind Cloudflare, which a Worker's connect() cannot reach (the US exit got no
+        // echo at all): two echoes on other networks follow it.
+        val ip = ECHOES.firstNotNullOfOrNull { (host, path) ->
+            plainGet(route, host, path)?.trim()?.takeIf { it.length in 3..45 && it.all { c -> c.isLetterOrDigit() || c == '.' || c == ':' } }
+        } ?: return@withContext null
         // The lookups are about [ip], not about the route, so they go wherever works: through the
         // route first, then directly (ip-api.com has no IPv6 address, so a forced-IPv6 exit
         // cannot reach it -- measured on the phone, 2026-09-29).
@@ -244,7 +248,7 @@ class NetProber(private val context: Context) : Prober {
             ssl.soTimeout = READ_MS
             ssl.outputStream.write(("GET $path HTTP/1.1\r\nHost: $host\r\nUser-Agent: $UA\r\n" +
                 "Accept: text/html,application/json,*/*\r\nAccept-Language: en\r\nConnection: close\r\n\r\n").toByteArray())
-            val text = readUpTo(ssl.inputStream, MAX_READ)
+            val text = readUpTo(ssl.inputStream, if (spec.readBytes > 0) spec.readBytes else MAX_READ)
             val status = Regex("^HTTP/\\d(?:\\.\\d)? (\\d{3})").find(text)?.groupValues?.get(1)?.toIntOrNull()
                 ?: return Step.OK to null
             val lower = text.lowercase()
@@ -290,6 +294,7 @@ class NetProber(private val context: Context) : Prober {
         const val TLS_MS = 3000
         const val READ_MS = 4000
         const val MAX_READ = 4096
+        val ECHOES = listOf("api64.ipify.org" to "/", "checkip.amazonaws.com" to "/", "ifconfig.me" to "/ip")
         val TPUT_TARGETS = listOf("cachefly.cachefly.net" to "/10mb.test", "proof.ovh.net" to "/files/10Mb.dat")
         val DOH_JSON =listOf("https://8.8.8.8/resolve", "https://8.8.4.4/resolve", "https://1.1.1.1/dns-query", "https://1.0.0.1/dns-query")
         const val UA = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Mobile Safari/537.36"

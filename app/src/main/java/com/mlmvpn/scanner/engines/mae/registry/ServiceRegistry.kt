@@ -62,6 +62,7 @@ class ServiceRegistry private constructor(
                             url = po.getString("url"),
                             geoSignatures = po.optJSONArray("geoSignatures").strings().map { it.lowercase() },
                             okSignatures = po.optJSONArray("okSignatures").strings().map { it.lowercase() },
+                            readBytes = po.optInt("readBytes", 0),
                         )
                     }
                 }.orEmpty(),
@@ -72,7 +73,7 @@ class ServiceRegistry private constructor(
                     prefersQuic = h.optBoolean("prefersQuic"),
                     affinitySensitive = h.optBoolean("affinitySensitive"),
                     heavy = h.optBoolean("heavy"),
-                    refusesCloudflare = h.optBoolean("refusesCloudflare"),
+                    usExit = h.optBoolean("usExit"),
                     failMode = if (h.optString("failMode") == "CLOSED") FailMode.CLOSED else FailMode.OPEN,
                 ),
             )

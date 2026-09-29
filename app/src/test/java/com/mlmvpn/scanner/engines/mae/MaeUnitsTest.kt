@@ -269,16 +269,6 @@ class MaeUnitsTest {
         assertEquals("svc-google", plain.firstOrNull { it.optJSONArray("domain")?.toString()?.contains("\"domain:googleapis.com\"") == true }?.optString("balancerTag"))
     }
 
-    @Test fun `Cloudflare ranges - worker exits are recognised, others are not`() {
-        val cf = com.mlmvpn.scanner.engines.mae.policy.CloudflareRanges
-        assertTrue(cf.contains("104.21.5.5"))
-        assertTrue(cf.contains("104.28.12.9"))
-        assertTrue(cf.contains("2606:4700:3036::1"))
-        assertFalse(cf.contains("142.251.152.119"))
-        assertFalse(cf.contains("2a01:4f8::1"))
-        assertFalse(cf.contains("not-an-ip.example"))
-    }
-
     @Test fun `no outbound tag is a prefix of another (balancer selectors match by prefix)`() {
         val tags = providers.flatMap { p -> p.families.map { p.tag(it) } }.distinct() + listOf("block", "tcp-direct", "udp-direct", "tcp-fragment")
         val ours = providers.flatMap { p -> p.families.map { p.tag(it) } }.distinct()

@@ -20,11 +20,13 @@ data class ServiceHints(
     val affinitySensitive: Boolean = false,
     val heavy: Boolean = false,
     /**
-     * The service refuses exits on Cloudflare's network even where their IP geolocates abroad.
-     * Measured (Irancell, 2026-09-30): Gemini loaded through a Worker-based VLESS exit ("RO")
-     * and then answered every prompt with "Something went wrong (1060)".
+     * Reached through a Cloudflare config, the service needs the US exit (a Durable Object in
+     * North America on the user's own account; see [com.mlmvpn.scanner.utils.XrayJsonGenerator.geminiExit]).
+     * A Worker leaves from the colo nearest the phone and Google places that in Iran or Russia.
+     * Measured (Irancell, 2026-09-30): Gemini through a Worker-based VLESS config got
+     * `"rtQCxc":-210` (Iran's time zone) and answered every prompt with "Something went wrong (1060)".
      */
-    val refusesCloudflare: Boolean = false,
+    val usExit: Boolean = false,
     val failMode: FailMode = FailMode.OPEN,
 )
 
@@ -37,6 +39,8 @@ data class ProbeSpec(
     val url: String,
     val geoSignatures: List<String> = emptyList(),
     val okSignatures: List<String> = emptyList(),
+    /** How much of the answer to read; 0 = the default few KB. Google's verdict flags sit near 8 KB. */
+    val readBytes: Int = 0,
 )
 
 data class ServiceDef(

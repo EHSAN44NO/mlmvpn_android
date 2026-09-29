@@ -103,8 +103,10 @@ object XrayJsonGenerator {
      * North America, to IPv4 -- which picks the Google front end nearest IT rather than one near
      * the phone, and never the IPv6 exit Google refuses.
      */
-    private fun geminiExitOutbound(tunnel: JSONObject): JSONObject? {
-        val exit = geminiExit ?: return null
+    private fun geminiExitOutbound(tunnel: JSONObject): JSONObject? = geminiExit?.let { geminiExitOutboundVia(tunnel, it) }
+
+    /** [geminiExitOutbound] for a given [exit]: also used by MAE, which borrows one of the user's configs. */
+    fun geminiExitOutboundVia(tunnel: JSONObject, exit: GeminiExitRoute): JSONObject? {
         val settings = tunnel.optJSONObject("settings") ?: return null
         val server = settings.optJSONArray("vnext")?.optJSONObject(0)
             ?: settings.optJSONArray("servers")?.optJSONObject(0) ?: return null

@@ -74,6 +74,12 @@ object PolicyEngine {
         }
         val byId = providers.associateBy { it.id }
         var cands = candidates(state, service, net, providers, health)
+        // An app that needs the US exit takes it whenever it is proven here: other Cloudflare
+        // exits can pass a page check and still be refused per prompt (Gemini, error 1060).
+        if (service.hints.usExit) {
+            cands.filter { it.routeId == com.mlmvpn.scanner.engines.mae.route.UsExitRoute.ID && it.acceptedFamilies.isNotEmpty() && it.health != Health.UNAVAILABLE }
+                .takeIf { it.isNotEmpty() }?.let { cands = it }
+        }
         if (plan != null) {
             // Each rung narrows the field differently; if a filter would leave nothing, it is
             // skipped rather than leave the app with no route at all.

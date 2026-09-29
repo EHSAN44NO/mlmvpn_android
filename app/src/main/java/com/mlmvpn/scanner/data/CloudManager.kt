@@ -2805,9 +2805,12 @@ class CloudManager private constructor(private val context: Context) {
      */
     suspend fun deployGeminiExit(
         account: CloudAccount,
+        /** A proxy to reach Cloudflare's API through, where the network blocks it (MAE passes one). */
+        via: java.net.Proxy? = null,
         onProgress: (Int, String) -> Unit = { _, _ -> },
     ): Pair<Boolean, String> = withContext(Dispatchers.IO) {
         val TAG = "GeminiExitDeploy"
+        val client = if (via == null) client else client.newBuilder().proxy(via).build()
         try {
             val isCfat = com.mlmvpn.scanner.data.CloudAuth.useBearer(account)
             val authHeaders = Headers.Builder().apply {

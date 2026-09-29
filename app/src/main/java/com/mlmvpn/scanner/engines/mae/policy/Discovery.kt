@@ -138,13 +138,11 @@ class Discovery(
                     FamilyPolicy.V6_ONLY -> echo?.isV6 == true
                     FamilyPolicy.BOTH -> echo != null
                 }
-                val cloudflare = service.hints.refusesCloudflare && echo != null && CloudflareRanges.contains(echo.ip)
-                val accepted = abroad && familyHonoured && o.usable && !cloudflare
+                val accepted = abroad && familyHonoured && o.usable
                 val reason = when {
                     echo == null -> NO_ECHO
                     !familyHonoured -> "asked for ${r.family}, exit used the other family"
                     !abroad -> "exit country ${echo.country ?: "unknown"}"
-                    cloudflare -> "exit is on Cloudflare, which this service refuses"
                     !o.usable -> if (o.refusedCountry) "service refused this exit" else "service not reached (${o.tls})"
                     else -> "accepted (${echo.country})"
                 }
