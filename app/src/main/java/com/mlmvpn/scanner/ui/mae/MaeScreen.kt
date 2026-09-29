@@ -67,7 +67,7 @@ fun serviceName(context: Context, def: ServiceDef): String {
     return if (id != 0) context.getString(id) else def.displayName
 }
 
-private enum class Page { MAIN, MANAGE, DIAGNOSTICS }
+private enum class Page { MAIN, MANAGE, PICKER, DIAGNOSTICS }
 
 /**
  * MAE's screen. First run: onboarding ("which apps do you use most?"). After that: one connect
@@ -82,28 +82,53 @@ fun MaeScreen(onBack: () -> Unit) {
     val state by MaeEngine.store.state.collectAsState()
     val testing by MaeEngine.testingFlow.collectAsState()
     var page by remember { mutableStateOf(Page.MAIN) }
+    var asking by remember { mutableStateOf<MaeEngine.Repair.Ask?>(null) }
 
     LaunchedEffect(Unit) {
         MaeEngine.repairs.collect { r ->
             val name = { id: String -> MaeEngine.serviceDef(id)?.let { serviceName(context, it) } ?: id }
-            val text = when (r) {
-                is MaeEngine.Repair.Fixed -> context.getString(R.string.mae_repair_fixed, name(r.serviceId))
-                is MaeEngine.Repair.Verified -> context.getString(R.string.mae_repair_verified, name(r.serviceId))
-                is MaeEngine.Repair.NotFound -> context.getString(R.string.mae_repair_not_found, name(r.serviceId))
-                is MaeEngine.Repair.Busy -> context.getString(R.string.mae_repair_busy, name(r.serviceId))
+            if (r is MaeEngine.Repair.Ask) { asking = r; return@collect }
+            val level = when (r) {
+                is MaeEngine.Repair.Fixed -> MaeEngine.repairLevel(r.serviceId)
+                is MaeEngine.Repair.Verified -> MaeEngine.repairLevel(r.serviceId)
+                is MaeEngine.Repair.NotFound -> MaeEngine.repairLevel(r.serviceId)
+                else -> 0
             }
-            Toast.makeText(context, text, Toast.LENGTH_LONG).show()
+            val text = when (r) {
+                is MaeEngine.Repair.Fixed, is MaeEngine.Repair.Verified -> {
+                    val id = (r as? MaeEngine.Repair.Fixed)?.serviceId ?: (r as MaeEngine.Repair.Verified).serviceId
+                    when {
+                        level >= 2 -> context.getString(R.string.mae_repair_fixed_level, name(id), level)
+                        r is MaeEngine.Repair.Fixed -> context.getString(R.string.mae_repair_fixed, name(id))
+                        else -> context.getString(R.string.mae_repair_verified, name(id))
+                    }
+                }
+                is MaeEngine.Repair.NotFound ->
+                    if (level >= com.mlmvpn.scanner.engines.mae.policy.RepairLadder.MAX) context.getString(R.string.mae_repair_exhausted, name(r.serviceId))
+                    else context.getString(R.string.mae_repair_not_found, name(r.serviceId))
+                is MaeEngine.Repair.Busy -> context.getString(R.string.mae_repair_busy, name(r.serviceId))
+                is MaeEngine.Repair.Started -> context.getString(R.string.mae_repair_started, name(r.serviceId))
+                is MaeEngine.Repair.Ask -> ""
+            }
+            Toast.makeText(context, text, if (r is MaeEngine.Repair.Started) Toast.LENGTH_SHORT else Toast.LENGTH_LONG).show()
         }
     }
 
+    asking?.let { ask ->
+        SymptomDialog(ask, onAnswer = { symptom -> asking = null; MaeEngine.answerSymptom(ask.serviceId, symptom) },
+            onDismiss = { asking = null })
+    }
+
     if (!state.onboarded) {
-        MaeOnboarding(onBack = onBack, onDone = { ids -> MaeEngine.setSelection(ids) })
+        MaeOnboarding(onBack = onBack, onDone = { ids -> MaeEngine.setSelection(ids) },
+            onAddApp = { ids -> MaeEngine.setSelection(ids); page = Page.PICKER })
         return
     }
     // System Back closes a MAE sub-page before it leaves MAE.
     androidx.activity.compose.BackHandler(enabled = page != Page.MAIN) { page = Page.MAIN }
     when (page) {
         Page.MANAGE -> { MaeManageScreen(onBack = { page = Page.MAIN }); return }
+        Page.PICKER -> { MaeManageScreen(onBack = { page = Page.MAIN }, openPicker = true); return }
         Page.DIAGNOSTICS -> { MaeDiagnosticsScreen(onBack = { page = Page.MAIN }); return }
         Page.MAIN -> Unit
     }
@@ -260,4 +285,53 @@ internal fun ServiceChip(label: String, selected: Boolean, highlighted: Boolean,
             Text(label, color = Ios.Label, fontSize = 15.sp)
         }
     }
+}
+
+/**
+ * "What's wrong?" -- asked from the second "didn't open" on, so the next attempt is a different
+ * approach aimed at what the user actually sees, not the same check again.
+ */
+@Composable
+private fun SymptomDialog(
+    ask: MaeEngine.Repair.Ask,
+    onAnswer: (com.mlmvpn.scanner.engines.mae.policy.Symptom) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val name = MaeEngine.serviceDef(ask.serviceId)?.let { serviceName(context, it) } ?: ask.serviceId
+    val options = listOf(
+        com.mlmvpn.scanner.engines.mae.policy.Symptom.NOT_OPENING to R.string.mae_symptom_not_opening,
+        com.mlmvpn.scanner.engines.mae.policy.Symptom.PARTIAL_LOAD to R.string.mae_symptom_partial,
+        com.mlmvpn.scanner.engines.mae.policy.Symptom.GEO_BLOCKED to R.string.mae_symptom_geo,
+        com.mlmvpn.scanner.engines.mae.policy.Symptom.SLOW to R.string.mae_symptom_slow,
+        com.mlmvpn.scanner.engines.mae.policy.Symptom.LOGIN to R.string.mae_symptom_login,
+        com.mlmvpn.scanner.engines.mae.policy.Symptom.MEDIA_CALLS to R.string.mae_symptom_calls,
+    )
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Ios.Card,
+        title = { Text(stringResource(R.string.mae_ask_title, name), color = Ios.Label, fontSize = 18.sp) },
+        text = {
+            Column {
+                Text(stringResource(R.string.mae_ask_subtitle, ask.level), color = Ios.SecondaryLabel, fontSize = 13.sp)
+                Spacer(Modifier.height(8.dp))
+                options.forEach { (symptom, label) ->
+                    val chosenBefore = symptom == ask.previous
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                            .background(if (chosenBefore) Ios.Blue.copy(alpha = 0.15f) else Color.Transparent)
+                            .combinedClickableCompat { onAnswer(symptom) }
+                            .padding(horizontal = 8.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(stringResource(label), color = Ios.Label, fontSize = 15.sp)
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) { Text(stringResource(R.string.mae_cancel)) }
+        },
+    )
 }

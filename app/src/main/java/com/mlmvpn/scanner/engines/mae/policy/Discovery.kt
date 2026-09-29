@@ -67,7 +67,13 @@ class Discovery(
     /** Egress echoes are per route+family per network, not per service: cache them per run. */
     private val echoes = HashMap<String, EgressEcho?>()
 
-    suspend fun run(service: ServiceDef, routes: List<ProbeRoute>, prior: Map<String, RouteMetrics> = emptyMap()): DiscoveryResult = coroutineScope {
+    suspend fun run(
+        service: ServiceDef,
+        routes: List<ProbeRoute>,
+        prior: Map<String, RouteMetrics> = emptyMap(),
+        /** Probe foreign exits even when a local route looks fine (a repair asked for it). */
+        forceForeign: Boolean = false,
+    ): DiscoveryResult = coroutineScope {
         val gate = Semaphore(budget.maxConcurrent)
         val spec = service.probes.firstOrNull()
             ?: return@coroutineScope DiscoveryResult(Diagnosis(), emptyList(), emptyMap(), emptyList(), ForeignEgressStatus.Untested, emptySet())
@@ -101,12 +107,12 @@ class Discovery(
         // works: a foreign exit has nothing to add, so no Worker quota is spent proving one.
         val nothingToProve = localWorks && !service.hints.likelyGeoRestricted &&
             spec.geoSignatures.isEmpty() && obs.none { it.refusedCountry }
-        if (!nothingToProve && (!geoRuledOut || !localWorks)) {
+        if (forceForeign || (!nothingToProve && (!geoRuledOut || !localWorks))) {
             val results = foreignRoutes.map { r ->
                 async {
                     gate.withPermit {
                         val echo = echoes.getOrPut(key(r)) { prober.egress(r) }
-                        val o = prober.observe(r, spec)
+                        val o = prober.observe(r, spec).copy(exitAlive = echo != null)
                         Triple(r, echo, o)
                     }
                 }
@@ -171,7 +177,7 @@ class Discovery(
                     else -> FamilyPolicy.V4_ONLY
                 })
             }
-            foreignRoutes.isEmpty() || (geoRuledOut && localWorks) || nothingToProve -> ForeignEgressStatus.Untested
+            foreignRoutes.isEmpty() || (!forceForeign && ((geoRuledOut && localWorks) || nothingToProve)) -> ForeignEgressStatus.Untested
             else -> ForeignEgressStatus.NoneFound(rejected)
         }
         DiscoveryResult(diagnosis, obs, metrics, proofs, egress, finalists.map { it.routeId }.toSet())

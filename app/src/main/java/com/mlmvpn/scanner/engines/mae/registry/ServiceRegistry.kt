@@ -85,6 +85,28 @@ class ServiceRegistry private constructor(
             )
         }
 
+        /** An installed app the user picked, routed by its main domain and the ones learned later. */
+        fun customApp(id: String, pkg: String, label: String, domain: String) = ServiceDef(
+            id = id, nameKey = "custom", displayName = label, packages = listOf(pkg), domains = listOf(domain),
+            probes = listOf(ProbeSpec("https://$domain/")), custom = true,
+        )
+
+        /**
+         * Likely main domains for an Android package, most likely first: `com.snapchat.android`
+         * -> `snapchat.com`; `ir.divar.android` -> `divar.ir`; `org.thoughtcrime.securesms` ->
+         * `thoughtcrime.org`. Only guesses: the caller keeps the first one that resolves.
+         */
+        fun domainGuesses(pkg: String): List<String> {
+            val parts = pkg.lowercase().split('.').filter { it.isNotBlank() }
+            if (parts.size < 2) return emptyList()
+            val tld = parts[0]
+            val names = parts.drop(1).filterNot { it in GENERIC_SEGMENTS }.take(2)
+            val tlds = (if (tld.length in 2..4) listOf(tld) else emptyList()) + listOf("com", "app", "io", "net", "org")
+            return names.flatMap { n -> tlds.map { "$n.$it" } }.mapNotNull { DomainNormalizer.normalize(it) }.distinct().take(8)
+        }
+
+        private val GENERIC_SEGMENTS = setOf("android", "app", "apps", "mobile", "client", "main", "lite", "free", "pro", "messenger")
+
         private fun JSONArray?.strings(): List<String> =
             if (this == null) emptyList() else (0 until length()).map { getString(it) }
     }

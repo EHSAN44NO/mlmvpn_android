@@ -45,6 +45,8 @@ data class Observation(
     val tls: Step = Step.SKIPPED,
     val http: HttpEvidence? = null,
     val rttMs: Long? = null,
+    /** FOREIGN only: the exit itself answered the echo (null: not a foreign probe). */
+    val exitAlive: Boolean? = null,
 ) {
     /** The service itself answered, over its own certificate. */
     val answered: Boolean get() = tls == Step.OK && http != null

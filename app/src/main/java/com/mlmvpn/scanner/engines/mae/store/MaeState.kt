@@ -36,6 +36,9 @@ data class WarpIdentity(
     val at: Long,
 )
 
+/** An installed app the user picked that is not in the registry: its package and learned main domain. */
+data class CustomApp(val pkg: String, val label: String, val domain: String)
+
 data class Incident(val serviceId: String, val netKey: String, val at: Long, val outcome: String)
 
 /**
@@ -68,6 +71,10 @@ data class MaeState(
     val siteHosts: Map<String, List<String>> = emptyMap(),
     /** Which window of the user's saved configs is tried as foreign exits, per network key. */
     val userConfigOffset: Map<String, Int> = emptyMap(),
+    /** `app:<package>` -> the installed app the user added by hand. */
+    val customApps: Map<String, CustomApp> = emptyMap(),
+    /** `service|net` -> where that app stands on the repair ladder. */
+    val repairs: Map<String, com.mlmvpn.scanner.engines.mae.policy.RepairState> = emptyMap(),
 ) {
     companion object {
         fun sk(service: String, net: String) = "$service|$net"
@@ -128,6 +135,10 @@ object MaeStateCodec {
         put("warpFail", s.warpFailedAt)
         put("siteHosts", JSONObject().apply { s.siteHosts.forEach { (k, v) -> put(k, JSONArray(v)) } })
         put("ucOff", JSONObject(s.userConfigOffset))
+        put("repairs", obj(s.repairs) { r ->
+            JSONObject().put("l", r.level).put("s", r.symptom?.name ?: JSONObject.NULL).put("tr", JSONArray(r.tried)).put("t", r.at)
+        })
+        put("apps", JSONObject().apply { s.customApps.forEach { (k, a) -> put(k, JSONObject().put("p", a.pkg).put("l", a.label).put("d", a.domain)) } })
     }.toString()
 
     /** Throws on anything it cannot read; the store decides what to do about that. */
@@ -177,6 +188,16 @@ object MaeStateCodec {
                 o.keys().asSequence().associateWith { k -> o.optJSONArray(k)?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty() }
             }.orEmpty(),
             userConfigOffset = root.optJSONObject("ucOff")?.let { o -> o.keys().asSequence().associateWith { o.optInt(it) } }.orEmpty(),
+            customApps = map(root.optJSONObject("apps")) { o -> CustomApp(o.getString("p"), o.optString("l"), o.getString("d")) },
+            repairs = map(root.optJSONObject("repairs")) { o ->
+                val tr = o.optJSONArray("tr")
+                com.mlmvpn.scanner.engines.mae.policy.RepairState(
+                    level = o.optInt("l"),
+                    symptom = if (o.isNull("s")) null else runCatching { com.mlmvpn.scanner.engines.mae.policy.Symptom.valueOf(o.getString("s")) }.getOrNull(),
+                    tried = if (tr == null) emptyList() else (0 until tr.length()).map { tr.getString(it) },
+                    at = o.optLong("t"),
+                )
+            },
         )
     }
 

@@ -52,6 +52,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import org.json.JSONObject
@@ -95,7 +96,15 @@ object MaeEngine {
         data class Verified(val serviceId: String) : Repair()
         data class NotFound(val serviceId: String) : Repair()
         data class Busy(val serviceId: String) : Repair()
+        /** The repair is on its way (it may wait for another app's check to finish). */
+        data class Started(val serviceId: String) : Repair()
+        /** Second "didn't open" on: ask the user what is wrong before trying again. */
+        data class Ask(val serviceId: String, val level: Int, val previous: com.mlmvpn.scanner.engines.mae.policy.Symptom?) : Repair()
     }
+
+    /** The rung the last repair of this app was on, for the message ("approach 3 of 5"). */
+    fun repairLevel(serviceId: String): Int =
+        store.current.repairs[MaeState.sk(serviceId, currentNet())]?.level ?: 0
 
     private lateinit var app: Context
     lateinit var store: MaeStore
@@ -107,6 +116,7 @@ object MaeEngine {
     private val applyLock = Mutex()
 
     private val testing = MutableStateFlow<Set<String>>(emptySet())
+    /** Apps being checked now, or waiting their turn after a "didn't open": both show as testing. */
     val testingFlow: StateFlow<Set<String>> = testing
     private val _repairs = MutableSharedFlow<Repair>(extraBufferCapacity = 8)
     val repairs: SharedFlow<Repair> = _repairs
@@ -138,13 +148,77 @@ object MaeEngine {
 
     // ---------------------------------------------------------------- services
 
-    fun serviceDef(id: String): ServiceDef? = registry.get(id) ?: if (id.startsWith("site:")) {
-        // A custom site covers the domains its pages were seen loading from, too.
-        ServiceRegistry.customSite(id.removePrefix("site:"))?.let { d ->
-            val extra = store.current.siteHosts[id].orEmpty()
-            if (extra.isEmpty()) d else d.copy(domains = (d.domains + extra).distinct())
+    fun serviceDef(id: String): ServiceDef? {
+        registry.get(id)?.let { return it }
+        val base = when {
+            id.startsWith("site:") -> ServiceRegistry.customSite(id.removePrefix("site:"))
+            id.startsWith("app:") -> store.current.customApps[id]?.let { a -> ServiceRegistry.customApp(id, a.pkg, a.label, a.domain) }
+            else -> null
+        } ?: return null
+        // A custom site or app covers the domains its pages were seen loading from, too.
+        val extra = store.current.siteHosts[id].orEmpty()
+        return if (extra.isEmpty()) base else base.copy(domains = (base.domains + extra).distinct())
+    }
+
+    sealed class AddApp {
+        data class Added(val id: String) : AddApp()
+        /** No domain could be found for it: nothing to route by yet. */
+        object NoDomain : AddApp()
+    }
+
+    /**
+     * Adds an app installed on the phone -- at once: the tap selects it immediately, with the most
+     * likely main domain for its package. The domain is then confirmed in the background (all
+     * guesses at the same time, the phone's own DNS first, DoH only as a fallback, 8 s at most)
+     * and replaced if a better one answers. Measured on Irancell (2026-09-29): checking guesses
+     * one by one over DoH took minutes, and the tap looked dead the whole time.
+     */
+    fun addInstalledApp(pkg: String, label: String): AddApp {
+        registry.services.firstOrNull { pkg in it.packages }?.let { known ->
+            setSelection(store.current.selected.map { it.id } + known.id)
+            return AddApp.Added(known.id)
         }
-    } else null
+        val guesses = ServiceRegistry.domainGuesses(pkg)
+        val first = guesses.firstOrNull() ?: return AddApp.NoDomain
+        val id = "app:$pkg"
+        store.update { s ->
+            s.copy(
+                customApps = s.customApps + (id to (s.customApps[id] ?: com.mlmvpn.scanner.engines.mae.store.CustomApp(pkg, label, first))),
+                selected = if (s.selected.any { it.id == id }) s.selected else s.selected + SelectedService(id),
+            )
+        }
+        scope.launch { confirmAppDomain(id, pkg, label, guesses) }
+        return AddApp.Added(id)
+    }
+
+    private suspend fun confirmAppDomain(id: String, pkg: String, label: String, guesses: List<String>) {
+        val prober = NetProber(app)
+        val network = runCatching { com.mlmvpn.scanner.engines.game.booster.session.GameNetwork.pick(app)?.network }.getOrNull()
+        fun resolves(d: String): Boolean {
+            val system = runCatching { (network?.getAllByName(d) ?: java.net.InetAddress.getAllByName(d)).map { it.hostAddress.orEmpty() } }
+                .getOrDefault(emptyList())
+            if (system.any { !com.mlmvpn.scanner.engines.mae.probe.DnsEvidence.isBogus(it) }) return true
+            return prober.dohResolve(d, 1).isNotEmpty()
+        }
+        val found = withTimeoutOrNull(8_000) {
+            kotlinx.coroutines.coroutineScope {
+                val checks = guesses.map { d -> async(Dispatchers.IO) { d to runCatching { resolves(d) }.getOrDefault(false) } }
+                // The first guess (most likely) that resolves, in guess order.
+                checks.map { it.await() }.firstOrNull { it.second }?.first
+            }
+        }
+        val domain = found ?: guesses.first()
+        store.update { s ->
+            val cur = s.customApps[id] ?: return@update s
+            if (cur.domain == domain) s
+            else s.copy(customApps = s.customApps + (id to cur.copy(domain = domain)),
+                // A different main domain: what was learned about the old guess does not apply.
+                diagnoses = s.diagnoses.filterKeys { !it.startsWith("$id|") }, siteHosts = s.siteHosts - id)
+        }
+        Log.i(TAG, "app $pkg -> $domain${if (found == null) " (unconfirmed)" else ""}")
+        enqueue(id)
+        applyIfConnected()
+    }
 
     /**
      * Reads a custom site's home page through the route that works for it and adds the other
@@ -156,18 +230,23 @@ object MaeEngine {
         val p = providers.firstOrNull { it.id == policy.routeId } ?: return 0
         val route = if (p.kind == RouteKind.DIRECT) ProbeRoute(p.id, p.kind, policy.family)
             else ProbeRoute(p.id, p.kind, policy.family, ports[p.tag(policy.family)] ?: return 0)
-        val site = def.id.removePrefix("site:")
+        val site = def.domains.firstOrNull() ?: return 0
         val html = NetProber(app).pageText(route, "https://$site/") ?: return 0
         // Domains that are another known app's (a page linking to its Instagram or YouTube) stay
         // with that app: they are not this site's content and must keep their own route.
-        val found = com.mlmvpn.scanner.engines.mae.registry.RelatedHosts.extract(html, site)
+        // Brands of other known apps (google, youtube, …): their country domains stay theirs.
+        val brands = registry.services.filter { it.id != def.id }.flatMap { s -> s.domains.map { it.substringBefore('.') } }.toSet()
+        val found = com.mlmvpn.scanner.engines.mae.registry.RelatedHosts.extract(html, site, knownBrands = brands)
             .filter { registry.forHost(it) == null }
         if (found.isEmpty()) return 0
         val before = store.current.siteHosts[def.id].orEmpty()
-        val merged = (before + found).distinct().filter { registry.forHost(it) == null }.take(40)
+        // The page as it is now is the truth: a fresh read replaces the old list, so a wrong
+        // domain learned earlier does not stay forever.
+        val merged = found.distinct().take(40)
         store.update { it.copy(siteHosts = it.siteHosts + (def.id to merged)) }
-        Log.i(TAG, "site ${def.id}: ${merged.size - before.size} new related domain(s)")
-        return merged.size - before.size
+        val added = merged.count { it !in before }
+        Log.i(TAG, "site ${def.id}: ${merged.size} related domain(s), $added new")
+        return added
     }
 
     fun selectedDefs(state: MaeState = store.current): List<ServiceDef> =
@@ -228,7 +307,7 @@ object MaeEngine {
                 selected = s.selected.filterNot { it.id == id },
                 customSites = s.customSites.filterNot { "site:$it" == id },
                 diagnoses = s.diagnoses.drop(), policies = s.policies.drop(), metrics = s.metrics.drop(),
-                proofs = s.proofs.drop(), egress = s.egress.drop(), siteHosts = s.siteHosts - id,
+                proofs = s.proofs.drop(), egress = s.egress.drop(), siteHosts = s.siteHosts - id, customApps = s.customApps - id,
                 incidents = s.incidents.filterNot { it.serviceId == id },
             )
         }
@@ -319,6 +398,11 @@ object MaeEngine {
 
     /** Queue a service for discovery. [incident] = user said it did not open: goes first, always runs. */
     fun enqueue(serviceId: String, incident: Boolean = false) {
+        if (incident) {
+            // Shown at once, not when the queue gets to it: a tap must never look ignored.
+            testing.value = testing.value + serviceId
+            _repairs.tryEmit(Repair.Started(serviceId))
+        }
         val j = Job2(serviceId, incident, incident)
         if (incident) urgent.trySend(j) else queue.trySend(j)
     }
@@ -399,9 +483,9 @@ object MaeEngine {
     private fun freePort(): Int = ServerSocket(0).use { it.localPort }
 
     private suspend fun discover(job: Job2) {
-        val def = serviceDef(job.serviceId) ?: return
+        val def = serviceDef(job.serviceId) ?: run { testing.value = testing.value - job.serviceId; return }
         val state0 = store.current
-        if (state0.selected.none { it.id == def.id && !it.paused }) return
+        if (state0.selected.none { it.id == def.id && !it.paused }) { testing.value = testing.value - def.id; return }
         val net = currentNet()
         val now = System.currentTimeMillis()
         if (!job.incident && !PolicyEngine.isStale(state0.policies[MaeState.sk(def.id, net)], now) &&
@@ -413,7 +497,10 @@ object MaeEngine {
             val all = providers(store.current, net)
             val dns = dnsPathFor(net, all)
             val ports = ensureProbeCore(all, dns)
-            val providers = all.filter { breaker.allow(it.id, now) }
+            val plan = if (job.incident) store.current.repairs[MaeState.sk(def.id, net)]?.let { com.mlmvpn.scanner.engines.mae.policy.RepairLadder.plan(it) } else null
+            // A deep repair tries routes still in backoff, too: the user is waiting on this app.
+            val providers = if (plan?.deep == true) all else all.filter { breaker.allow(it.id, now) }
+            plan?.let { Log.i(TAG, "repair ${def.id} rung ${it.level}: ${it.why}") }
             // Families are probed one by one (both-families is derived: usable when each was).
             val routes = providers.flatMap { p ->
                 val fams = p.families.filter { it != FamilyPolicy.BOTH }.ifEmpty { listOf(FamilyPolicy.BOTH) }
@@ -421,7 +508,13 @@ object MaeEngine {
                 else fams.map { f -> ProbeRoute(p.id, p.kind, f, ports[p.tag(f)]) }
             }
             val prior = providers.associate { p -> p.id to (state0.metrics[MaeState.rk(p.id, def.id, net)] ?: com.mlmvpn.scanner.engines.mae.model.RouteMetrics()) }
-            val result = Discovery(NetProber(app), if (onCellular()) ProbeBudget.CELLULAR else ProbeBudget.WIFI).run(def, routes, prior)
+            val budget = when {
+                plan?.deep == true || plan?.preferThroughput == true ->
+                    ProbeBudget(maxConcurrent = 3, rttSamples = 5, finalists = 3, throughputBytes = if (onCellular()) 512 * 1024 else 2_000_000)
+                onCellular() -> ProbeBudget.CELLULAR
+                else -> ProbeBudget.WIFI
+            }
+            val result = Discovery(NetProber(app), budget).run(def, routes, prior, forceForeign = plan?.forceForeign == true)
 
             // Provider health: a provider none of whose families answered anything is failing.
             for (p in providers) {
@@ -446,10 +539,13 @@ object MaeEngine {
 
             val before = store.current.policies[MaeState.sk(def.id, net)]
             store.update { s ->
-                PolicyEngine.mergeDiscovery(s, def, net, result, { providers(it) }, { breaker.health(it, now) }, now, job.incident).first
+                PolicyEngine.mergeDiscovery(s, def, net, result, { providers(it) }, { breaker.health(it, now) }, now, job.incident, plan).first
             }
             var learned = 0
-            if (def.custom && (job.incident || store.current.siteHosts[def.id] == null)) {
+            // Every app, not only hand-added sites: an app's website loads from domains its
+            // registry entry may not list, and the user should not have to add the site again.
+            // Once when the app is first checked, and again on every repair that asks for it.
+            if (job.incident || store.current.siteHosts[def.id] == null || plan?.learnHosts == true) {
                 learned = runCatching { learnSiteHosts(def, net, ports, all) }
                     .onFailure { Log.w(TAG, "site hosts for ${def.id}: ${it.javaClass.simpleName}") }
                     .getOrDefault(0)
@@ -475,7 +571,11 @@ object MaeEngine {
     /** "Opened": a bounded confidence boost for the current route. Never locks it in. */
     fun feedbackOk(serviceId: String) {
         val net = currentNet()
-        store.update { PolicyEngine.recordFeedback(it, serviceId, net, opened = true, now = System.currentTimeMillis()) }
+        store.update {
+            // It works now: the repair ladder starts over next time.
+            PolicyEngine.recordFeedback(it, serviceId, net, opened = true, now = System.currentTimeMillis())
+                .let { s -> s.copy(repairs = s.repairs - MaeState.sk(serviceId, net)) }
+        }
     }
 
     /**
@@ -484,8 +584,29 @@ object MaeEngine {
      */
     fun feedbackFailed(serviceId: String) {
         val net = currentNet()
-        store.update { PolicyEngine.recordFeedback(it, serviceId, net, opened = false, now = System.currentTimeMillis()) }
-        if (serviceId in testing.value) _repairs.tryEmit(Repair.Busy(serviceId))
+        val now = System.currentTimeMillis()
+        if (serviceId in testing.value) { _repairs.tryEmit(Repair.Busy(serviceId)); return }
+        // The user said it fails: a route they pinned by hand is not sacred any more.
+        val key = MaeState.sk(serviceId, net)
+        val updated = store.update { s ->
+            val failed = s.policies[key]?.let { "${it.routeId}:${it.family}" }
+            val rung = com.mlmvpn.scanner.engines.mae.policy.RepairLadder.next(s.repairs[key], failed, now)
+            PolicyEngine.recordFeedback(s, serviceId, net, opened = false, now = now)
+                .copy(repairs = s.repairs + (key to rung))
+        }
+        val rung = updated.repairs[key] ?: return
+        if (com.mlmvpn.scanner.engines.mae.policy.RepairLadder.needsQuestion(rung)) {
+            // From the second time on, what the user saw steers the next approach.
+            _repairs.tryEmit(Repair.Ask(serviceId, rung.level, rung.symptom))
+        } else {
+            enqueue(serviceId, incident = true)
+        }
+    }
+
+    /** The user's answer to "what's wrong?": remembered for this app and its next rungs. */
+    fun answerSymptom(serviceId: String, symptom: com.mlmvpn.scanner.engines.mae.policy.Symptom) {
+        val key = MaeState.sk(serviceId, currentNet())
+        store.update { s -> s.repairs[key]?.let { r -> s.copy(repairs = s.repairs + (key to r.copy(symptom = symptom))) } ?: s }
         enqueue(serviceId, incident = true)
     }
 
@@ -504,7 +625,11 @@ object MaeEngine {
         val providers = providers(state)
         val routes = state.selected.filterNot { it.paused }.mapNotNull { sel ->
             val def = serviceDef(sel.id) ?: return@mapNotNull null
-            val (decision, _) = PolicyEngine.decide(state, def, net, providers, { breaker.health(it, now) }, now)
+            // The stored policy IS the decision (a repair or a pin chose it deliberately);
+            // re-deciding here would quietly undo a repair. Only without one is it decided now.
+            val stored = state.policies[MaeState.sk(def.id, net)]?.takeIf { p -> providers.any { it.id == p.routeId } }
+            val decision = stored?.let { Decision.Use(it.routeId, it.family, 0.0, it.why) }
+                ?: PolicyEngine.decide(state, def, net, providers, { breaker.health(it, now) }, now).first
             val req = PolicyEngine.requirements(state, def, net)
             MaeConfigCompiler.ServiceRoute(def, decision, PolicyEngine.blockUdp(decision, providers, req))
         }

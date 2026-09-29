@@ -61,6 +61,30 @@ M0–M6 are built and **tested on a real phone**: Samsung A50, Android 11, MCI n
 - **Throughput stage** tries CacheFly, then OVH, over HTTPS. CacheFly refuses Worker and WARP exits; OVH works on both.
 - **Tests:** full suite 311 JVM + 224 Worker, 0 failures.
 
+## Session 3: Irancell, installed apps, repair ladder
+- **Irancell (phone, mobile data):** MAE saw a new network key and learned it separately. The MCI memory was kept.
+  - DNS: the base Serverless DoH works here (it was dead on MCI).
+  - Routes: YouTube/Facebook/GitHub/Google → fragment; Instagram → Serverless; Gemini/TikTok/Telegram → user configs (`cfg1-3`, BG exit). WARP is mostly dead (UDP blocked; endpoint rotated 3×). The Worker cannot connect here.
+  - The YouTube app fully loaded through MAE.
+- **Any installed app** (`app:<package>`, `CustomApp`, `ServiceRegistry.domainGuesses`):
+  - Selected instantly. The main domain is guessed from the package and confirmed in the background (all guesses in parallel, system DNS first, 8 s cap).
+  - Related domains are then learned like a site's. Registry apps not installed are no longer offered.
+- **Every app learns its website's related domains on its first check** (not only custom sites), so the user never has to add an app's site separately.
+- **`RelatedHosts` v2:**
+  - Resources only: `<a href>` links are ignored; URLs inside scripts count only when they name a file.
+  - Trackers/ads are dropped, as are other known apps' brand country domains (google.com.pk …).
+  - Shared CDNs keep the exact host (`github-cloud.s3.amazonaws.com`, not `amazonaws.com`).
+  - A fresh read replaces the old list.
+- **Repair ladder (`policy/RepairLadder`), up to 5 rungs per app per network:**
+  - Rung 1: no question; the failed route is set aside.
+  - From rung 2 the user is asked what is wrong: not opening / partial load / country refusal / slow / login / calls.
+  - Each rung is a different plan (excluded routes, forced foreign probing, foreign-geo requirement, UDP-only, throughput-first, stable single-family exit, host relearn, deep check).
+  - 👍 resets; the ladder expires after 24 h. The compiled config now follows the stored policy, so a repair's choice sticks.
+- **Immediate feedback:** a "didn't open" shows "checking again…" and the testing state at once, even while another app is being checked.
+- **Classifier:** "service down" now requires a working foreign exit that also failed (TikTok on Irancell had been mis-read as down while every exit was dead).
+- **Fixes for Android 8:** OpenVPN relay crash; Google Script CA install through KeyChain below Android 11.
+- **Tests:** 319 JVM (+224 Worker), 0 failures.
+
 ## Architecture decisions (unchanged, now validated)
 - **Data plane:** Xray (the app's core runs 26.6.27, not the 26.3.27 the binary strings suggested). Kotlin is the control plane.
 - **Base config:** the Serverless profile, whose own DNS and default path are adapted per network.
@@ -97,5 +121,4 @@ M0–M6 are built and **tested on a real phone**: Samsung A50, Android 11, MCI n
   - Xray's `AddRule` with `shouldAppend=true` appends after the base's catch-all rules, so the new rules never match.
   - `shouldAppend=false` replaces the whole rule set, which needs the base's geosite lists encoded as protobuf by hand. That is too risky for ChatGPT/Claude routing.
   - Route changes, pause/resume and feedback remain live.
-- **Mobile-data (Irancell) learning** not phone-tested: mobile data was off on the test phone. Per-network separation is covered by the unit test.
 - **Worker exit country varies per connection** (BG/RO/AZ). Proofs are per service, so this is fine, but sticky-country affinity is not implemented.

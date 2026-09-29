@@ -58,17 +58,42 @@ object PolicyEngine {
         providers: List<RouteProvider>,
         health: (String) -> Health,
         now: Long,
+        plan: RepairPlan? = null,
     ): Pair<Decision, ServicePolicy?> {
         val key = MaeState.sk(service.id, net)
         val current = state.policies[key]
-        val req = requirements(state, service, net)
+        var req = requirements(state, service, net)
+        if (plan?.needsForeign == true) {
+            // The user saw the service refuse the country: that is evidence, not a guess.
+            req = req.copy(needsForeignGeo = com.mlmvpn.scanner.engines.mae.model.AxisValue(
+                com.mlmvpn.scanner.engines.mae.model.Tri.YES, 0.9, listOf("user: country refusal")))
+        }
+        val byId = providers.associateBy { it.id }
+        var cands = candidates(state, service, net, providers, health)
+        if (plan != null) {
+            // Each rung narrows the field differently; if a filter would leave nothing, it is
+            // skipped rather than leave the app with no route at all.
+            fun narrow(keep: (Candidate) -> Boolean) { cands.filter(keep).takeIf { it.isNotEmpty() }?.let { cands = it } }
+            narrow { it.routeId !in plan.excludedRoutes }
+            if (plan.requireUdp) narrow { byId[it.routeId]?.caps?.udp == true }
+            if (plan.stableExit) {
+                // The Worker's exit changes from one connection to the next (BG/RO/AZ measured):
+                // exactly what a login or a captcha holds against you.
+                narrow { it.routeId != com.mlmvpn.scanner.engines.mae.route.WorkerRoute.ID }
+                cands = cands.map { c ->
+                    val single = c.acceptedFamilies.filter { it != FamilyPolicy.BOTH }
+                    if (single.isNotEmpty()) c.copy(acceptedFamilies = setOf(if (FamilyPolicy.V4_ONLY in single) FamilyPolicy.V4_ONLY else single.first())) else c
+                }
+            }
+        }
         val decision = RouteScorer.decide(
             req = req,
             failMode = service.hints.failMode,
-            heavy = service.hints.heavy,
-            candidates = candidates(state, service, net, providers, health),
-            current = current?.routeId,
-            pinned = current?.takeIf { it.pinned }?.routeId,
+            heavy = service.hints.heavy || plan?.preferThroughput == true,
+            candidates = cands,
+            // A repair must be free to leave the current route: no hysteresis toward it.
+            current = if (plan != null) null else current?.routeId,
+            pinned = current?.takeIf { it.pinned && plan == null }?.routeId,
         )
         val policy = when (decision) {
             is Decision.Use -> ServicePolicy(
@@ -94,6 +119,7 @@ object PolicyEngine {
         health: (String) -> Health,
         now: Long,
         incident: Boolean = false,
+        plan: RepairPlan? = null,
     ): Pair<MaeState, Decision> {
         val key = MaeState.sk(service.id, net)
         var metrics = state.metrics
@@ -105,7 +131,7 @@ object PolicyEngine {
             metrics = metrics, proofs = proofs,
             egress = state.egress + (key to result.egress),
         )
-        val (decision, policy) = decide(next, service, net, providers(next), health, now)
+        val (decision, policy) = decide(next, service, net, providers(next), health, now, plan)
         next = if (policy != null) next.copy(policies = next.policies + (key to policy)) else next.copy(policies = next.policies - key)
         if (incident) {
             val outcome = when (decision) { is Decision.Use -> "route ${decision.routeId}"; is Decision.Block -> "no route" }

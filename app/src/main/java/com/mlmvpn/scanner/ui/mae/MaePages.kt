@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
@@ -43,7 +44,7 @@ import kotlinx.coroutines.launch
 /** "Which apps and sites do you use most?" -- installed ones first and highlighted. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun MaeOnboarding(onBack: () -> Unit, onDone: (List<String>) -> Unit) {
+internal fun MaeOnboarding(onBack: () -> Unit, onDone: (List<String>) -> Unit, onAddApp: (List<String>) -> Unit) {
     val context = LocalContext.current
     val all = remember { MaeEngine.registry.services }
     val installed = remember {
@@ -64,7 +65,7 @@ internal fun MaeOnboarding(onBack: () -> Unit, onDone: (List<String>) -> Unit) {
         Text(stringResource(R.string.mae_onboard_subtitle), color = Ios.SecondaryLabel, fontSize = 14.sp,
             modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 8.dp))
 
-        val (onPhone, others) = all.partition { it.id in installed }
+        val onPhone = all.filter { it.id in installed }
         if (onPhone.isNotEmpty()) {
             SettingsSectionHeader(stringResource(R.string.mae_onboard_installed))
             FlowRow(Modifier.padding(horizontal = 12.dp)) {
@@ -75,14 +76,18 @@ internal fun MaeOnboarding(onBack: () -> Unit, onDone: (List<String>) -> Unit) {
                 }
             }
         }
-        SettingsSectionHeader(stringResource(R.string.mae_onboard_more))
-        FlowRow(Modifier.padding(horizontal = 12.dp)) {
-            others.forEach { s ->
-                ServiceChip(serviceName(context, s), s.id in picked, false, s) {
-                    picked = if (s.id in picked) picked - s.id else picked + s.id
-                }
+        // Apps not on this phone are not offered: the user asked for what they actually use.
+        if (sites.isNotEmpty()) {
+            FlowRow(Modifier.padding(horizontal = 12.dp)) {
+                sites.forEach { d -> ServiceChip(d, true, false) { sites = sites - d } }
             }
-            sites.forEach { d -> ServiceChip(d, true, false) { sites = sites - d } }
+        }
+        SettingsGroup(modifier = Modifier.padding(top = 16.dp)) {
+            SettingsActionRow(label = stringResource(R.string.mae_add_app), icon = Icons.Default.Apps, tint = Ios.Blue) {
+                // Whatever is picked so far is kept; the picker then adds to it.
+                sites.forEach { MaeEngine.addSite(it) }
+                onAddApp(picked.toList())
+            }
         }
 
         SettingsSectionHeader(stringResource(R.string.mae_add_site))
@@ -114,7 +119,7 @@ internal fun MaeOnboarding(onBack: () -> Unit, onDone: (List<String>) -> Unit) {
 /** Add / remove / pause services, pin a route, and manage the foreign exit. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun MaeManageScreen(onBack: () -> Unit) {
+internal fun MaeManageScreen(onBack: () -> Unit, openPicker: Boolean = false) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val state by MaeEngine.store.state.collectAsState()
@@ -124,6 +129,17 @@ internal fun MaeManageScreen(onBack: () -> Unit) {
     var exitError by remember { mutableStateOf<String?>(null) }
     val invalid = stringResource(R.string.mae_add_site_invalid)
     val net = remember { MaeEngine.currentNet() }
+    var showPicker by remember { mutableStateOf(openPicker) }
+    val installedIds = remember {
+        val pm = context.packageManager
+        MaeEngine.registry.services.filter { s ->
+            s.packages.any { p -> runCatching { pm.getPackageInfo(p, 0); true }.getOrDefault(false) }
+        }.map { it.id }.toSet()
+    }
+    if (showPicker) {
+        InstalledAppPicker(onBack = { showPicker = false }, scope = scope)
+        return
+    }
 
     IosScreen(title = stringResource(R.string.mae_manage), onBack = onBack, backLabel = stringResource(R.string.mae_short)) {
         SettingsSectionHeader(stringResource(R.string.mae_your_services))
@@ -161,7 +177,7 @@ internal fun MaeManageScreen(onBack: () -> Unit) {
         }
 
         // Services not picked yet
-        val unpicked = MaeEngine.registry.services.filter { s -> state.selected.none { it.id == s.id } }
+        val unpicked = MaeEngine.registry.services.filter { s -> s.id in installedIds && state.selected.none { it.id == s.id } }
         if (unpicked.isNotEmpty()) {
             SettingsSectionHeader(stringResource(R.string.mae_onboard_more))
             FlowRow(Modifier.padding(horizontal = 12.dp)) {
@@ -171,6 +187,10 @@ internal fun MaeManageScreen(onBack: () -> Unit) {
                     }
                 }
             }
+        }
+
+        SettingsGroup(modifier = Modifier.padding(top = 16.dp)) {
+            SettingsActionRow(label = stringResource(R.string.mae_add_app), icon = Icons.Default.Apps, tint = Ios.Blue) { showPicker = true }
         }
 
         SettingsSectionHeader(stringResource(R.string.mae_add_site))
@@ -283,4 +303,39 @@ internal fun MaeDiagnosticsScreen(onBack: () -> Unit) {
         }
         Spacer(Modifier.height(40.dp))
     }
+}
+
+/**
+ * Every app installed on the phone, to add to MAE. Registry apps are simply selected; any other
+ * app is added by its main domain (guessed from its package, confirmed by DNS) and learns the
+ * rest of its domains by itself.
+ */
+@Composable
+private fun InstalledAppPicker(onBack: () -> Unit, scope: kotlinx.coroutines.CoroutineScope) {
+    val context = LocalContext.current
+    val state by MaeEngine.store.state.collectAsState()
+    val chosen = remember(state) {
+        state.selected.mapNotNull { MaeEngine.serviceDef(it.id) }.flatMap { it.packages }.toSet()
+    }
+    val (apps, loading) = com.mlmvpn.scanner.ui.settings.rememberInstalledApps(chosen)
+    val noDomain = stringResource(R.string.mae_add_app_no_domain)
+    com.mlmvpn.scanner.ui.settings.AppPickerPage(
+        apps = apps,
+        isLoading = loading,
+        selected = chosen,
+        backLabel = stringResource(R.string.mae_short),
+        onBack = onBack,
+        title = stringResource(R.string.mae_add_app),
+        onToggle = { pkg ->
+            val existing = state.selected.firstOrNull { sel -> MaeEngine.serviceDef(sel.id)?.packages?.contains(pkg) == true }
+            if (existing != null) {
+                MaeEngine.remove(existing.id)
+            } else {
+                val label = apps.firstOrNull { it.packageName == pkg }?.name ?: pkg
+                if (MaeEngine.addInstalledApp(pkg, label) is MaeEngine.AddApp.NoDomain) {
+                    android.widget.Toast.makeText(context, noDomain.format(label), android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+        },
+    )
 }

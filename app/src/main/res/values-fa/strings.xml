@@ -4874,4 +4874,18 @@
     <string name="mae_service_twitch">توییچ</string>
     <string name="mae_service_microsoft">مایکروسافت</string>
     <string name="gst_cert_direct_install_footer">بشناسد. اندروید پنجرهٔ نصب گواهی را خودش باز می‌کند؛ فقط تأیید کنید (ممکن است اول قفل صفحه بخواهد).</string>
+    <string name="mae_add_app">افزودن برنامهٔ دیگری از گوشی</string>
+    <string name="mae_add_app_no_domain">هنوز نشانی اینترنتی‌ای برای %1$s پیدا نشد. به‌جایش سایتش را اضافه کنید.</string>
+    <string name="mae_ask_title">%1$s هنوز درست کار نمی‌کند؟</string>
+    <string name="mae_ask_subtitle">بگویید چه می‌بینید تا راه متفاوتی امتحان شود (تلاش %1$d از ۵).</string>
+    <string name="mae_symptom_not_opening">اصلاً باز نمی‌شود</string>
+    <string name="mae_symptom_partial">باز می‌شود ولی کامل لود نمی‌شود (عکس یا ویدیو نمی‌آید)</string>
+    <string name="mae_symptom_geo">می‌گوید در کشور شما در دسترس نیست، یا خطای ۴۰۳</string>
+    <string name="mae_symptom_slow">خیلی کند است</string>
+    <string name="mae_symptom_login">ورود به حساب یا تأیید (کپچا) مشکل دارد</string>
+    <string name="mae_symptom_calls">تماس صوتی یا تصویری یا پخش زنده کار نمی‌کند</string>
+    <string name="mae_cancel">انصراف</string>
+    <string name="mae_repair_fixed_level">راه‌حل %2$d از ۵ برای %1$s آماده شد. دوباره امتحان کنید.</string>
+    <string name="mae_repair_exhausted">برای %1$s پنج رویکرد مختلف امتحان شد. اگر هنوز کار نمی‌کند، یک کانفیگ خارجی شخصی اضافه کنید یا خودِ حساب را بررسی کنید.</string>
+    <string name="mae_repair_started">بررسی دوبارهٔ %1$s شروع شد…</string>
 </resources>

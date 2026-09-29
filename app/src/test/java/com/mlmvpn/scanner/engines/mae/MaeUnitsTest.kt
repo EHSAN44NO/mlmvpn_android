@@ -321,6 +321,9 @@ class MaeUnitsTest {
         assertTrue(hosts.containsAll(listOf("example-cdn.net", "site-assets.co.uk", "videocdn.io")))
         assertFalse("the site itself", hosts.contains("site.com"))
         assertFalse("namespaces are not content", hosts.contains("w3.org"))
+        val footer = "<footer><a href=\"https://beian.miit.gov.cn/\">ICP</a> <a class=x href='https://www.zhihu.com/org/x'>zhihu</a></footer>"
+        val withLinks = com.mlmvpn.scanner.engines.mae.registry.RelatedHosts.extract(html + footer, "site.com")
+        assertFalse("plain links are not loaded resources", withLinks.contains("miit.gov.cn") || withLinks.contains("zhihu.com"))
     }
 
     @Test fun `related hosts - registrable domain`() {
@@ -328,5 +331,28 @@ class MaeUnitsTest {
         assertEquals("phncdn.com", r.registrable("ei.phncdn.com"))
         assertEquals("bbc.co.uk", r.registrable("img.bbc.co.uk"))
         assertNull(r.registrable("10.0.0.1"))
+    }
+    @Test fun `installed app - main domain guessed from the package name`() {
+        val g = { p: String -> ServiceRegistry.domainGuesses(p) }
+        assertEquals("snapchat.com", g("com.snapchat.android").first())
+        assertEquals("divar.ir", g("ir.divar").first())
+        assertTrue(g("org.thoughtcrime.securesms").contains("thoughtcrime.org"))
+        assertTrue(g("com.pinterest").contains("pinterest.com"))
+        assertTrue(g("x").isEmpty())
+    }
+
+    @Test fun `related hosts - shared CDNs keep the exact host, trackers and brand country domains are dropped`() {
+        val html = listOf(
+            "<script src=\"https://d1a2b3c4.cloudfront.net/app.js\"></script>",
+            "<script src=\"https://cdn.jsdelivr.net/npm/x/dist/x.js\"></script>",
+            "<script src=\"https://www.googletagmanager.com/gtm.js\"></script>",
+            "<link rel=icon href=\"https://www.google.com.pk/favicon.ico\">",
+        ).joinToString(System.lineSeparator())
+        val hosts = com.mlmvpn.scanner.engines.mae.registry.RelatedHosts.extract(html, "site.com", knownBrands = setOf("google"))
+        assertTrue(hosts.contains("d1a2b3c4.cloudfront.net"))
+        assertTrue(hosts.contains("cdn.jsdelivr.net"))
+        assertFalse(hosts.contains("cloudfront.net"))
+        assertFalse(hosts.contains("googletagmanager.com"))
+        assertFalse(hosts.contains("google.com.pk"))
     }
 }

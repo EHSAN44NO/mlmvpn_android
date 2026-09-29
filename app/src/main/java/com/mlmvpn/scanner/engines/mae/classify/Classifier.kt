@@ -104,8 +104,10 @@ object Classifier {
             local(o).any { it.usable }
         },
         // --- Service down: nothing reaches it, including abroad
-        Rule(Axis.SERVICE_DOWN, Tri.YES, 0.75, "no route (local or foreign) reached the service") { o ->
-            foreign(o).isNotEmpty() && local(o).isNotEmpty() && o.none { it.answered }
+        // Only when an exit abroad was itself alive: if the exits were dead too, nothing about
+        // the service is known (Irancell 2026-09-29: TikTok read "down" while every exit was).
+        Rule(Axis.SERVICE_DOWN, Tri.YES, 0.75, "a working exit abroad did not reach it either") { o ->
+            foreign(o).any { it.exitAlive == true } && local(o).isNotEmpty() && o.none { it.answered }
         },
         Rule(Axis.SERVICE_DOWN, Tri.YES, 0.5, "the service answered 5xx on every route") { o ->
             o.count { it.answered } >= 2 && o.filter { it.answered }.all { it.http!!.status >= 500 }
