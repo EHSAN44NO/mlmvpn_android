@@ -17,6 +17,8 @@ class MaeStore(
     dir: File,
     /** android.util.Log, guarded so the JVM unit tests (no Android runtime) can use the store. */
     private val warn: (String) -> Unit = { msg -> runCatching { Log.w(TAG, msg) } },
+    /** Off for tests, which read the file straight after an update. */
+    private val writeAsync: Boolean = true,
 ) {
     private val root = File(dir, "mae").apply { mkdirs() }
     private val file = File(root, "state.json")
@@ -30,13 +32,36 @@ class MaeStore(
 
     @Synchronized
     fun update(change: (MaeState) -> MaeState): MaeState {
-        val next = change(_state.value)
-        if (next != _state.value) {
+        val cur = _state.value
+        val next = change(cur)
+        // Identity, not equality: comparing two whole states field by field costs more than the
+        // change itself, and a change that made nothing new returns the same object.
+        if (next !== cur) {
             _state.value = next
-            write(next)
+            scheduleWrite()
         }
         return next
     }
+
+    /**
+     * The file is written off the caller's thread and at most every [WRITE_DELAY_MS]: a check
+     * changes the state many times a second, and the screen's own taps used to wait on a full
+     * write each time. Always the latest state; [flush] writes now.
+     */
+    private val writer = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
+        Thread(r, "mae-store").apply { isDaemon = true }
+    }
+    private val pending = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    private fun scheduleWrite() {
+        if (!writeAsync) { write(_state.value); return }
+        if (pending.compareAndSet(false, true)) {
+            writer.schedule({ pending.set(false); write(_state.value) }, WRITE_DELAY_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+        }
+    }
+
+    /** Writes the latest state now, on this thread. */
+    fun flush() = write(_state.value)
 
     private fun load(): MaeState {
         if (!file.exists()) return MaeState()
@@ -49,7 +74,9 @@ class MaeStore(
         }
     }
 
-    private fun write(s: MaeState) {
+    private val fileLock = Any()
+
+    private fun write(s: MaeState) = synchronized(fileLock) {
         try {
             tmp.writeText(MaeStateCodec.encode(s))
             if (!tmp.renameTo(file)) {
@@ -61,5 +88,8 @@ class MaeStore(
         }
     }
 
-    private companion object { const val TAG = "MaeStore" }
+    private companion object {
+        const val TAG = "MaeStore"
+        const val WRITE_DELAY_MS = 400L
+    }
 }

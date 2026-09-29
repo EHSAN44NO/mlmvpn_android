@@ -49,6 +49,12 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -119,6 +125,20 @@ object MaeEngine {
     private val testing = MutableStateFlow<Set<String>>(emptySet())
     /** Apps being checked now, or waiting their turn after a "didn't open": both show as testing. */
     val testingFlow: StateFlow<Set<String>> = testing
+    /**
+     * The rows the main screen shows, worked out off the main thread: the store changes many times
+     * a second while apps are checked, and each change used to be recomputed during drawing.
+     * Emits only when a row actually changed.
+     */
+    val viewsFlow: StateFlow<List<ServiceView>> by lazy {
+        kotlinx.coroutines.flow.combine(store.state, testing) { s, t -> s to t }
+            .conflate()
+            .map { (s, t) -> views(s, t) }
+            .distinctUntilChanged()
+            .flowOn(Dispatchers.Default)
+            .stateIn(scope, SharingStarted.Eagerly, views(store.current, testing.value))
+    }
+
     private val _repairs = MutableSharedFlow<Repair>(extraBufferCapacity = 8)
     val repairs: SharedFlow<Repair> = _repairs
 
@@ -341,12 +361,12 @@ object MaeEngine {
                 incidents = s.incidents.filterNot { it.serviceId == id },
             )
         }
-        scope.launch { applyIfConnected() }
+        scope.launch { applyIfConnected(urgent = true) }
     }
 
     fun setPaused(id: String, paused: Boolean) {
         store.update { s -> s.copy(selected = s.selected.map { if (it.id == id) it.copy(paused = paused) else it }) }
-        scope.launch { applyIfConnected() }
+        scope.launch { applyIfConnected(urgent = true) }
     }
 
     fun pin(id: String, routeId: String?) {
@@ -358,12 +378,26 @@ object MaeEngine {
             else (p ?: com.mlmvpn.scanner.engines.mae.model.ServicePolicy(id, net, routeId)).copy(routeId = routeId, pinned = true, why = "pinned by user")
             if (next == null) s else s.copy(policies = s.policies + (key to next))
         }
-        scope.launch { applyIfConnected() }
+        scope.launch { applyIfConnected(urgent = true) }
     }
 
     // ---------------------------------------------------------------- network
 
-    fun currentNet(): String = runCatching { NetworkKey.current(app).key }.getOrDefault(NetworkKey.UNKNOWN).ifEmpty { "unknown" }
+    /**
+     * The current network's key. Working it out takes several system calls (every network, its
+     * capabilities, the carrier or Wi-Fi), and the screen asks on every redraw: the answer is kept
+     * for [NET_CACHE_MS] and dropped at once when the network changes.
+     */
+    fun currentNet(): String {
+        val now = System.currentTimeMillis()
+        netCache?.let { (key, at) -> if (now - at < NET_CACHE_MS) return key }
+        val key = runCatching { NetworkKey.current(app).key }.getOrDefault(NetworkKey.UNKNOWN).ifEmpty { "unknown" }
+        netCache = key to now
+        return key
+    }
+
+    @Volatile private var netCache: Pair<String, Long>? = null
+    private const val NET_CACHE_MS = 3_000L
 
     private fun onCellular(): Boolean = runCatching { NetworkKey.current(app).isCellular }.getOrDefault(false)
 
@@ -641,7 +675,7 @@ object MaeEngine {
                     .onFailure { Log.w(TAG, "site hosts for ${def.id}: ${it.javaClass.simpleName}") }
                     .getOrDefault(0)
             }
-            applyIfConnected()
+            applyIfConnected(urgent = job.incident)
             if (job.incident) {
                 val after = store.current.policies[MaeState.sk(def.id, net)]
                 val ok = after != null && result.observations.any { it.usable }
@@ -777,6 +811,11 @@ object MaeEngine {
         onConnected()
     }
 
+    /** [startTunnel] off the main thread: building the config takes long enough to stutter a tap. */
+    fun startTunnelAsync(context: Context) { scope.launch { applyLock.withLock { startTunnel(context) } } }
+
+    fun stopTunnelAsync(context: Context) { reconnectJob?.cancel(); scope.launch { stopTunnel(context) } }
+
     fun stopTunnel(context: Context) {
         context.startService(Intent(context, MyVpnService::class.java).apply { action = "STOP" })
         onDisconnected()
@@ -817,8 +856,38 @@ object MaeEngine {
         store.update { it.copy(liveApiWorks = works) }
     }
 
+    private var reconnectJob: Job? = null
+
+    /**
+     * A reconnect costs every app a second of nothing, so while apps are still being checked the
+     * reconnects they need are made once, together: after the checks quiet down, and never more
+     * than [RECONNECT_WAIT_MS] late. [urgent] (the user just said an app did not open) goes now.
+     */
+    private fun scheduleReconnect(urgent: Boolean) {
+        synchronized(this) {
+            if (!urgent && reconnectJob?.isActive == true) return
+            reconnectJob?.cancel()
+            reconnectJob = scope.launch {
+                if (!urgent) {
+                    val until = System.currentTimeMillis() + RECONNECT_WAIT_MS
+                    delay(2_000)
+                    while (testing.value.isNotEmpty() && System.currentTimeMillis() < until) delay(1_000)
+                }
+                applyLock.withLock {
+                    if (!isConnected()) return@withLock
+                    val next = compileNow(withApi = store.current.liveApiWorks != false)
+                    if (applied?.config == next.config) return@withLock
+                    Log.i(TAG, "applying by reconnect")
+                    startTunnel(app)
+                }
+            }
+        }
+    }
+
+    private const val RECONNECT_WAIT_MS = 20_000L
+
     /** Push the current decisions into a running tunnel: live when possible, reconnect otherwise. */
-    suspend fun applyIfConnected() = applyLock.withLock {
+    suspend fun applyIfConnected(urgent: Boolean = false) = applyLock.withLock {
         if (!isConnected()) return@withLock
         val next = compileNow(withApi = store.current.liveApiWorks != false)
         val prev = applied
@@ -837,8 +906,7 @@ object MaeEngine {
             if (allOk) { applied = next.copy(config = prev.config); return@withLock }
         }
         if (prev != null && prev.config == next.config) return@withLock
-        Log.i(TAG, "applying by reconnect")
-        startTunnel(app)
+        scheduleReconnect(urgent)
     }
 
     private fun watchNetwork() {
@@ -849,14 +917,17 @@ object MaeEngine {
             override fun onAvailable(network: Network) = changed()
             override fun onLost(network: Network) = changed()
             private fun changed() {
+                netCache = null
                 scope.launch {
                     delay(2000) // let the new network settle
+                    netCache = null
                     val now = currentNet()
                     if (now == lastNet) return@launch
                     lastNet = now
                     Log.i(TAG, "network changed; re-deciding from this network's memory")
                     refreshStale()
-                    applyIfConnected()
+                    // A new network is a new set of decisions: applied now, not batched.
+                    applyIfConnected(urgent = true)
                 }
             }
         }

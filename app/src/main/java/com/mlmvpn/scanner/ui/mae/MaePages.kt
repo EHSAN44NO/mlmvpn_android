@@ -141,6 +141,12 @@ internal fun MaeManageScreen(onBack: () -> Unit, openPicker: Boolean = false) {
         return
     }
 
+    // The route list reads the user's configs and settings: built once, off the main thread, and
+    // again only when an exit is added or removed -- not for every app on every redraw.
+    val routeIds by androidx.compose.runtime.produceState(emptyList<String>(), state.worker, state.warp) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { MaeEngine.providers(state).map { it.id } }
+    }
+
     IosScreen(title = stringResource(R.string.mae_manage), onBack = onBack, backLabel = stringResource(R.string.mae_short)) {
         SettingsSectionHeader(stringResource(R.string.mae_your_services))
         SettingsGroup {
@@ -168,8 +174,8 @@ internal fun MaeManageScreen(onBack: () -> Unit, openPicker: Boolean = false) {
                         MaeEngine.setPaused(def.id, !sel.paused)
                     }
                     ServiceChip(stringResource(R.string.mae_route_auto), policy?.pinned != true, false) { MaeEngine.pin(def.id, null) }
-                    MaeEngine.providers(state).forEach { p ->
-                        ServiceChip(p.id, policy?.pinned == true && policy.routeId == p.id, false) { MaeEngine.pin(def.id, p.id) }
+                    routeIds.forEach { id ->
+                        ServiceChip(id, policy?.pinned == true && policy.routeId == id, false) { MaeEngine.pin(def.id, id) }
                     }
                     ServiceChip(stringResource(R.string.mae_remove), false, false) { MaeEngine.remove(def.id) }
                 }

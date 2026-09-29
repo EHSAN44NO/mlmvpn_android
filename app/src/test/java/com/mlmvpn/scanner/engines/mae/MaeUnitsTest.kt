@@ -211,11 +211,11 @@ class MaeUnitsTest {
         val dir = Files.createTempDirectory("mae").toFile()
         File(dir, "mae").mkdirs()
         File(dir, "mae/state.json").writeText("{ not json")
-        val store = MaeStore(dir) {}
+        val store = MaeStore(dir, {}, writeAsync = false)
         assertFalse(store.current.onboarded)
         assertTrue(File(dir, "mae/state.corrupt.json").exists())
         store.update { it.copy(onboarded = true) }
-        assertTrue(MaeStore(dir) {}.current.onboarded)
+        assertTrue(MaeStore(dir, {}, writeAsync = false).current.onboarded)
         dir.deleteRecursively()
     }
 

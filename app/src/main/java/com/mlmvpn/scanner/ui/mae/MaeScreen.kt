@@ -49,6 +49,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import com.mlmvpn.scanner.MyVpnService
 import com.mlmvpn.scanner.R
 import com.mlmvpn.scanner.engines.mae.MaeEngine
@@ -79,8 +81,11 @@ private enum class Page { MAIN, MANAGE, PICKER, DIAGNOSTICS }
 fun MaeScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     remember { MaeEngine.init(context); true }
-    val state by MaeEngine.store.state.collectAsState()
+    // Only whether onboarding is done: the whole state changes many times a second during checks.
+    val onboarded by remember { MaeEngine.store.state.map { it.onboarded }.distinctUntilChanged() }
+        .collectAsState(MaeEngine.store.current.onboarded)
     val testing by MaeEngine.testingFlow.collectAsState()
+    val views by MaeEngine.viewsFlow.collectAsState()
     var page by remember { mutableStateOf(Page.MAIN) }
     var asking by remember { mutableStateOf<MaeEngine.Repair.Ask?>(null) }
 
@@ -119,7 +124,7 @@ fun MaeScreen(onBack: () -> Unit) {
             onDismiss = { asking = null })
     }
 
-    if (!state.onboarded) {
+    if (!onboarded) {
         MaeOnboarding(onBack = onBack, onDone = { ids -> MaeEngine.setSelection(ids) },
             onAddApp = { ids -> MaeEngine.setSelection(ids); page = Page.PICKER })
         return
@@ -140,17 +145,17 @@ fun MaeScreen(onBack: () -> Unit) {
     val connecting = ours && phase == MyVpnService.Phase.CONNECTING
 
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
-        if (res.resultCode == Activity.RESULT_OK) MaeEngine.startTunnel(context)
+        if (res.resultCode == Activity.RESULT_OK) MaeEngine.startTunnelAsync(context)
     }
     fun connect() = com.mlmvpn.scanner.data.ScanGuard.run(com.mlmvpn.scanner.data.ScanGuard.Reason.CONNECT_VPN) {
         val prep = try { VpnService.prepare(context) } catch (e: Exception) { null }
-        if (prep != null) launcher.launch(prep) else MaeEngine.startTunnel(context)
+        if (prep != null) launcher.launch(prep) else MaeEngine.startTunnelAsync(context)
     }
 
     IosScreen(title = stringResource(R.string.mae_title), onBack = onBack, backLabel = stringResource(R.string.home)) {
         Spacer(Modifier.height(24.dp))
         ConnectButton(connected, connecting) {
-            if (connected || connecting) MaeEngine.stopTunnel(context) else connect()
+            if (connected || connecting) MaeEngine.stopTunnelAsync(context) else connect()
         }
         Spacer(Modifier.height(12.dp))
         Text(
@@ -168,14 +173,13 @@ fun MaeScreen(onBack: () -> Unit) {
         )
 
         SettingsSectionHeader(stringResource(R.string.mae_your_services))
-        val views = MaeEngine.views(state, testing)
         SettingsGroup {
             views.forEachIndexed { i, v ->
                 if (i > 0) Separator()
-                ServiceRow(v, onOk = {
+                androidx.compose.runtime.key(v.def.id) { ServiceRow(v, onOk = {
                     MaeEngine.feedbackOk(v.def.id)
                     Toast.makeText(context, context.getString(R.string.mae_thanks), Toast.LENGTH_SHORT).show()
-                }, onFail = { MaeEngine.feedbackFailed(v.def.id) })
+                }, onFail = { MaeEngine.feedbackFailed(v.def.id) }) }
             }
         }
         SettingsGroup(modifier = Modifier.padding(top = 20.dp)) {
