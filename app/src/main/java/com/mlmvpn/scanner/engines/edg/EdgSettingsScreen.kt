@@ -74,7 +74,7 @@ fun EdgSettingsScreen(
 
         withContext(Dispatchers.IO) {
             try {
-                val client = OkHttpClient.Builder()
+                val client = OkHttpClient.Builder().dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns()).protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1)
                     .build()
                 val isCfat = com.mlmvpn.scanner.data.CloudAuth.useBearer(account)
                 val authHeaders = Headers.Builder().apply {
@@ -224,7 +224,7 @@ fun EdgSettingsScreen(
                                 isSaving = true
                                 withContext(Dispatchers.IO) {
                                     try {
-                                        val client = OkHttpClient.Builder()
+                                        val client = OkHttpClient.Builder().dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns()).protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1)
                                             .build()
                                         val isCfat = com.mlmvpn.scanner.data.CloudAuth.useBearer(account)
                                         val authHeaders = Headers.Builder().apply {

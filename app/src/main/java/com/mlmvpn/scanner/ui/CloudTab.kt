@@ -29,6 +29,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -69,13 +70,18 @@ fun CloudTab(
     var showBpbSettingsFor by remember { mutableStateOf<CloudAccount?>(null) }
     var bpbInitialSettings by remember { mutableStateOf<JSONObject?>(null) }
     var showEdgSettingsFor by remember { mutableStateOf<CloudAccount?>(null) }
+    var showSpiderFor by remember { mutableStateOf<CloudAccount?>(null) }
+    var showArenaFor by remember { mutableStateOf<CloudAccount?>(null) }
     var accountToDelete by remember { mutableStateOf<com.mlmvpn.scanner.models.CloudAccount?>(null) }
+    // With several accounts one card is open at a time and the rest fold to their header row, so
+    // five accounts are five rows rather than five screens of panels. The first starts open.
+    var openAccountId by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(accountsFlowState.firstOrNull()?.id) }
 
     // Physical back closes whichever settings/add sheet is open, instead of falling through to
     // the app-level handler (which would leave the Cloud tab entirely).
     val anySheetOpen = showAddModal || showNahanSettingsFor != null || showMlmUsersFor != null ||
         showMlmSettingsFor != null || showBpbSettingsFor != null || showEdgSettingsFor != null ||
-        accountToDelete != null
+        showSpiderFor != null || showArenaFor != null || accountToDelete != null
     androidx.activity.compose.BackHandler(enabled = anySheetOpen) {
         showAddModal = false
         showNahanSettingsFor = null
@@ -83,6 +89,8 @@ fun CloudTab(
         showMlmSettingsFor = null
         showBpbSettingsFor = null
         showEdgSettingsFor = null
+        showSpiderFor = null
+        showArenaFor = null
         accountToDelete = null
     }
 
@@ -301,6 +309,14 @@ fun CloudTab(
                     }
                 }
 
+                // «مصرف روزانه»: the opening module -- every account's Worker requests, seven days.
+                if (accounts.isNotEmpty()) item { com.mlmvpn.scanner.ui.cloud.CloudUsageModule(accounts) }
+
+                // «میدان کانفیگ»: races the panels of the first account (the one the coach works on).
+                if (accounts.isNotEmpty()) item {
+                    com.mlmvpn.scanner.ui.arena.ArenaEntryCard(onOpen = { showArenaFor = accounts.first() })
+                }
+
                 itemsIndexed(accounts) { accountIndex, account ->
                     // With one account the card's own header is identity enough. With several,
                     // four identical Cloudflare cards stack up and the only thing telling them
@@ -312,7 +328,13 @@ fun CloudTab(
                                 if (accountIndex == 0 && cloudStep != CloudCoach.Step.IDLE) S(R.string.the_guide_is_working_on_this_account) else ""
                         )
                     }
+                    // Inset like the modules above it: SettingsGroup adds 16dp inside the list's 10dp.
+                    Box(Modifier.padding(horizontal = 16.dp)) {
                     AccountGroupCard(
+                        collapsed = accounts.size > 1 && openAccountId != account.id,
+                        onToggleCollapsed = if (accounts.size > 1) ({
+                            openAccountId = if (openAccountId == account.id) null else account.id
+                        }) else null,
                         isPrimary = accountIndex == 0,
                         onCoachHandOff = { _, _ -> onNavigateToScanner() },
                         onOpenV2Ray = onOpenV2Ray,
@@ -331,10 +353,20 @@ fun CloudTab(
                             showBpbSettingsFor = acc 
                         },
                         onShowEdgSettings = { showEdgSettingsFor = it },
+                        onShowSpider = { showSpiderFor = it },
                         onDelete = {
                             accountToDelete = account
                         },
                         onTroubleshoot = { troubleshootFor = account },
+                    )
+                    }
+                }
+                // «کانفیگ‌های دریافتی»: every account's received groups, below the accounts.
+                if (cloudGroups.isNotEmpty()) item {
+                    com.mlmvpn.scanner.ui.cloud.CloudReceivedModule(
+                        accounts = accounts,
+                        groups = cloudGroups,
+                        onOpenGroup = { openGroupId = it },
                     )
                 }
                 if (accounts.isEmpty()) {
@@ -426,6 +458,34 @@ fun CloudTab(
                     groupManager = groupManager,
                     onGroupsUpdated = { cloudGroups = groupManager.cloudGroups.toList() },
                     onDismiss = { showNahanSettingsFor = null }
+                )
+            }
+        }
+
+        showArenaFor?.let { acc ->
+            com.mlmvpn.scanner.ui.home.IosModalHost(modifier = Modifier.fillMaxSize()) {
+                com.mlmvpn.scanner.ui.arena.ArenaScreen(
+                    account = acc,
+                    groupManager = groupManager,
+                    onBack = { showArenaFor = null },
+                    onGroupsUpdated = { cloudGroups = groupManager.cloudGroups.toList() },
+                )
+            }
+        }
+
+        showSpiderFor?.let { acc ->
+            com.mlmvpn.scanner.ui.home.IosModalHost(modifier = Modifier.fillMaxSize()) {
+                com.mlmvpn.scanner.ui.spider.SpiderScreen(
+                    account = acc,
+                    onBack = { showSpiderFor = null },
+                    onAddConfigs = { links ->
+                        if (com.mlmvpn.scanner.ui.spider.SpiderConfigs.file(context, groupManager, acc, links) != null) {
+                            cloudGroups = groupManager.cloudGroups.toList()
+                            android.widget.Toast.makeText(context, context.getString(R.string.cloud_admin_configs_received, links.size), android.widget.Toast.LENGTH_SHORT).show()
+                            // Back to the Cloud tab, where the combine offer shows under the new group.
+                            showSpiderFor = null
+                        }
+                    },
                 )
             }
         }
@@ -592,6 +652,8 @@ fun AccountGroupCard(
     onOpenConfigStudio: () -> Unit = {},
     onShowBpbSettings: (org.json.JSONObject?, CloudAccount) -> Unit,
     onShowEdgSettings: (CloudAccount) -> Unit,
+    /** Opens «پنل اسپایدر» for this account, as a page of the Cloud tab. */
+    onShowSpider: (CloudAccount) -> Unit = {},
     onDelete: () -> Unit,
     /**
      * Opens the troubleshooting page for this account.
@@ -607,6 +669,10 @@ fun AccountGroupCard(
     /** Only the top card answers the coach; see the request handler below. */
     isPrimary: Boolean = false,
     onCoachHandOff: (groupId: String, uri: String) -> Unit = { _, _ -> },
+    /** Folded to its header row (the Cloud tab folds all but one card when there are several). */
+    collapsed: Boolean = false,
+    /** Set when the card can fold; the header row then toggles it. */
+    onToggleCollapsed: (() -> Unit)? = null,
 ) {
     // Which panel is mid-removal, so only that row spins.
     var removingPanel by remember { mutableStateOf<String?>(null) }
@@ -857,7 +923,9 @@ fun AccountGroupCard(
         // sentence instead of an eight-character slice of the API token -- which told the user
         // nothing they could act on and put a credential fragment on screen for no reason.
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+            modifier = Modifier.fillMaxWidth()
+                .then(if (onToggleCollapsed != null) Modifier.clickable { onToggleCollapsed() } else Modifier)
+                .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             androidx.compose.foundation.Image(
@@ -895,6 +963,10 @@ fun AccountGroupCard(
                             "EDG" to lampOf(edgDeployState, cfgCount("EDG")),
                             "NHN" to lampOf(nahanDeployState, cfgCount("NHN")),
                             "MLM" to lampOf(mlmDeployState, cfgCount("MLM")),
+                            "NTR" to lampOf(if (com.mlmvpn.scanner.engines.netra.NetraPanel.install(context, account.accountId) != null) "done" else "idle", cfgCount("NTR")),
+                            "GZG" to lampOf(if (com.mlmvpn.scanner.engines.gozargah.GozargahPanel.install(context, account.accountId) != null) "done" else "idle", cfgCount("GZG")),
+                            "NVA" to lampOf(if (com.mlmvpn.scanner.engines.nova.NovaPanel.install(context, account.accountId) != null) "done" else "idle", cfgCount("NVA")),
+                            "SPD" to lampOf(if (com.mlmvpn.scanner.engines.spider.SpiderPanel.install(context, account.accountId) != null) "done" else "idle", cfgCount("SPD")),
                         ),
                         onSelect = { openPanel = if (openPanel == it) null else it },
                     )
@@ -921,7 +993,18 @@ fun AccountGroupCard(
             ) {
                 Icon(Icons.Default.Delete, contentDescription = "Delete", tint = if (!isBusy) TextMuted else BorderDark)
             }
+            if (onToggleCollapsed != null) {
+                val turn by animateFloatAsState(if (collapsed) 0f else 180f, label = "fold")
+                Icon(
+                    Icons.Default.KeyboardArrowDown,
+                    contentDescription = if (collapsed) com.mlmvpn.scanner.store.tr("باز کردن", "Expand") else com.mlmvpn.scanner.store.tr("بستن", "Collapse"),
+                    tint = com.mlmvpn.scanner.ui.settings.Ios.Chevron,
+                    modifier = Modifier.size(22.dp).graphicsLayer { rotationZ = turn },
+                )
+            }
         }
+        // With several accounts a card can fold to its header row; nothing in it is removed.
+        if (!collapsed) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -932,9 +1015,9 @@ fun AccountGroupCard(
 
         // Action Buttons Column
         Box(modifier = Modifier.fillMaxWidth()) {
+            // The rows sit on the card itself, as an iOS grouped list does (it was a darker slab).
             Column(modifier = Modifier
                 .fillMaxWidth()
-                .background(BgDark.copy(alpha = 0.5f))
                 // NOTE: was Modifier.blur(8.dp). Android's hardware blur (RenderEffect)
                 // crashes the native RenderThread on some GPUs — notably Samsung — with
                 // "pthread_mutex_lock called on a destroyed mutex" (SIGABRT) when the
@@ -1407,6 +1490,119 @@ fun AccountGroupCard(
             }
 
             Box(modifier = Modifier.fillMaxWidth().padding(start = 52.dp).height(0.5.dp).background(com.mlmvpn.scanner.ui.settings.Ios.Separator))
+
+            // --- Spider: get configs here like the others; install, users and exits on its page ---
+            CloudPanelHeaderRow(
+                title = "Spider",
+                subtitle = com.mlmvpn.scanner.store.tr("خروجی مسابقه‌ای و محدودیت IP", "Racing exits and IP limits"),
+                state = if (com.mlmvpn.scanner.engines.spider.SpiderPanel.install(context, account.accountId) != null) "done" else "idle",
+                configCount = cfgCount("SPD"),
+                expanded = openPanel == "SPD",
+                onClick = { openPanel = if (openPanel == "SPD") null else "SPD" },
+            )
+            if (openPanel == "SPD") {
+                com.mlmvpn.scanner.ui.spider.SpiderCloudRows(
+                    account = account,
+                    groupManager = groupManager,
+                    onOpen = { onShowSpider(account) },
+                    onGroupsUpdated = onGroupsUpdated,
+                )
+            }
+
+            // --- Netra and Gozargah: third-party panels, deployed from their developers' releases ---
+            var thirdPartyTick by remember { mutableStateOf(0) }
+            val netra = remember(thirdPartyTick) { com.mlmvpn.scanner.engines.netra.NetraPanel.install(context, account.accountId) }
+            val gozargah = remember(thirdPartyTick) { com.mlmvpn.scanner.engines.gozargah.GozargahPanel.install(context, account.accountId) }
+
+            Box(modifier = Modifier.fillMaxWidth().padding(start = 52.dp).height(0.5.dp).background(com.mlmvpn.scanner.ui.settings.Ios.Separator))
+            CloudPanelHeaderRow(
+                title = "Netra",
+                subtitle = com.mlmvpn.scanner.store.tr("پنل ساده، بر پایهٔ BPB", "A simple panel built on BPB"),
+                state = if (netra != null) "done" else "idle",
+                configCount = cfgCount("NTR"),
+                expanded = openPanel == "NTR",
+                onClick = { openPanel = if (openPanel == "NTR") null else "NTR" },
+            )
+            if (openPanel == "NTR") {
+                com.mlmvpn.scanner.ui.cloud.PanelRows(
+                    account = account, groupManager = groupManager, engine = "NTR", label = "Netra",
+                    installed = netra != null,
+                    install = { step -> com.mlmvpn.scanner.engines.netra.NetraPanel.deploy(context, account, step) },
+                    links = {
+                        val i = com.mlmvpn.scanner.engines.netra.NetraPanel.install(context, account.accountId) ?: error("not installed")
+                        com.mlmvpn.scanner.engines.netra.NetraPanel.configs(context, i).map { com.mlmvpn.scanner.ui.cloud.PanelConfigs.nameOf(it) to it }
+                    },
+                    remove = { com.mlmvpn.scanner.engines.netra.NetraPanel.remove(context, account) },
+                    onGroupsUpdated = onGroupsUpdated,
+                    onChanged = { thirdPartyTick++ },
+                    extra = netra?.let { n -> { com.mlmvpn.scanner.ui.cloud.OpenPanelRow("${n.url}/${n.subPath}/panel") } },
+                )
+            }
+
+            Box(modifier = Modifier.fillMaxWidth().padding(start = 52.dp).height(0.5.dp).background(com.mlmvpn.scanner.ui.settings.Ios.Separator))
+            CloudPanelHeaderRow(
+                title = "Gozargah",
+                subtitle = com.mlmvpn.scanner.store.tr("چندکاربره با دیتابیس D1", "Multi-user, on a D1 database"),
+                state = if (gozargah != null) "done" else "idle",
+                configCount = cfgCount("GZG"),
+                expanded = openPanel == "GZG",
+                onClick = { openPanel = if (openPanel == "GZG") null else "GZG" },
+            )
+            if (openPanel == "GZG") {
+                com.mlmvpn.scanner.ui.cloud.PanelRows(
+                    account = account, groupManager = groupManager, engine = "GZG", label = "Gozargah",
+                    installed = gozargah != null,
+                    install = { step -> com.mlmvpn.scanner.engines.gozargah.GozargahPanel.deploy(context, account, step) },
+                    links = {
+                        val i = com.mlmvpn.scanner.engines.gozargah.GozargahPanel.install(context, account.accountId) ?: error("not installed")
+                        com.mlmvpn.scanner.engines.gozargah.GozargahPanel.configs(context, i).map { com.mlmvpn.scanner.ui.cloud.PanelConfigs.nameOf(it) to it }
+                    },
+                    remove = { com.mlmvpn.scanner.engines.gozargah.GozargahPanel.remove(context, account) },
+                    onGroupsUpdated = onGroupsUpdated,
+                    onChanged = { thirdPartyTick++ },
+                    extra = gozargah?.let { g -> {
+                        // The password the app set is the one way in; copied as the page opens.
+                        val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        com.mlmvpn.scanner.ui.cloud.OpenPanelRow("${g.url}/${g.panelPath}",
+                            note = com.mlmvpn.scanner.store.tr("رمز پنل کپی شد.", "The panel password was copied."),
+                            beforeOpen = { cm.setPrimaryClip(android.content.ClipData.newPlainText("gozargah", g.password)) })
+                    } },
+                )
+            }
+
+            // --- Nova: fetched from the developer's repository at install, checked against its SHA-256 ---
+            val nova = remember(thirdPartyTick) { com.mlmvpn.scanner.engines.nova.NovaPanel.install(context, account.accountId) }
+            Box(modifier = Modifier.fillMaxWidth().padding(start = 52.dp).height(0.5.dp).background(com.mlmvpn.scanner.ui.settings.Ios.Separator))
+            CloudPanelHeaderRow(
+                title = "Nova",
+                subtitle = com.mlmvpn.scanner.store.tr("پنل کامل با آی‌پی تمیز و ربات تلگرام", "A full panel with clean IPs and a Telegram bot"),
+                state = if (nova != null) "done" else "idle",
+                configCount = cfgCount("NVA"),
+                expanded = openPanel == "NVA",
+                onClick = { openPanel = if (openPanel == "NVA") null else "NVA" },
+            )
+            if (openPanel == "NVA") {
+                com.mlmvpn.scanner.ui.cloud.PanelRows(
+                    account = account, groupManager = groupManager, engine = "NVA", label = "Nova",
+                    installed = nova != null,
+                    install = { step -> com.mlmvpn.scanner.engines.nova.NovaPanel.deploy(context, account, step) },
+                    links = {
+                        val i = com.mlmvpn.scanner.engines.nova.NovaPanel.install(context, account.accountId) ?: error("not installed")
+                        com.mlmvpn.scanner.engines.nova.NovaPanel.configs(context, i).map { com.mlmvpn.scanner.ui.cloud.PanelConfigs.nameOf(it) to it }
+                    },
+                    remove = { com.mlmvpn.scanner.engines.nova.NovaPanel.remove(context, account) },
+                    onGroupsUpdated = onGroupsUpdated,
+                    onChanged = { thirdPartyTick++ },
+                    extra = nova?.let { n -> {
+                        val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        com.mlmvpn.scanner.ui.cloud.OpenPanelRow("${n.url}/admin",
+                            note = com.mlmvpn.scanner.store.tr("رمز پنل کپی شد.", "The panel password was copied."),
+                            beforeOpen = { cm.setPrimaryClip(android.content.ClipData.newPlainText("nova", n.password)) })
+                    } },
+                )
+            }
+
+            Box(modifier = Modifier.fillMaxWidth().padding(start = 52.dp).height(0.5.dp).background(com.mlmvpn.scanner.ui.settings.Ios.Separator))
             
             // --- ROW 5: MLM Engine ---
             CloudPanelHeaderRow(
@@ -1862,108 +2058,11 @@ fun AccountGroupCard(
         }
 
 
-        // Cloud Groups List
-        //
-        // Rows that push a page, not expandable cards with three differently-sized buttons on a
-        // 40dp strip. Everything a group can do is on its own page now -- including combining it
-        // for speed, which had nowhere to live here at all.
-        if (cloudGroups.isNotEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 70.dp)
-                    .height(0.5.dp)
-                    .background(com.mlmvpn.scanner.ui.settings.Ios.Separator)
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    Icons.Default.Layers,
-                    contentDescription = null,
-                    tint = TextMuted,
-                    modifier = Modifier.size(15.dp),
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    stringResource(R.string.cloud_received_groups),
-                    color = TextMuted,
-                    fontSize = 12.sp,
-                    modifier = Modifier.weight(1f),
-                )
-                Text(
-                    com.mlmvpn.scanner.ui.faCount(cloudGroups.size),
-                    color = TextMuted,
-                    fontSize = 12.sp,
-                )
-            }
+        // The groups this account received are listed in the Cloud tab's «کانفیگ‌های دریافتی»
+        // module (CloudReceivedModule), so a folded card does not hide them.
 
-            cloudGroups.forEach { group ->
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 70.dp)
-                        .height(0.5.dp)
-                        .background(com.mlmvpn.scanner.ui.settings.Ios.Separator)
-                )
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onOpenGroup(group.id) }
-                        .padding(horizontal = 16.dp, vertical = 11.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    com.mlmvpn.scanner.ui.settings.SettingsGlyph(
-                        Icons.Default.Layers,
-                        com.mlmvpn.scanner.ui.settings.Ios.Indigo,
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            group.title,
-                            color = TextPrimary,
-                            fontSize = 15.sp,
-                            maxLines = 1,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                        )
-                        Spacer(modifier = Modifier.height(3.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            PanelBadge(group.nodes.firstOrNull()?.engineType ?: "BPB")
-                            Spacer(modifier = Modifier.width(6.dp))
-                            // "2026-09-02 20:49" is two Latin runs with a space between them, and
-                            // in an RTL paragraph that space lets the clock walk in front of the
-                            // date. The stamp is LTR content; it gets an LTR context.
-                            androidx.compose.runtime.CompositionLocalProvider(
-                                androidx.compose.ui.platform.LocalLayoutDirection provides
-                                    androidx.compose.ui.unit.LayoutDirection.Ltr
-                            ) {
-                                Text(group.date, color = TextMuted, fontSize = 11.sp)
-                            }
-                        }
-                    }
-                    Text(
-                        com.mlmvpn.scanner.ui.faCount(group.nodes.size),
-                        color = TextMuted,
-                        fontSize = 14.sp,
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Icon(
-                        Icons.Default.ChevronRight,
-                        contentDescription = null,
-                        tint = com.mlmvpn.scanner.ui.settings.Ios.Chevron,
-                        modifier = Modifier
-                            .size(17.dp)
-                            .scale(
-                                scaleX = if (androidx.compose.ui.platform.LocalLayoutDirection.current ==
-                                    androidx.compose.ui.unit.LayoutDirection.Rtl) -1f else 1f,
-                                scaleY = 1f,
-                            ),
-                    )
-                }
-            }
-        }
     }
+        } // collapsed
     } // Closes the main Column
 
     // Deleting a worker cannot be undone from here, and every config already handed out from that

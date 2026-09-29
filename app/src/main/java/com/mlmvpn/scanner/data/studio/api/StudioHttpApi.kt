@@ -92,6 +92,8 @@ class StudioHttpApi(
         private fun shared(context: Context): OkHttpClient =
             CLIENT ?: synchronized(this) {
                 CLIENT ?: OkHttpClient.Builder()
+                    .dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns())
+                    .protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1)
                     .connectTimeout(15, TimeUnit.SECONDS)
                     // 40 s, not 20: making a location config now tests that country's servers on
                     // the engine before answering (build 18), and a slow batch of public servers
@@ -138,9 +140,14 @@ class StudioHttpApi(
             else -> builder.post(payload ?: empty())
         }
 
+        // A diary line per call -- path, status, size, time, or the exact failure -- so a network
+        // fault shows WHICH call it hits (the 2026-09-28 hunt: some calls answered in a second while
+        // others hung to the read timeout, and nothing said which).
+        val t0 = System.currentTimeMillis()
         try {
             client.newCall(builder.build()).execute().use { res ->
                 val text = res.body.string()
+                android.util.Log.i("StudioNet", "$method ${path.substringBefore('?')} -> ${res.code} ${res.protocol} ${text.length} B ${System.currentTimeMillis() - t0} ms")
                 if (!res.isSuccessful) {
                     // The engine's own code wins when it sent one. Falling back to the HTTP status
                     // alone would collapse `username_taken` and `bootstrap_used` into "409".
@@ -161,6 +168,7 @@ class StudioHttpApi(
                 StudioResult.Ok(parsed)
             }
         } catch (e: Exception) {
+            android.util.Log.w("StudioNet", "$method ${path.substringBefore('?')} FAILED after ${System.currentTimeMillis() - t0} ms: ${e.javaClass.simpleName} ${e.message}")
             // Not reaching the engine is a different thing from the engine refusing, and a screen
             // has to say something different about each: one is retried, the other is acted on.
             StudioResult.Err(StudioError(StudioError.NETWORK, detail = e.message))

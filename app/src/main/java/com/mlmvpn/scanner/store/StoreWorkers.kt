@@ -177,6 +177,7 @@ object StoreWorkers {
                     "This panel's embedded settings could not be read — it was left alone."))
             code = prefix + stripBpbPrefix(code)
         }
+        spec.inject?.let { code = it(code, deployed) }
         return code
     }
 

@@ -152,7 +152,11 @@ object ScannerManager {
             try {
                 val scanner = CloudflareScanner()
                 val ranges = CloudflareScanner.DEFAULT_RANGES
-                val ipsToScan = (customIps?.distinct() ?: scanner.generateIPs(ranges))
+                // Discovery scouts the ranges first (ScanScout): under the 2026-09-28 filtering only
+                // one Cloudflare range still carried traffic and the fixed order never reached it.
+                val basePort = com.mlmvpn.scanner.utils.VpnConfig.parseUri(baseConfig)?.port ?: 443
+                val ipsToScan = customIps?.distinct()
+                    ?: runCatching { ScanScout.order(appContext, scanner, ranges, baseConfig, basePort) }.getOrElse { scanner.generateIPs(ranges) }
 
                 // A health test asks a closed question -- which of THESE addresses still work --
                 // so it has to try all of them. Stopping at the usual target and then reporting

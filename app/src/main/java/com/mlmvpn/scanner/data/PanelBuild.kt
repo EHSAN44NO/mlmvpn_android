@@ -59,7 +59,15 @@ object PanelBuild {
     //    `updated_at`, so the app sees it; quotas stop within a few hundred KB); device limits count
     //    devices connected NOW; WebSocket early data; XHTTP served as stream-one with its own
     //    credential and a country; a location config keeps one verified exit; DNS from the Worker.
-    const val MLM = 18
+    // 19: stale-while-revalidate credentials + the first 16 KB sent unbuffered. Measured WORSE on
+    //    the phone (the arena's speed download was cut off in both races, first responses slower).
+    // 20: build 19 rolled back -- the data plane is build 18's again; only the number moved, so the
+    //    Store offers it to accounts already on 19.
+    // 21: A/B -- only the unbuffered first 16 KB from build 19 (credentials as in 18).
+    //     Measured: speed back to normal (so build 19's cut-off came from the credential cache), but
+    //     latency no better (205/208 ms vs 132-181) -- not kept.
+    // 22: build 18's data plane again; the number moves so the Store replaces 21.
+    const val MLM = 22
 
     /**
      * The highest schema version the bundled Config Studio worker knows how to migrate to.

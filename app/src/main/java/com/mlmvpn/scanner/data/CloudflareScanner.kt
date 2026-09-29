@@ -4,6 +4,7 @@ import android.net.Network
 import android.util.Log
 import com.mlmvpn.scanner.utils.NetworkWatchdog
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.withPermit
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketTimeoutException
@@ -257,6 +258,11 @@ class CloudflareScanner {
         val probeSemaphore = kotlinx.coroutines.sync.Semaphore(
             maxOf(1, minOf(tuning.probeConcurrency, maxConcurrency))
         )
+        // The config's own first request, after TCP and before the costly real test (ScanScout):
+        // the filtering lets many addresses complete TLS and then never answers, and each of those
+        // used to cost a whole Xray test from the budget.
+        val aliveTarget = ScanScout.target(baseConfig)
+        val aliveSemaphore = kotlinx.coroutines.sync.Semaphore(32)
         val probeJob = launch(Dispatchers.IO + pipeline) {
             val jobs = ips.map { ip ->
                 async {
@@ -269,6 +275,7 @@ class CloudflareScanner {
                         // remaining IP dead without testing it.
                         ensureOnline(watchdog, onPaused)
                         val result = tcpProbe(ip, probePorts, tuning, probeNetwork)
+                            ?.takeIf { r -> probeNetwork != null || aliveSemaphore.withPermit { ScanScout.alive(r.ip, r.port, aliveTarget) } }
                         probedCount.incrementAndGet()
                         // Feeds the watchdog's second detector: a long run of these with no
                         // success is what makes it stop trusting the OS and move a byte itself.
@@ -519,7 +526,7 @@ class CloudflareScanner {
      * Performs a real delay test using Xray native measureOutboundDelay.
      * Returns real delay in milliseconds, or 0f if failed.
      */
-    private suspend fun realDelayTest(
+    internal suspend fun realDelayTest(
         ip: String,
         baseConfigUri: String,
         context: android.content.Context,

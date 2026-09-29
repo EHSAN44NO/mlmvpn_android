@@ -84,7 +84,9 @@ data class AetherOptions(
         out["AETHER_SOCKS"] = "127.0.0.1:$socksPort"
         out["AETHER_PROTOCOL"] = protocol.env
         out["AETHER_SCAN"] = scan.env
-        out["AETHER_IP"] = ipFamily.env
+        // IPv4 is the default, not a choice: it is resolved per network (CfFamily.warpScanFamily)
+        // -- the 2026-09-28 filter left Cloudflare IPv4 carrying nothing on the phone's network.
+        out["AETHER_IP"] = if (ipFamily == AetherIp.V4) com.mlmvpn.scanner.data.CfFamily.warpScanFamilyAnyNet() else ipFamily.env
         out["AETHER_QUICK_RECONNECT"] = if (quickReconnect) "1" else "0"
         out["AETHER_CONFIG"] = "$dataDir/aether.toml"
         // Resolve against the right table for this protocol (see the `noize` doc). Sending a

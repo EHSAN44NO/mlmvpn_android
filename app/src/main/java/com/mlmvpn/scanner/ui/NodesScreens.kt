@@ -98,6 +98,10 @@ fun nodeBadge(node: VpnNode): Pair<String, Color> {
         node.engineType == "EDG" -> "EDG" to Ios.Indigo
         node.engineType == "NHN" -> "NHN" to Ios.Green
         node.engineType == "MLM" -> "MLM" to Ios.Purple
+        node.engineType == "SPD" -> "Spider" to Ios.Pink
+        node.engineType == "NTR" -> "Netra" to Ios.Purple
+        node.engineType == "GZG" -> "Gozargah" to Ios.Teal
+        node.engineType == "NVA" -> "Nova" to Ios.Indigo
         node.engineType == "Manual" -> S(R.string.manual) to Ios.Gray
         else -> "BPB" to Ios.Blue
     }

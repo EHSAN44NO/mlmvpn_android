@@ -62,19 +62,33 @@ object GtCleanIp {
         return out
     }
 
+    /**
+     * Candidates, best evidence first, BOTH families: Cloudflare IPv4 carried no tunnel data at all
+     * on the phone's network on 2026-09-28 while IPv6 did, so v6 edge addresses are always in the
+     * list -- first when IPv4 is measured dead here ([com.mlmvpn.scanner.data.CfFamily]), after v4
+     * otherwise. The real test below decides; nothing is assumed about either family.
+     */
     fun candidates(context: Context, store: GtStore, network: String, limit: Int = 12): List<String> {
-        val list = LinkedHashSet<String>()
-        store.cleanIps(network).filter(::isIpv4).forEach { list.add(it) }
-        try {
+        fun clean(a: String) = a.trim().removePrefix("[").removeSuffix("]").let { if (it.contains('.')) it.substringBefore(':') else it }
+        fun usable(a: String) = isIpv4(a) || com.mlmvpn.scanner.data.CfFamily.isV6(a)
+        val remembered = store.cleanIps(network).map(::clean).filter(::usable)
+        val archive = try {
             val gm = GroupManager(context)
             gm.loadIpArchives()
             // The flow's snapshot, not the list behind it: that list is guarded by the manager's
             // own lock, and a scan can be writing to it right now.
-            gm.ipArchivesFlow.value.flatMap { it.ips }.map { it.substringBefore(':').trim() }.filter(::isIpv4)
-                .takeLast(limit).reversed().forEach { list.add(it) }
-        } catch (_: Exception) {}
-        sample(limit).forEach { list.add(it) }
-        return list.take(limit + store.cleanIps(network).size)
+            gm.ipArchivesFlow.value.flatMap { it.ips }.map(::clean).filter(::usable).takeLast(limit).reversed()
+        } catch (_: Exception) { emptyList() }
+        val v6Route = com.mlmvpn.scanner.data.CfFamily.hasIpv6RouteCached()
+        val fresh6 = if (v6Route) com.mlmvpn.scanner.data.CfFamily.sampleV6(limit / 2) else emptyList()
+        val fresh4 = sample(limit)
+        val v6First = com.mlmvpn.scanner.data.CfFamily.preferV6(context)
+        val list = LinkedHashSet<String>()
+        remembered.forEach { list.add(it) }
+        val (a6, a4) = archive.partition { com.mlmvpn.scanner.data.CfFamily.isV6(it) }
+        if (v6First) { a6.forEach(list::add); fresh6.forEach(list::add); a4.forEach(list::add); fresh4.forEach(list::add) }
+        else { a4.forEach(list::add); a6.forEach(list::add); fresh6.forEach(list::add); fresh4.forEach(list::add) }
+        return list.take(limit + remembered.size)
     }
 
     /** One outbound, measured the way the app measures every config: a real request through it. */

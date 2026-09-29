@@ -290,8 +290,11 @@ object CombineEngine {
         timeoutMs: Long = DELAY_TEST_TIMEOUT_MS,
     ): Long = withContext(Dispatchers.IO) {
         try {
-            val config = VpnConfig.parseUri(uri)
-            if (config == null || config.address.isEmpty()) return@withContext 0L
+            val parsed = VpnConfig.parseUri(uri)
+            if (parsed == null || parsed.address.isEmpty()) return@withContext 0L
+            // With a fresh verdict that Cloudflare IPv4 carries nothing here, a Cloudflare-fronted
+            // config is measured on its IPv6 twin -- what the connect will actually use.
+            val config = CfEdgeHeal.heal(context, parsed, probe = false)
             ensureCoreEnv(context)
             val json = com.mlmvpn.scanner.utils.XrayJsonGenerator.generateSpeedtestConfig(config)
             measureDelay(json, timeoutMs = timeoutMs)

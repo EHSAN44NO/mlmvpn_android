@@ -29,6 +29,8 @@ import java.util.concurrent.TimeUnit
 class StudioAdmin(private val context: Context) {
 
     private val client = OkHttpClient.Builder()
+        .dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns())
+        .protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1)
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .build()

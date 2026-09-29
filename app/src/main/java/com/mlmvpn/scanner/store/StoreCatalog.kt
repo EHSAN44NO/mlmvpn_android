@@ -1,6 +1,7 @@
 package com.mlmvpn.scanner.store
 
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Dns
@@ -222,9 +223,52 @@ object StoreCatalog {
 
     private val ID_NUM = Regex("""WORKER_VERSION\s*=\s*(\d+)""")
     private val BPB_VERSION = Regex("""panelVersion:"([0-9][^"]*)"""")
+    private val GOZARGAH_VERSION = Regex("""VERSION\s*=\s*["']([0-9]+\.[0-9]+\.[0-9]+)["']""")
     private val EDG_VERSION = Regex("""const Version = '(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})'""")
 
     val WORKERS: List<StoreItem> = listOf(
+        // First: classify() takes the first match, and Netra's code also carries BPB's markers.
+        StoreItem(
+            id = "netra", kind = StoreKind.WORKER,
+            titleFa = "پنل نترا", titleEn = "Netra panel",
+            subtitleFa = "پنل ساده بر پایهٔ BPB", subtitleEn = "A simple panel built on BPB",
+            developer = "netrair", repo = com.mlmvpn.scanner.engines.netra.NetraPanel.REPO,
+            source = StoreSource.GithubRelease(
+                repo = com.mlmvpn.scanner.engines.netra.NetraPanel.REPO,
+                assetFor = { com.mlmvpn.scanner.engines.netra.NetraPanel.RELEASE_ASSET },
+            ),
+            icon = StoreIcon(Icons.Default.Shield, Purple, tint2 = CfOrange),
+            worker = WorkerSpec(
+                asset = com.mlmvpn.scanner.engines.netra.NetraPanel.ASSET,
+                detect = { com.mlmvpn.scanner.engines.netra.NetraPanel.looksLikeNetra(it) },
+                // Its code carries BPB's panelVersion, not its own: the bytes decide.
+                versionOf = { null },
+                mustContain = listOf("_project_:\"Netra\"", "SOURCE_CONTENT"),
+            ),
+            aboutFa = "مستقیم از انتشار سازنده. فقط کد عوض می‌شود؛ UUID، رمز و مسیر امن (متغیرهای ورکر) و KV همان می‌مانند.",
+            aboutEn = "Straight from the developer's release. Only the code changes; the UUID, password and secure path (Worker variables) and KV stay.",
+        ),
+        StoreItem(
+            id = "gozargah", kind = StoreKind.WORKER,
+            titleFa = "پنل گذرگاه", titleEn = "Gozargah panel",
+            subtitleFa = "چندکاربره با دیتابیس D1", subtitleEn = "Multi-user, on a D1 database",
+            developer = "panelgozargah", repo = com.mlmvpn.scanner.engines.gozargah.GozargahPanel.REPO,
+            source = StoreSource.GithubRelease(
+                repo = com.mlmvpn.scanner.engines.gozargah.GozargahPanel.REPO,
+                assetFor = { com.mlmvpn.scanner.engines.gozargah.GozargahPanel.RELEASE_ASSET },
+                versionInContent = GOZARGAH_VERSION,
+            ),
+            icon = StoreIcon(Icons.Default.Storage, Teal, tint2 = Blue),
+            worker = WorkerSpec(
+                asset = com.mlmvpn.scanner.engines.gozargah.GozargahPanel.ASSET,
+                detect = { com.mlmvpn.scanner.engines.gozargah.GozargahPanel.looksLikeGozargah(it) && GOZARGAH_VERSION.containsMatchIn(it) },
+                versionOf = { GOZARGAH_VERSION.find(it)?.groupValues?.get(1) },
+                mustContain = listOf("GZ_DB"),
+            ),
+            // Its tables are created and migrated forward by the Worker itself (ensureSchema).
+            aboutFa = "مستقیم از انتشار سازنده. فقط کد عوض می‌شود؛ دیتابیس D1 با کاربران و تنظیمات همان می‌ماند و خود پنل جدول‌هایش را به‌روز می‌کند.",
+            aboutEn = "Straight from the developer's release. Only the code changes; the D1 database with its users and settings stays, and the panel migrates its own tables.",
+        ),
         StoreItem(
             id = "bpb", kind = StoreKind.WORKER,
             titleFa = "پنل BPB", titleEn = "BPB panel",
@@ -238,7 +282,9 @@ object StoreCatalog {
             icon = StoreIcon(Icons.Default.Cloud, CfOrange, imageRes = R.drawable.ic_app_cloudflare),
             worker = WorkerSpec(
                 asset = "worker.js",
-                detect = { has(it, "EMBEDED_SETTINGS", "panelVersion:\"") },
+                // Netra is a BPB fork carrying these same markers; it is its own item, listed
+                // before this one, and never BPB -- BPB's code pushed over it would erase it.
+                detect = { has(it, "EMBEDED_SETTINGS", "panelVersion:\"") && !com.mlmvpn.scanner.engines.netra.NetraPanel.looksLikeNetra(it) },
                 versionOf = { BPB_VERSION.find(it)?.groupValues?.get(1) },
                 // v5 reads its install values from a statement compiled into the script. The new
                 // code must still read them, or every deployed panel would stop on the next start.
@@ -269,6 +315,60 @@ object StoreCatalog {
             ),
             aboutFa = "همان متغیرها (UUID، PROXYIP، ADMIN) و همان KV می‌مانند؛ فقط کد عوض می‌شود.",
             aboutEn = "The same variables (UUID, PROXYIP, ADMIN) and KV stay; only the code changes.",
+        ),
+        StoreItem(
+            id = "spider", kind = StoreKind.WORKER,
+            titleFa = "پنل اسپایدر", titleEn = "Spider panel",
+            subtitleFa = "خروجی‌های مسابقه‌ای و محدودیت IP", subtitleEn = "Racing exits and IP limits",
+            developer = "amirh00sain", repo = com.mlmvpn.scanner.engines.spider.SpiderPanel.REPO,
+            // No releases and no version in the code: the file on main, pinned to its commit.
+            // The version shown is that commit's date and hash.
+            source = StoreSource.GithubFile(
+                repo = com.mlmvpn.scanner.engines.spider.SpiderPanel.REPO,
+                branch = com.mlmvpn.scanner.engines.spider.SpiderPanel.BRANCH,
+                path = com.mlmvpn.scanner.engines.spider.SpiderPanel.PATH,
+            ),
+            icon = StoreIcon(Icons.Default.Hub, CfOrange, tint2 = Purple),
+            worker = WorkerSpec(
+                asset = com.mlmvpn.scanner.engines.spider.SpiderPanel.ASSET,
+                detect = { com.mlmvpn.scanner.engines.spider.SpiderPanel.looksLikeSpider(it) },
+                versionOf = { null },
+                // The new code must still take the token and domains the deploy writes into it,
+                // and still speak the admin API the app drives.
+                mustContain = listOf("__PANEL_TOKEN__", "__PANEL_DOMAIN__", "__WORKER_DOMAIN__", "SPIDER_KV", "/panel/config", "/api/users"),
+                inject = { target, deployed ->
+                    val values = com.mlmvpn.scanner.engines.spider.SpiderPanel.injectedValues(deployed)
+                        ?: throw StoreError(tr("کلید و آدرس این پنل از کد فعلی خوانده نشد — برای امنیت دست نخورد.",
+                            "This panel's key and address could not be read from its code — it was left alone."))
+                    com.mlmvpn.scanner.engines.spider.SpiderPanel.inject(target, values)
+                },
+                normalize = com.mlmvpn.scanner.engines.spider.SpiderPanel::normalize,
+            ),
+            aboutFa = "مستقیم از گیت‌هاب سازنده، همان فایل بدون تغییر. کلید مدیریت و آدرس هر پنل از کد فعلی به کد تازه منتقل می‌شود و کاربران، مصرفشان و فهرست خروجی‌ها در KV دست نمی‌خورند.",
+            aboutEn = "Straight from the developer's GitHub, the file unchanged. Each panel's admin key and address carry over to the new code; users, their usage and the exit list in KV are untouched.",
+        ),
+        StoreItem(
+            id = "nova", kind = StoreKind.WORKER,
+            titleFa = "پنل نوا", titleEn = "Nova panel",
+            subtitleFa = "پنل کامل با آی‌پی تمیز و ربات تلگرام", subtitleEn = "A full panel with clean IPs and a Telegram bot",
+            developer = "IRNova", repo = com.mlmvpn.scanner.engines.nova.NovaPanel.REPO,
+            // PolyForm Noncommercial and shipped obfuscated: never bundled, always the developer's
+            // own file on main, pinned to its commit (the install also checks its published SHA-256).
+            source = StoreSource.GithubFile(
+                repo = com.mlmvpn.scanner.engines.nova.NovaPanel.REPO,
+                branch = com.mlmvpn.scanner.engines.nova.NovaPanel.BRANCH,
+                path = com.mlmvpn.scanner.engines.nova.NovaPanel.PATH,
+            ),
+            icon = StoreIcon(Icons.Default.AutoAwesome, Color(0xFF5E5CE6), tint2 = CfOrange),
+            worker = WorkerSpec(
+                asset = com.mlmvpn.scanner.engines.nova.NovaPanel.ASSET,
+                detect = { com.mlmvpn.scanner.engines.nova.NovaPanel.looksLikeNova(it) },
+                versionOf = { null },
+                // The new code must still speak the first-run and subscription API the app drives.
+                mustContain = listOf("/install/set", "admin/sub-content", "IRNova"),
+            ),
+            aboutFa = "مستقیم از گیت‌هاب سازنده (مجوز غیرتجاری PolyForm). فقط کد عوض می‌شود؛ رمز، کاربران و تنظیمات در D1 و KV همان می‌مانند.",
+            aboutEn = "Straight from the developer's GitHub (PolyForm Noncommercial). Only the code changes; the password, users and settings in D1 and KV stay.",
         ),
         StoreItem(
             id = "nahan", kind = StoreKind.WORKER,

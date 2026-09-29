@@ -116,6 +116,27 @@ object UpdateChecker {
      */
     private fun downloadClient(context: Context) = UpdateNet.client(context, 15, 60)
 
+    /** The latest public release's title and its full notes, as the developer wrote them. */
+    data class ReleaseNotes(val tag: String, val title: String, val body: String, val publishedAt: String)
+
+    /**
+     * «آخرین تغییرات»: the notes of the latest PUBLIC release (the same `/releases/latest` the
+     * check reads -- drafts and pre-releases never appear), fetched fresh on every open. Null when
+     * GitHub cannot be reached; the screen then shows the in-app changelog of the newest version.
+     */
+    suspend fun latestReleaseNotes(context: Context): ReleaseNotes? = withContext(Dispatchers.IO) {
+        runCatching {
+            client(context).newCall(okhttp3.Request.Builder().url(API_URL)
+                .header("Accept", "application/vnd.github+json").get().build()).execute().use { r ->
+                if (!r.isSuccessful) return@use null
+                val o = org.json.JSONObject(r.body?.string().orEmpty())
+                val body = o.optString("body")
+                if (body.isBlank()) null
+                else ReleaseNotes(o.optString("tag_name"), o.optString("name"), body, o.optString("published_at"))
+            }
+        }.onFailure { Log.w(TAG, "release notes", it) }.getOrNull()
+    }
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var autoJob: Job? = null
 

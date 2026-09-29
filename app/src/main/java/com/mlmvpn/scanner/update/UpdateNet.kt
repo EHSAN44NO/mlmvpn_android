@@ -166,7 +166,9 @@ object UpdateNet {
         .connectTimeout(connectSeconds, TimeUnit.SECONDS)
         .readTimeout(readSeconds, TimeUnit.SECONDS)
         .writeTimeout(readSeconds, TimeUnit.SECONDS)
-        .dns(doh)
+        // Worker names get the checked, healthy-first answer (com.mlmvpn.scanner.engines.cloud.WorkerRoute); everything else as before.
+        .dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns(doh))
+        .protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1)
         .apply { tunnelProxy(context)?.let { proxy(it) } }
         .build()
 

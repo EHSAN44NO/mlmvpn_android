@@ -99,7 +99,8 @@ object CoreConfig {
             // proxy configured once keeps working whichever engine is running.
             put("listen", "127.0.0.1:${listenOverride ?: socksPort(context)}")
             put("scan_mode", text("default_scan_mode", "balanced"))
-            put("ip_scan", text("default_scan", "v4"))
+            // Chosen per network unless the user asked for v6 or both (CfFamily.warpScanFamily).
+            put("ip_scan", com.mlmvpn.scanner.data.CfFamily.warpScanFamily(context, text("default_scan", "v4")))
             put("endpoint_cache_path", File(context.filesDir, "masque-gateway-cache.json").absolutePath)
             put("endpoint_discovery", text("endpoint_discovery", "cache"))
             put("masque_transport", text("default_masque_transport", "h3"))

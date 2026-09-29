@@ -40,6 +40,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -442,6 +443,8 @@ fun CloudPanelHeaderRow(
     expanded: Boolean,
     /** Deployed, but from an older build of the app than the one installed. */
     stale: Boolean = false,
+    /** Which panel, for its mark; worked out from [title] when not given. */
+    engine: String = engineOfTitle(title),
     onClick: () -> Unit,
 ) {
     val deployed = state == "done"
@@ -454,42 +457,18 @@ fun CloudPanelHeaderRow(
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // The panel's own mark, the way Settings shows an app: a squircle in its colour with its
+        // initial. The state moved to a label at the end of the row, where it reads as a word.
+        val tint = panelTint(engine)
         Box(
             modifier = Modifier
                 .size(30.dp)
-                .clip(androidx.compose.foundation.shape.RoundedCornerShape(9.dp))
-                .background(
-                    when {
-                        busy -> Ios.Blue.copy(alpha = 0.20f)
-                        stale -> Ios.Orange.copy(alpha = 0.20f)
-                        deployed -> Ios.Green.copy(alpha = 0.20f)
-                        else -> Color.White.copy(alpha = 0.09f)
-                    }
-                ),
+                .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                .background(androidx.compose.ui.graphics.Brush.verticalGradient(listOf(tint, tint.copy(alpha = 0.78f))))
+                .then(if (deployed || busy) Modifier else Modifier.alpha(0.55f)),
             contentAlignment = Alignment.Center,
         ) {
-            if (busy) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(15.dp),
-                    color = Ios.Blue,
-                    strokeWidth = 2.dp,
-                )
-            } else {
-                Icon(
-                    when {
-                        stale -> Icons.Default.Refresh
-                        deployed -> Icons.Default.CheckCircle
-                        else -> Icons.Default.PlayArrow
-                    },
-                    contentDescription = null,
-                    tint = when {
-                        stale -> Ios.Orange
-                        deployed -> Ios.Green
-                        else -> Ios.SecondaryLabel
-                    },
-                    modifier = Modifier.size(16.dp),
-                )
-            }
+            Text(panelMonogram(engine), color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         }
 
         Spacer(Modifier.width(12.dp))
@@ -500,8 +479,9 @@ fun CloudPanelHeaderRow(
             Text(
                 when {
                     busy -> S(R.string.installing)
-                    deployed && configCount > 0 -> S(R.string.installed_you_have_taken_config_groups, faCount(configCount))
-                    deployed -> S(R.string.installed_you_have_not_taken_any_configs)
+                    // «نصب شده» is the label at the end of the row now; the line says only what is new.
+                    deployed && configCount > 0 -> com.mlmvpn.scanner.store.tr("${faCount(configCount)} گروه کانفیگ گرفته‌اید", "$configCount config groups received")
+                    deployed -> com.mlmvpn.scanner.store.tr("هنوز کانفیگی نگرفته‌اید", "No configs received yet")
                     else -> subtitle
                 },
                 color = if (deployed) Ios.SecondaryLabel else Ios.SecondaryLabel.copy(alpha = 0.75f),
@@ -511,6 +491,14 @@ fun CloudPanelHeaderRow(
             )
         }
 
+        Spacer(Modifier.width(8.dp))
+        when {
+            busy -> CircularProgressIndicator(modifier = Modifier.size(15.dp), color = Ios.Blue, strokeWidth = 2.dp)
+            stale -> PanelStatePill(com.mlmvpn.scanner.store.tr("به‌روزرسانی", "Update"), Ios.Orange)
+            deployed -> PanelStatePill(com.mlmvpn.scanner.store.tr("نصب شده", "Installed"), Ios.Green)
+            else -> PanelStatePill(com.mlmvpn.scanner.store.tr("نصب نشده", "Not installed"), Ios.SecondaryLabel)
+        }
+        Spacer(Modifier.width(6.dp))
         Icon(
             if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
             contentDescription = null,
@@ -520,11 +508,53 @@ fun CloudPanelHeaderRow(
     }
 }
 
+@Composable
+private fun PanelStatePill(text: String, tint: Color) {
+    Text(
+        text,
+        color = tint,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+            .background(tint.copy(alpha = 0.14f))
+            .padding(horizontal = 7.dp, vertical = 2.dp),
+    )
+}
+
+/** One or two letters for a panel's mark. */
+fun panelMonogram(engine: String): String = when (engine) {
+    "EDG" -> "E"
+    "NHN" -> "N"
+    "MLM" -> "M"
+    "SPD" -> "S"
+    "NTR" -> "Nt"
+    "GZG" -> "G"
+    "NVA" -> "Nv"
+    else -> "B"
+}
+
+/** The engine key behind a panel row's title, for rows that only pass the title. */
+fun engineOfTitle(title: String): String = when (title.trim().lowercase()) {
+    "edg", "edge" -> "EDG"
+    "nahan" -> "NHN"
+    "mlm" -> "MLM"
+    "spider" -> "SPD"
+    "netra" -> "NTR"
+    "gozargah" -> "GZG"
+    "nova" -> "NVA"
+    else -> "BPB"
+}
+
 /** The four panels' colours, fixed so a badge and a header agree wherever they appear. */
 fun panelTint(engine: String): Color = when (engine) {
     "EDG" -> Color(0xFF30D158)
     "NHN" -> Color(0xFFBF5AF2)
     "MLM" -> Color(0xFFFF9F0A)
+    "SPD" -> Color(0xFFFF375F)
+    "NTR" -> Color(0xFF9B59F6)
+    "GZG" -> Color(0xFF40C8E0)
+    "NVA" -> Color(0xFF5E5CE6)
     else -> Color(0xFF0A84FF)
 }
 
@@ -532,6 +562,10 @@ fun panelName(engine: String): String = when (engine) {
     "EDG" -> "EDG"
     "NHN" -> "Nahan"
     "MLM" -> "MLM"
+    "SPD" -> "Spider"
+    "NTR" -> "Netra"
+    "GZG" -> "Gozargah"
+    "NVA" -> "Nova"
     else -> "BPB"
 }
 

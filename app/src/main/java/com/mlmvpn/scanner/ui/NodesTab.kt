@@ -705,7 +705,10 @@ fun NodesTab(onBack: () -> Unit) {
                         libv2ray.Libv2ray.initCoreEnv(context.filesDir.absolutePath, xudpBaseKey) 
                     } catch (e: Exception) {}
 
-                    val jsonConfig = com.mlmvpn.scanner.utils.XrayJsonGenerator.generateSpeedtestConfig(config)
+                    // Measured the way the connect will run it (CfEdgeHeal: IPv6 twin when Cloudflare
+                    // IPv4 is measured dead here).
+                    val jsonConfig = com.mlmvpn.scanner.utils.XrayJsonGenerator.generateSpeedtestConfig(
+                        com.mlmvpn.scanner.data.CfEdgeHeal.heal(context, config, probe = false))
                     // Through CombineEngine, which puts a timeout on it that can actually fire:
                     // the bare JNI call has been measured sitting for over three minutes, and there
                     // was no timeout on this one at all -- one stalled config froze the row for good.
@@ -1244,13 +1247,22 @@ fun NodesTab(onBack: () -> Unit) {
                         // later delay test for that node skips this block entirely.
                         val countryLookupSemaphore = kotlinx.coroutines.sync.Semaphore(3)
 
+                        // No verdict yet on this network and Cloudflare configs in the batch: settle
+                        // it once with one config (CfEdgeHeal), so the whole list is measured the
+                        // way a connect would run -- IPv6 twins when IPv4 carries nothing here.
+                        if (com.mlmvpn.scanner.data.CfFamily.current(context) == null) {
+                            (validConfigs.firstOrNull { com.mlmvpn.scanner.data.CfEdgeHeal.isCfFronted(it) && com.mlmvpn.scanner.data.CfEdgeHeal.v4ToLong(it.address) != null }
+                                ?: validConfigs.firstOrNull { com.mlmvpn.scanner.data.CfEdgeHeal.isCfFronted(it) })
+                                ?.let { runCatching { com.mlmvpn.scanner.data.CfEdgeHeal.heal(context, it, probe = true) } }
+                        }
                         val deferreds = validConfigs.mapIndexed { i, config ->
                             async(kotlinx.coroutines.Dispatchers.IO) {
                                 measureSemaphore.acquire()
                                 var delayStr = "Timeout"
                                 var succeeded = false
                                 try {
-                                    val jsonConfig = com.mlmvpn.scanner.utils.XrayJsonGenerator.generateSpeedtestConfig(config)
+                                    val jsonConfig = com.mlmvpn.scanner.utils.XrayJsonGenerator.generateSpeedtestConfig(
+                                        com.mlmvpn.scanner.data.CfEdgeHeal.heal(context, config, probe = false))
                                     // withTimeoutOrNull around the JNI call did nothing: it can
                                     // only cancel at a suspension point and a blocking native call
                                     // is not one. CombineEngine.measureDelay runs it somewhere it

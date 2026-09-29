@@ -79,10 +79,10 @@ object MlmPoolClient {
         }
     }
 
-    private val client = OkHttpClient.Builder()
+    private val client = OkHttpClient.Builder().protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1)
         .connectTimeout(12, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
-        .dns(dohDns)
+        .dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns(dohDns))
         // Kept alive on purpose: from Iran the TCP and TLS handshakes to Cloudflare's edge cost
         // about half a second between them, measured, and that is most of a request's total time.
         // Reusing the connection across a session is the single biggest thing the client can do.

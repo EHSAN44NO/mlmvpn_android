@@ -53,6 +53,46 @@ fun changelogVersions(isFa: Boolean): List<ChangelogVersion> =
                             Icons.Default.VpnKey
                         ),
                         ChangelogItem(
+                            "میدان کانفیگ: مسابقهٔ پنل‌های ابری",
+                            "با یک دکمه در بخش ابری، پنل‌های شما (BPB، Edge، نهان، MLM، اسپایدر، نترا و گذرگاه) آماده می‌شوند، از هر کدام کانفیگ گرفته می‌شود و با تست‌های واقعی مسابقه می‌دهند: تعیین صلاحیت، تأخیر، دسترسی به سایت‌های کلادفلر، و در حالت کامل سرعت و پایداری. پیت‌لین، معرفی شرکت‌کننده‌ها، چراغ‌های استارت، پیست زنده، سکوی قهرمانی و مدال‌ها. رنگ‌بندی آرام و هماهنگ با ظاهر iOS برنامه، و افکت‌های صوتی سبک (بوق چراغ‌ها و بوق بلند استارت مثل خط شروع مسابقهٔ اتومبیل‌رانی، کنار رفتن، خط پایان و برنده) که با یک دکمه قطع می‌شوند. صفحهٔ نتیجه هم سکوی نفر اول تا سوم را با امتیاز هر کدام نشان می‌دهد. برنده با یک دکمه وصل یا ذخیره می‌شود و تاریخچهٔ مسابقه‌ها با زمان و شبکه نگه داشته می‌شود. نصب یا به‌روزرسانی پنل‌ها فقط بعد از یک صفحهٔ تأیید انجام می‌شود و پنلی که نصب نشود کنار می‌رود و بقیه ادامه می‌دهند. برای عادلانه بودن، پیش از هر مسابقه یک آی‌پی تمیز پیدا می‌شود و روی کانفیگ همهٔ پنل‌ها گذاشته می‌شود تا خود پنل‌ها مقایسه شوند، نه نشانی‌هایشان. این آی‌پی از اسکنر و بازه‌های کلادفلر انتخاب می‌شود: اول پایداری (۵ دست‌دهی بی‌خطا با کمترین نوسان)، بعد سرعت دانلود واقعی. برای مدیری که هیچ‌وقت اسکن نکرده هم کار می‌کند.",
+                            Icons.Default.EmojiEvents
+                        ),
+                        ChangelogItem(
+                            "پنل تازه در ابری: نوا (Nova Proxy)",
+                            "پنل نوا با یک دکمه روی حساب کلادفلر خودتان نصب می‌شود: کد مستقیم از گیت‌هاب سازنده گرفته می‌شود و پیش از نصب با امضای SHA-256 که خود سازنده منتشر کرده سنجیده می‌شود. پنل همان لحظه با یک رمز تصادفی قفل می‌شود تا کسی پیش از شما صاحبش نشود. «دریافت کانفیگ» اشتراک کامل پنل را می‌گیرد (روی گوشی ۱۷ کانفیگ)، دستیار ترکیب پیشنهاد می‌شود، و نوا در مسابقه و استور هم هست.\n\nروی گوشی سنجیده شد: نصب، قفل شدن پنل و دریافت ۱۷ کانفیگ.",
+                            Icons.Default.AutoAwesome
+                        ),
+                        ChangelogItem(
+                            "نمودار مصرف با تقویم ایران",
+                            "نمودار بالای صفحهٔ ابری حالا هفتهٔ جاری را از شنبه تا جمعه و به وقت تهران نشان می‌دهد، با تاریخ شمسی («امروز · دوشنبه ۶ مهر»). روزهای بعد از امروز خالی می‌مانند و میانگین فقط روی روزهای گذشتهٔ همین هفته حساب می‌شود.",
+                            Icons.Default.DateRange
+                        ),
+                        ChangelogItem(
+                            "آخرین تغییرات در صفحهٔ به‌روزرسانی",
+                            "وقتی برنامه به‌روز است، دکمهٔ «آخرین تغییرات» توضیحات کامل آخرین انتشار عمومی را هر بار تازه از گیت‌هاب می‌آورد؛ اگر گیت‌هاب در دسترس نباشد، تغییرات همین نسخه از داخل برنامه نشان داده می‌شود.",
+                            Icons.Default.Info
+                        ),
+                        ChangelogItem(
+                            "فیلترینگ تازه: برنامه خودش از IPv4 به IPv6 می‌رود",
+                            "با سخت‌گیرتر شدن فیلترینگ، روی IPv4 کلادفلر اتصال باز می‌شد ولی هیچ داده‌ای رد نمی‌شد؛ کانفیگ پنل‌ها جواب نمی‌داد، اسکنر آی‌پی پیدا نمی‌کرد، گرفتن کانفیگ از MLM، اسپایدر، نترا و گذرگاه تایم‌اوت می‌شد و گیت‌هاب تانل از کار افتاده بود. روی همان گوشی، IPv6 کلادفلر باز بود.\n\nحالا برنامه خودش می‌سنجد کدام خانواده روی شبکهٔ فعلی داده رد می‌کند و از همان استفاده می‌کند:\n• اسکنر اول بازه‌ها و IPv6 را با تست واقعی می‌سنجد و اگر IPv4 بسته بود سراغ IPv6 می‌رود؛ آی‌پی‌هایی که دست‌دهی می‌کنند ولی جواب نمی‌دهند در کمتر از یک ثانیه کنار می‌روند.\n• کانفیگ‌های کلادفلری (BPB، Edge و…) موقع اتصال و تست دیلی، اگر IPv4 مرده باشد خودکار روی یک آی‌پی IPv6 سالم می‌روند؛ همان ورکر و همان نام.\n• گرفتن کانفیگ از پنل‌ها آی‌پی‌ها را با درخواست واقعی می‌سنجد و سالمش را به کار می‌برد.\n• گیت‌هاب تانل، وارپ، وایرگارد، وارپ در وارپ و ماسک هم IPv6 را می‌شناسند.\n• علت خطای هر ورکر از خود کلادفلر در گزارش برنامه ثبت می‌شود.\n\nروی گوشی سنجیده شد: اسکن ۱۰ آی‌پی سالم در ۲۶ ثانیه، اتصال با دانلود یک مگابایت در ۲ تا ۳ ثانیه، گرفتن کانفیگ هر ۷ پنل، و گیت‌هاب تانل با ۲٫۲ مگابیت.",
+                            Icons.Default.Language
+                        ),
+                        ChangelogItem(
+                            "صفحهٔ ابری: نمودار مصرف روزانه و حساب‌های تاشو",
+                            "بالای صفحهٔ ابری حالا یک نمودار مصرف روزانه هست، به سبک «زمان صفحه» در آیفون: عدد بزرگ درخواست‌های امروز، ستون‌های هفت روز گذشته که هر حساب رنگ خودش را در آن دارد، خط میانگین، و برای هر حساب یک نوار که نشان می‌دهد چقدر از ۱۰۰٬۰۰۰ درخواست رایگان همان روز مصرف شده (نزدیک سقف نارنجی و بعد قرمز). روی هر روز بزنید تا عددهای همان روز را ببینید. با چند حساب، فقط یک کارت باز است و بقیه به یک ردیف جمع می‌شوند که با یک ضربه باز می‌شود. هر پنل آیکون رنگی خودش را دارد (مثل تنظیمات آیفون) با برچسب «نصب شده»، «به‌روزرسانی» یا «نصب نشده»، و ردیف‌ها روی خود کارت نشسته‌اند نه روی نوار تیره. کانفیگ‌های دریافتی همهٔ حساب‌ها یک ماژول جدا زیر حساب‌ها شده‌اند، با آیکون پنل و رنگ حساب. هیچ امکانی از صفحه حذف نشده است.",
+                            Icons.Default.Cloud
+                        ),
+                        ChangelogItem(
+                            "دو پنل تازه در ابری: نترا و گذرگاه",
+                            "نترا (بر پایهٔ BPB) و گذرگاه (چندکاربره با دیتابیس D1) با یک دکمه روی حساب کلادفلر خودتان نصب می‌شوند، با «دریافت کانفیگ» و دستیار ترکیب، و استور نسخهٔ تازه‌شان را مستقیم از انتشار سازنده می‌گیرد. هر دو با رمز و مسیرهای تصادفی نصب می‌شوند، نه مقدارهای پیش‌فرضی که همه می‌دانند. استور نترا را دیگر با BPB اشتباه نمی‌گیرد.",
+                            Icons.Default.Cloud
+                        ),
+                        ChangelogItem(
+                            "پنل تازه در ابری: اسپایدر",
+                            "ورکر پنل اسپایدر (SpiderPanel)، مستقیم از گیت‌هاب سازنده، با یک دکمه روی حساب کلادفلر خودتان نصب می‌شود و خود برنامه پنل آن است. فقط چیزهایی آمده که بقیهٔ پنل‌ها ندارند: محدودیت IP هم‌زمان برای هر کاربر، و خروجی مسابقه‌ای از بین چند پراکسی SOCKS5 یا HTTP خودتان که سریع‌ترینش برای کشور و دیتاسنتر کاربر انتخاب می‌شود، با بررسی سلامت و وضعیت زندهٔ هر خروجی. کاربر با حجم و مدت و کپی لینک هم هست، و مثل بقیهٔ پنل‌ها دکمهٔ «دریافت کانفیگ» همان‌جا در بخش ابری است و بعدش دستیار ترکیب با آی‌پی تمیز پیشنهاد می‌شود. کاربر تازه همان لحظه در فهرست دیده می‌شود.\n\nاستور نسخهٔ تازهٔ ورکرش را مستقیم از گیت‌هاب سازنده می‌پرسد و کلید و آدرس پنل را به کد تازه منتقل می‌کند.\n\nروی گوشی سنجیده شد: نصب، ساخت کاربر و اتصال کار کرد و سرعت دریافت ۸٫۶ مگابیت بود. بدون خروجی، سایت‌هایی که خودشان پشت کلادفلرند باز نمی‌شوند، چون ورکر نمی‌تواند به نشانی‌های خود کلادفلر وصل شود؛ صفحهٔ پنل همین را می‌گوید.",
+                            Icons.Default.Hub
+                        ),
+                        ChangelogItem(
                             "گیت‌وی: فهرست آفلاین، بدون انتظار",
                             "صفحهٔ گیت‌وی دیگر خودش سراغ اینترنت نمی‌رود و فوراً با فهرست آفلاین باز می‌شود: آخرین فهرستی که گرفته‌اید، یا فهرست تازهٔ همراه برنامه در نصب اول. سن فهرست کنار آن نوشته شده و هر وقت خواستید، «به‌روزرسانی فهرست» فهرست تازه می‌گیرد، مثل نسخهٔ ویندوز.\n\nخود به‌روزرسانی هم سریع‌تر شد، روی گوشی از ۵۶ به ۱۷ ثانیه: مسیری که نامش به صفحهٔ فیلتر می‌رسد فوراً کنار گذاشته می‌شود و نام‌یابی امن از نشانی عددی انجام می‌شود.",
                             Icons.Default.CloudOff
@@ -1534,6 +1574,46 @@ fun changelogVersions(isFa: Boolean): List<ChangelogVersion> =
                             "New engine: OpenVPN with TunnelBear servers",
                             "TunnelBear's servers with your own account, direct, with no other tunnel under them. A round button, a live card with speed and usage, a server page with flags and country names, and an account page, with no pop-ups. It shows \"connected\" only after real data has crossed the tunnel.\n\nEach TunnelBear country name stands for about 20 servers, and some of them do not answer from Iran. The delay test now measures several servers of each country together, and the connection goes to the ones that answered. If one goes silent after the start, the next attempt goes to the next server. Measured on a phone: connected in 4 s, about 11 Mbit/s down.",
                             Icons.Default.VpnKey
+                        ),
+                        ChangelogItem(
+                            "Config Arena: your cloud panels, racing",
+                            "One button in Cloud prepares your panels (BPB, Edge, Nahan, MLM, Spider, Netra and Gozargah), takes a config from each and races them on real measurements: qualifying, latency, reaching Cloudflare-hosted sites, and in Full mode speed and stability. Pit lane, grid reveal, start lights, a live track, a podium and medals. Calm colours in keeping with the app's iOS look, and light sound effects (a beep per light and a long start beep, as on a motor-racing start line; retirement, finish, winner) with a mute button. The result page keeps the podium with the top three and their scores. The winner connects or saves with one tap, and races are kept with their time and network. Installs and updates happen only after one confirmation page; a panel that fails sits out and the others go on. To keep it fair, every race first finds one clean IP and puts it on every panel's config, so the panels are compared rather than their addresses. It is chosen from the scanner and Cloudflare's ranges: steadiness first (5 clean handshakes, least spread), then a real download. It works for an operator who has never scanned too.",
+                            Icons.Default.EmojiEvents
+                        ),
+                        ChangelogItem(
+                            "New Cloud panel: Nova (Nova Proxy)",
+                            "The Nova panel installs on your own Cloudflare account with one tap: the code is taken straight from the developer's GitHub and checked against the SHA-256 the developer publishes before it is deployed. The panel is locked at once with a random password, so nobody can claim it before you. «Get configs» takes the panel's full subscription (17 configs on the phone), the combine assistant is offered, and Nova is in the arena and the Store too.\n\nMeasured on the phone: install, the panel locked, and 17 configs fetched.",
+                            Icons.Default.AutoAwesome
+                        ),
+                        ChangelogItem(
+                            "The usage chart follows Iran's calendar",
+                            "The chart at the top of Cloud shows this week from Saturday to Friday in Tehran time, with the Persian date («Today · Monday 6 Mehr»). Days after today stay empty and the average counts only the days of this week that have passed.",
+                            Icons.Default.DateRange
+                        ),
+                        ChangelogItem(
+                            "Latest changes on the update page",
+                            "When the app is up to date, «Latest changes» shows the full notes of the latest public release, fetched fresh from GitHub each time; when GitHub cannot be reached, this version's notes from inside the app are shown.",
+                            Icons.Default.Info
+                        ),
+                        ChangelogItem(
+                            "Tighter filtering: the app moves itself from IPv4 to IPv6",
+                            "Under the tightened filtering, connections to Cloudflare IPv4 opened and then carried no data: panel configs did not answer, the scanner found no IP, config fetches from MLM, Spider, Netra and Gozargah timed out, and GitHub Tunnel stopped. On the same phone Cloudflare IPv6 was open.\n\nThe app now measures which family carries traffic on the current network and uses it:\n• The scanner tests the ranges and IPv6 with a real request first and moves to IPv6 when IPv4 is closed; addresses that complete the handshake and then stay silent are dropped in under a second.\n• Cloudflare-fronted configs (BPB, Edge…) move to a healthy IPv6 address on connect and in delay tests when IPv4 is dead; same Worker, same name.\n• Config fetches from panels check each address with a real request and use a healthy one.\n• GitHub Tunnel, WARP, WireGuard, WARP-in-WARP and MASQUE know IPv6 too.\n• Each Worker's failure reason, from Cloudflare itself, goes to the app's log.\n\nMeasured on the phone: 10 healthy IPs in 26 s, a connection downloading 1 MB in 2–3 s, configs fetched from all 7 panels, and GitHub Tunnel at 2.2 Mbit/s.",
+                            Icons.Default.Language
+                        ),
+                        ChangelogItem(
+                            "Cloud: a daily-usage chart and folding accounts",
+                            "The Cloud page opens on a daily-usage chart in the style of iPhone Screen Time: today's requests as one big number, seven days of bars stacked by account in each account's colour, an average line, and a bar per account showing how much of that day's free 100,000 it used (orange near the limit, then red). Tap a day to see its figures. With several accounts one card is open and the rest fold to a row that opens with a tap. Each panel has its own coloured icon (as in iPhone Settings) with an Installed, Update or Not installed label, and the rows sit on the card instead of a dark strip. Every account's received configs are one module below the accounts, with the panel's icon and the account's colour. Nothing was removed from the page.",
+                            Icons.Default.Cloud
+                        ),
+                        ChangelogItem(
+                            "Two new Cloud panels: Netra and Gozargah",
+                            "Netra (built on BPB) and Gozargah (multi-user, on D1) install on your own Cloudflare account with one tap, with Get configs and the combine assistant, and the store updates them straight from their developers' releases. Both are installed with random passwords and paths, not the defaults everybody knows. The store no longer mistakes Netra for BPB.",
+                            Icons.Default.Cloud
+                        ),
+                        ChangelogItem(
+                            "A new panel in Cloud: Spider",
+                            "SpiderPanel's Worker, straight from the developer's GitHub, installs on your own Cloudflare account with one tap, and the app is its panel. Only what the other panels lack came over: a concurrent-IP limit per user, and an exit raced among several of your own SOCKS5 or HTTP proxies, the fastest for the user's country and data centre, with health checks and each exit's live state. Users with quota and days and link copy are there too, and like the other panels a \"Get configs\" button sits right in the Cloud tab, followed by the combine-with-clean-IP offer. A new user shows in the list at once.\n\nThe store asks the developer's GitHub for new versions of its Worker and carries the panel's key and address to the new code.\n\nMeasured on a phone: install, a user and a connection worked, 8.6 Mbit/s down. With no exit, sites that are themselves behind Cloudflare do not open, because a Worker cannot connect to Cloudflare's own addresses; the panel page says so.",
+                            Icons.Default.Hub
                         ),
                         ChangelogItem(
                             "Gateway: an offline list, no waiting",

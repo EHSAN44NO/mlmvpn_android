@@ -119,7 +119,17 @@ data class WorkerSpec(
     /** BPB: carry the per-account settings statement across to the new code. */
     val bpbPrefix: Boolean = false,
     val stripBom: Boolean = false,
+    /**
+     * For a worker whose deploy writes values into the code (SpiderPanel's token and domains):
+     * the new code with the deployed copy's values carried across. Throws when they cannot be.
+     */
+    val inject: ((target: String, deployed: String) -> String)? = null,
+    /** The code with those deploy-time values put back as placeholders, so the bytes can be compared. */
+    val normalize: ((String) -> String)? = null,
 ) {
+    /** What the store compares when a worker carries no version: the normalised bytes. */
+    fun hashOf(code: String): String = StoreNet.sha256((normalize?.invoke(code) ?: code).removePrefix("﻿"))
+
     enum class Update {
         /** Replace the code only. Bindings, secrets, KV and D1 stay exactly as they are. */
         CONTENT,

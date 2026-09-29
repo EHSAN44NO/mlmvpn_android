@@ -39,7 +39,7 @@ class SubGenManager(private val context: Context) {
 
     private val prefs = context.getSharedPreferences("subgen_prefs", Context.MODE_PRIVATE)
 
-    private val client = OkHttpClient.Builder()
+    private val client = OkHttpClient.Builder().dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns()).protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1)
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)
         .writeTimeout(10, TimeUnit.SECONDS)

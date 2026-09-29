@@ -71,10 +71,10 @@ object CrowdClient {
     }
 
     private val http by lazy {
-        OkHttpClient.Builder()
+        OkHttpClient.Builder().protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1)
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
-            .dns(dohDns)
+            .dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns(dohDns))
             .build()
     }
 

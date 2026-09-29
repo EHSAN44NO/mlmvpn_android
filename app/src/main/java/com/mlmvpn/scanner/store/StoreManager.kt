@@ -159,7 +159,7 @@ object StoreManager {
             StoreKind.WORKER -> {
                 val code = workerTarget(context, item)
                 val codeVersion = code?.let { workerVersionOf(item, it) } ?: inst?.version
-                val codeHash = code?.let { StoreNet.sha256(it.removePrefix("﻿")) }
+                val codeHash = code?.let { item.worker!!.hashOf(it) }
                 val deps = (c?.optJSONArray("deployments") ?: JSONArray()).let { arr ->
                     (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }.map { d ->
                         val v = d.optString("version").ifBlank { null }
@@ -402,7 +402,7 @@ object StoreManager {
                     put("script", name)
                     put("mainModule", s.mainModule)
                     put("version", workerVersionOf(item, s.body) ?: "")
-                    put("hash", StoreNet.sha256(s.body.removePrefix("﻿")))
+                    put("hash", item.worker!!.hashOf(s.body))
                 })
             }
         }
@@ -612,7 +612,7 @@ object StoreManager {
         val spec = item.worker!!
         val target = workerTarget(context, item) ?: return ""
         val targetVersion = workerVersionOf(item, target)
-        val targetHash = StoreNet.sha256(target.removePrefix("﻿"))
+        val targetHash = spec.hashOf(target)
         val accounts = StoreWorkers.accounts(context)
         val cachedDeps = _rows.value.firstOrNull { it.item.id == item.id }?.deployments.orEmpty()
         var updated = 0
@@ -627,7 +627,7 @@ object StoreManager {
                 val liveVersion = workerVersionOf(item, live.body)
                 val behind = when {
                     liveVersion != null && targetVersion != null -> StoreVersions.compare(liveVersion, targetVersion) == -1
-                    else -> StoreNet.sha256(live.body.removePrefix("﻿")) != targetHash
+                    else -> spec.hashOf(live.body) != targetHash
                 }
                 if (!behind) return@forEachIndexed
                 if (spec.update == WorkerSpec.Update.STUDIO) {

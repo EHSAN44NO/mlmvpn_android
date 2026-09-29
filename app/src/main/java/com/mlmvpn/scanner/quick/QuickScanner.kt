@@ -113,7 +113,7 @@ object QuickScanner {
 
     // ── primitives ──────────────────────────────────────────────────────────────────────
 
-    private suspend fun tcpOpen(host: String, port: Int, timeoutMs: Int): Int = withContext(Dispatchers.IO) {
+    internal suspend fun tcpOpen(host: String, port: Int, timeoutMs: Int): Int = withContext(Dispatchers.IO) {
         val started = System.currentTimeMillis()
         try {
             Socket().use { s ->
@@ -175,7 +175,7 @@ object QuickScanner {
      *
      * Returns true when TLS is not expected at all, so plain configs pass straight through.
      */
-    private fun tlsAnswers(config: com.mlmvpn.scanner.utils.VpnConfig): Boolean {
+    internal fun tlsAnswers(config: com.mlmvpn.scanner.utils.VpnConfig): Boolean {
         val security = config.tls.lowercase()
         // REALITY does not present an ordinary certificate to an ordinary client, so a plain
         // handshake proves nothing either way; let those through untouched.

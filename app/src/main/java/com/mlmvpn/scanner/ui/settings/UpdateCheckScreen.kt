@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.ui.text.withStyle
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -85,6 +87,12 @@ fun UpdateCheckScreen(onBack: () -> Unit, backLabel: String) {
     val state by UpdateChecker.state.collectAsState()
     val progress by UpdateChecker.downloadProgressFlow.collectAsState()
     var errorText by remember { mutableStateOf<String?>(null) }
+    var showNotes by remember { mutableStateOf(false) }
+    if (showNotes) {
+        androidx.activity.compose.BackHandler { showNotes = false }
+        LatestChangesPage(onBack = { showNotes = false })
+        return
+    }
 
     // Arriving here IS asking, so the check is forced past the rate limit that exists to stop the
     // app's own background triggers from hammering GitHub.
@@ -103,6 +111,7 @@ fun UpdateCheckScreen(onBack: () -> Unit, backLabel: String) {
                 version = installedVersionName(context),
                 checkedAt = s.checkedAt,
                 onRecheck = { scope.launch { UpdateChecker.checkForUpdate(context, force = true) } },
+                onLatestChanges = { showNotes = true },
             )
 
             is UpdateChecker.State.Failed -> FailedFace(
@@ -147,7 +156,7 @@ private fun CheckingFace() {
 }
 
 @Composable
-private fun UpToDateFace(version: String, checkedAt: Long, onRecheck: () -> Unit) {
+private fun UpToDateFace(version: String, checkedAt: Long, onRecheck: () -> Unit, onLatestChanges: () -> Unit) {
     Spacer(Modifier.height(18.dp))
     Text(
         stringResource(R.string.update_you_are_up_to_date),
@@ -181,8 +190,105 @@ private fun UpToDateFace(version: String, checkedAt: Long, onRecheck: () -> Unit
             tint = Ios.Blue,
             onClick = onRecheck,
         )
+        Separator()
+        SettingsActionRow(
+            label = com.mlmvpn.scanner.store.tr("آخرین تغییرات", "Latest changes"),
+            icon = Icons.Default.Info,
+            tint = Ios.Indigo,
+            onClick = onLatestChanges,
+        )
     }
     Spacer(Modifier.height(28.dp))
+}
+
+/**
+ * «آخرین تغییرات»: the latest public release's notes from GitHub, in full, fetched fresh each time
+ * the page opens; the in-app changelog of the newest version when GitHub cannot be reached.
+ */
+@Composable
+private fun LatestChangesPage(onBack: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var loading by remember { mutableStateOf(true) }
+    var notes by remember { mutableStateOf<UpdateChecker.ReleaseNotes?>(null) }
+    LaunchedEffect(Unit) {
+        notes = UpdateChecker.latestReleaseNotes(context)
+        loading = false
+    }
+    IosScreen(
+        title = com.mlmvpn.scanner.store.tr("آخرین تغییرات", "Latest changes"),
+        onBack = onBack,
+        backLabel = stringResource(R.string.settings_software_update),
+    ) {
+        val n = notes
+        when {
+            loading -> Column(Modifier.fillMaxWidth().padding(top = 140.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                TwoArcSpinner()
+                Spacer(Modifier.height(18.dp))
+                Text(com.mlmvpn.scanner.store.tr("دریافت از گیت‌هاب…", "Fetching from GitHub…"), color = Ios.SecondaryLabel, fontSize = 14.sp)
+            }
+            n != null -> {
+                Spacer(Modifier.height(12.dp))
+                Text(n.title.ifBlank { n.tag }, color = Ios.Label, fontSize = 22.sp, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp))
+                if (n.publishedAt.isNotBlank()) Text(n.publishedAt.take(10), color = Ios.SecondaryLabel, fontSize = 13.sp,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp))
+                Spacer(Modifier.height(10.dp))
+                SettingsGroup { Column(Modifier.padding(16.dp)) { MarkdownLite(n.body) } }
+                Spacer(Modifier.height(28.dp))
+            }
+            else -> {
+                // GitHub unreachable: the newest version's notes from the app itself.
+                val v = com.mlmvpn.scanner.ui.changelogVersions(com.mlmvpn.scanner.utils.AppLocaleManager.isFarsi()).firstOrNull()
+                Spacer(Modifier.height(12.dp))
+                SettingsFooter(com.mlmvpn.scanner.store.tr("گیت‌هاب در دسترس نبود؛ این تغییرات همین نسخه است که داخل برنامه است.",
+                    "GitHub could not be reached; these are this version's notes from inside the app."))
+                if (v != null) {
+                    Text(v.versionTitle, color = Ios.Label, fontSize = 22.sp, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp))
+                    SettingsGroup {
+                        v.items.forEachIndexed { i, item ->
+                            if (i > 0) Separator()
+                            Column(Modifier.padding(16.dp)) {
+                                Text(item.title, color = Ios.Label, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                                Spacer(Modifier.height(6.dp))
+                                Text(item.description, color = Ios.SecondaryLabel, fontSize = 14.sp, lineHeight = 22.sp)
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(28.dp))
+            }
+        }
+    }
+}
+
+/** Enough Markdown for release notes: headings, bullets, bold runs; the rest as plain text. */
+@Composable
+private fun MarkdownLite(md: String) {
+    md.replace("\r", "").split("\n").forEach { raw ->
+        val line = raw.trimEnd()
+        when {
+            line.isBlank() -> Spacer(Modifier.height(8.dp))
+            line.startsWith("#") -> Text(line.trimStart('#').trim().replace("**", ""), color = Ios.Label,
+                fontSize = if (line.startsWith("##")) 16.sp else 18.sp, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(top = 6.dp, bottom = 4.dp))
+            line.trimStart().startsWith("- ") || line.trimStart().startsWith("* ") -> Row {
+                val depth = (line.length - line.trimStart().length) / 2
+                Spacer(Modifier.width((depth * 14).dp))
+                Text("•  ", color = Ios.SecondaryLabel, fontSize = 14.sp)
+                Text(bold(line.trimStart().drop(2)), color = Ios.Label, fontSize = 14.sp, lineHeight = 22.sp)
+            }
+            else -> Text(bold(line), color = Ios.Label, fontSize = 14.sp, lineHeight = 22.sp)
+        }
+    }
+}
+
+private fun bold(s: String): androidx.compose.ui.text.AnnotatedString = androidx.compose.ui.text.buildAnnotatedString {
+    val parts = s.split("**")
+    parts.forEachIndexed { i, part ->
+        val clean = part.replace("`", "")
+        if (i % 2 == 1) withStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.SemiBold)) { append(clean) } else append(clean)
+    }
 }
 
 @Composable

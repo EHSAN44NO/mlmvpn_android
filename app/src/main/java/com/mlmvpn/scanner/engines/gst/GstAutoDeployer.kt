@@ -33,7 +33,7 @@ object GstAutoDeployer {
 
     private val JSON = "application/json".toMediaTypeOrNull()
 
-    private val client = OkHttpClient.Builder()
+    private val client = OkHttpClient.Builder().dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns()).protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1)
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)

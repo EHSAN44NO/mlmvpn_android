@@ -32,6 +32,10 @@ object GtGithub {
     private val JSON_TYPE = "application/json".toMediaType()
 
     val http: OkHttpClient = OkHttpClient.Builder()
+        // The broker is a Worker: its name gets the checked, healthy-first answer (IPv6 edge when
+        // IPv4 is silent). GitHub's own hosts resolve exactly as before.
+        .dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns())
+        .protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1)
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)

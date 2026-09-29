@@ -54,7 +54,7 @@ object DedicatedDnsResolver {
     fun cacheKeyFor(gameId: String): String = "dns_best_region_$gameId"
 
     private val client by lazy {
-        OkHttpClient.Builder()
+        OkHttpClient.Builder().dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns()).protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1)
             .connectTimeout(3, TimeUnit.SECONDS)
             .readTimeout(3, TimeUnit.SECONDS)
             .build()
