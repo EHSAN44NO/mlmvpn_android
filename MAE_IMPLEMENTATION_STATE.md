@@ -90,7 +90,12 @@ M0–M6 are built and **tested on a real phone**: Samsung A50, Android 11, MCI n
 - Diagnostics page: long-press the status line under the connect button.
 
 ## Known issues / next
-- **M5b (foreign exit #2):** WARP turned out to be Iran-geolocated, so it is a bypass, not an exit. A second real foreign exit is still needed for Cloudflare-hosted geo-blocked sites. Candidates: user-imported VLESS/Trojan configs, the Worker plus a proxyIP/SOCKS exit.
-- **Adding or removing a service while connected** is still structural and reconnects. `AddOutbound`/`AddRule` would make it live, now that the spike passed.
+- **Foreign exit #2 is done:** the user's own saved configs (`UserConfigRoute`, `cfg1..3`). The three lowest-delay VLESS/Trojan links are taken, excluding the Iran/SNI/fronting groups. The window moves on when all three are dead on a network.
+  - Phone (MCI): accepted for ChatGPT, Gemini, Claude and TikTok (exits BG/RO/AZ), so they **reach Cloudflare-hosted services**, which the Worker cannot. TikTok moved to `cfg3`.
+  - One config's v6 claim was caught as false ("asked for V6_ONLY, exit used the other family").
+- **Live add/remove of apps: decided against** (measured reconnect ≈ 1.2 s).
+  - Xray's `AddRule` with `shouldAppend=true` appends after the base's catch-all rules, so the new rules never match.
+  - `shouldAppend=false` replaces the whole rule set, which needs the base's geosite lists encoded as protobuf by hand. That is too risky for ChatGPT/Claude routing.
+  - Route changes, pause/resume and feedback remain live.
 - **Mobile-data (Irancell) learning** not phone-tested: mobile data was off on the test phone. Per-network separation is covered by the unit test.
 - **Worker exit country varies per connection** (BG/RO/AZ). Proofs are per service, so this is fine, but sticky-country affinity is not implemented.
