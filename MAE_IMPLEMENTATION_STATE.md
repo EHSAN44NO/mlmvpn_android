@@ -174,6 +174,16 @@ Instagram on local routes are right as they are.
 4. 👎 then Cancel on the question → no rung is used.
 5. Connect from the Quick Settings tile; auto-switch on together with MAE.
 
+## Session 5 (2026-09-30, Windows): the user's 11-item list
+Built and unit-tested here (`assembleDebug testDebugUnitTest` green); **not yet on a phone**.
+- **Cloudflare account gate** (`ui/mae/MaeCloudGate.kt`): MAE's screen asks for an account first (the Cloud tab's own form and store); `startTunnelAsync` refuses without one. A running MAE tunnel is never hidden behind the gate.
+- **Picking apps**: `holdApply(true)` while the picker is open, released on close (one apply after the new apps' checks). `setSelection` queues only newly picked ids, with priority. Google packages attach to Google (`MaeState.extraPackages`, codec key `xpk`, merged into `serviceDef().packages` so UID rules and ticks work); `detachPackage` unticks them.
+- **Re-check**: `recheck(id)` (incident) and `recheckAll()` (stale + routine, one reconnect at most). Main screen: "check all" in the section header, pull-to-refresh, a button per row, and iOS swipe actions (left = delete, right = check again).
+- **Manage page**: rows with a chevron to a per-app page (route checkmark list, switch, check again, destructive remove behind `IosAlert`).
+- **Foreign exit**: an in-place redeploy (same URL, account and UUID) no longer invalidates policies; the page shows the version and asks before a reinstall.
+- **Post-connect canary skipped** for MAE's own apply-reconnect (`selfReconnectAt`, 60 s).
+- The SIM / time-zone lines were removed from the rows (engine still computes `blockers`).
+
 ## Architecture decisions (unchanged, now validated)
 - **Data plane:** Xray (the app's core runs 26.6.27, not the 26.3.27 the binary strings suggested). Kotlin is the control plane.
 - **Base config:** the Serverless profile, whose own DNS and default path are adapted per network.

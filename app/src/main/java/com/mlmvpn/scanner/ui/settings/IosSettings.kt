@@ -41,6 +41,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.offset
@@ -389,12 +390,17 @@ fun SettingsRow(
     titleColor: Color = Ios.Label,
     showChevron: Boolean = true,
     onClick: (() -> Unit)? = null,
+    /** iOS's red count badge before the chevron ("1" on Software Update). 0 draws nothing. */
+    badge: Int = 0,
 ) {
     RowFrame(
         icon = icon,
         tint = tint,
         onClick = onClick,
         trailing = {
+            if (badge > 0) {
+                IosBadge(badge, modifier = Modifier.padding(end = if (showChevron) 6.dp else 0.dp))
+            }
             if (value != null) {
                 Text(
                     value,
@@ -416,6 +422,27 @@ fun SettingsRow(
             }
         },
     )
+}
+
+/** The red count capsule iOS draws on a row or an icon that has something waiting. */
+@Composable
+fun IosBadge(count: Int, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .heightIn(min = 22.dp)
+            .widthIn(min = 22.dp)
+            .clip(RoundedCornerShape(50))
+            .background(Color(0xFFFF3B30))
+            .padding(horizontal = 7.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            if (count > 99) "99+" else count.toString(),
+            color = Color.White,
+            fontSize = 13.sp,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+        )
+    }
 }
 
 /** A row whose control is a switch. Applies immediately -- iOS Settings has no Save button. */

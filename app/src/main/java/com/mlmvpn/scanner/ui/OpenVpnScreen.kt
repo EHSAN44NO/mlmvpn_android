@@ -76,6 +76,7 @@ fun OpenVpnScreen(onBack: () -> Unit, onStore: () -> Unit, onIran: () -> Unit, v
     val loaded by vm.data.collectAsState()
     val connection by OpenVpnRuntime.connection.collectAsState()
     val testing by vm.testing.collectAsState()
+    val testTotal by vm.testTotal.collectAsState()
     val message by vm.message.collectAsState()
     var page by rememberSaveable { mutableStateOf(Page.MAIN) }
     var editing by rememberSaveable { mutableStateOf<String?>(null) }
@@ -132,7 +133,7 @@ fun OpenVpnScreen(onBack: () -> Unit, onStore: () -> Unit, onIran: () -> Unit, v
             onImport = { picker.launch(arrayOf("*/*")) },
         )
         Page.SERVERS -> ServersPage(
-            data = data, connection = connection, testing = testing, fa = fa,
+            data = data, connection = connection, testing = testing, testTotal = testTotal, fa = fa,
             onBack = { page = Page.MAIN },
             onTestAll = { if (testing.isEmpty()) vm.test(data.profiles) else vm.cancelTests() },
             onPick = { p ->
@@ -367,6 +368,7 @@ private fun ServersPage(
     data: OpenVpnData,
     connection: OpenVpnConnection,
     testing: Set<String>,
+    testTotal: Int,
     fa: Boolean,
     onBack: () -> Unit,
     onTestAll: () -> Unit,
@@ -386,9 +388,28 @@ private fun ServersPage(
             SettingsActionRow(tr("اتصال به سریع‌ترین", "Connect to the fastest"), Icons.Default.Bolt, Ios.Green,
                 enabled = testing.isEmpty(), onClick = onFastest)
         }
+        if (testing.isNotEmpty() && testTotal > 0) {
+            // How far the measurement has got, as a bar and a count: "12 of 47".
+            val done = (testTotal - testing.size).coerceIn(0, testTotal)
+            val shown by androidx.compose.animation.core.animateFloatAsState(done.toFloat() / testTotal, label = "ovpn-progress")
+            Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(tr("در حال سنجش…", "Measuring…"), color = Ios.SecondaryLabel, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                    Text(
+                        if (fa) "${faDigits(done)} از ${faDigits(testTotal)}" else "$done of $testTotal",
+                        color = Ios.SecondaryLabel, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                Box(Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)).background(Ios.Gray.copy(alpha = 0.25f))) {
+                    Box(Modifier.fillMaxWidth(shown).fillMaxHeight().clip(RoundedCornerShape(3.dp)).background(Ios.Blue))
+                }
+            }
+        }
         SettingsFooter(
             if (connection.active) tr("در حین اتصال سنجش ممکن نیست: از داخل تونل عدد درستی نمی‌دهد.", "Measuring is off while connected: from inside the tunnel it would not be the real figure.")
-            else tr("هر سرور با همان مسیری سنجیده می‌شود که اتصال از آن می‌رود: TCP مستقیم به سرور.", "Each server is measured on the route the connection takes: direct TCP to the server.")
+            else tr("هر سرور مثل خود اتصال سنجیده می‌شود: تا جایی که سرور جواب رمزنگاری (TLS) را واقعاً بفرستد. سروری که فقط جواب اولیه بدهد و بعد قطع شود، «مسدود» نشان داده می‌شود.",
+                "Each server is measured the way the connection runs: until it really sends its TLS answer. A server that answers only the first packet and is then cut shows as \"blocked\".")
         )
 
         SearchBox(search) { search = it }
@@ -462,6 +483,7 @@ private fun ServerRow(
                 color = when { millis < 350 -> Ios.Green; millis < 800 -> Ios.Orange; else -> Ios.Red },
                 style = TextStyle(textDirection = TextDirection.Ltr),
             )
+            fresh && probe?.error == "TLS_BLOCKED" -> Text(tr("مسدود", "Blocked"), fontSize = 13.sp, color = Ios.Red)
             fresh -> Text(tr("پاسخ نداد", "No answer"), fontSize = 13.sp, color = Ios.Red)
         }
         if (selected) {
@@ -721,7 +743,11 @@ private fun errorText(code: String): String = when {
     code == "IMPORT_FAILED" -> tr("فایل‌ها خوانده نشدند. حداکثر ۱۰۰ فایل، هرکدام زیر ۱ مگابایت.", "Could not read the files. At most 100 files, each under 1 MiB.")
     code == "PROFILE_UNSUPPORTED" -> tr("هسته این پروفایل را پشتیبانی نمی‌کند.", "The core does not support this profile.")
     code == "CORE_UNAVAILABLE" -> tr("هستهٔ OpenVPN بارگذاری نشد؛ استور را بررسی کنید.", "The OpenVPN core could not load; check the Store.")
+    code == "CONNECT_DEADLINE" -> tr("این سرور در زمان مشخص وصل نشد و اتصال لغو شد. سرور دیگری را امتحان کنید.", "This server did not connect in time, so the attempt was stopped. Try another server.")
     code == "CONNECTION_TIMEOUT" -> tr("سرور جواب داد ولی دست‌دادن کامل نشد. سرور دیگری را امتحان کنید.", "The server answered but the handshake did not finish. Try another server.")
     code == "ACCOUNT_UNAVAILABLE" -> tr("این حساب الان قابل استفاده نیست.", "This account cannot be used right now.")
     else -> tr("وصل نشد: ", "Could not connect: ") + code
 }
+
+/** Persian digits for a count shown in Persian text. */
+private fun faDigits(n: Int): String = n.toString().map { c -> if (c in '0'..'9') '۰' + (c - '0') else c }.joinToString("")

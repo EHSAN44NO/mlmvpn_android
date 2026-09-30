@@ -14,9 +14,18 @@ All notable changes to the MLM VPN Android app are documented here. Dates are in
   - Discovery proves every variant per app and keeps the fastest.
   - Links are sealed and read again every 12 h.
 - **MAE: whole-app routing (Android 10+).** A chosen app that is installed is routed by its UID (Xray `process` rules, ahead of the domain rules). All of its traffic takes its route: every API domain, fixed IPs and CDNs, not only the domains the registry knows. Each app also has a QUIC balancer; a route that cannot carry QUIC blocks it, so the app falls back to TCP at once.
-- **MAE: apps that check the phone itself.** TikTok also reads the SIM's country and the time zone, and no route changes those. MAE reads them too (no permission needed), and the app's row says what to change.
+- **MAE: a Cloudflare account first.** Every foreign exit MAE uses lives on the user's Cloudflare account, so MAE no longer starts without one. With none connected, the screen asks for it first, with the Cloud tab's own form and store: an account added here is the Cloud tab's too.
+- **MAE: check again.** "Check all again" on the list (pull-to-refresh does the same) and a check button on every app. Rows swipe like iOS lists: left for Delete, right for Check again; a long swipe acts at once.
+- **MAE: an app page.** The manage list opens one page per app: its route as a checkmark list, a switch for whether MAE carries it, Check again, and Remove alone at the bottom behind an iOS alert. The row of identical chips (pause, auto, every route, remove) is gone.
+- **Versioned Workers.** The MAE foreign exit, the US exit for Gemini (`GEMINI_EXIT_VERSION`) and the WARP identity relay (`WarpIdRelay.VERSION`) record the build deployed. A current one is not uploaded again on a tap (Reinstall asks first); an older one shows a red badge and "Update". Shared as `WorkerSetupRow` by Settings and the WARP / WireGuard pages.
+- **OpenVPN: a real delay test.** After the reset, the probe sends a TLS ClientHello inside the control channel (for TunnelBear cut and window-clamped exactly as `OpenVpnSplitRelay` does) and passes only when the server's certificate flight (2 KB+) or a TLS alert comes back. A server that answers the reset and is then cut shows "Blocked". Eight at a time, with a progress bar and a count.
+- **iOS-style update badge.** A red "1" on the Settings icon (dock, board and folders) and a "Software Update Available" row at the top of Settings replace the glyph in the status strip.
+- **MAE has its own home-screen icon.**
 
 ### Changed
+- **MAE: picking apps no longer rebuilds the tunnel on every tap.** Changes are held while the app picker is open and applied once when it closes, after the new apps' checks. Only newly picked apps are checked (first); every pick used to queue the whole list again. MAE's own apply-reconnect skips the post-connect canary, which could move apps that were fine while the tunnel warmed up.
+- **MAE: updating or reinstalling the foreign exit in place** (same address and key) no longer invalidates every app's decisions.
+- **MAE: the SIM / time-zone warning was removed from the app rows** (the user found it wrong on a phone where TikTok opened).
 - **MAE: TikTok.** Registry v7 marks it `requiresForeign`, so a foreign exit is always probed and required. Its web page answers from Iran, which used to rule a geo restriction out. Its missing API and CDN domains were added.
 - **MAE: `gvt1.com` and `ggpht.com` left the Gemini / Flow bundle.** They sent Play Store downloads and YouTube images through the quota-limited US exit.
 - **MAE: the repair ladder repairs.**
@@ -28,6 +37,8 @@ All notable changes to the MLM VPN Android app are documented here. Dates are in
 - **MAE: WARP runs one WireGuard session per core.** Three same-key outbounds per core, plus copies in the probe core, knocked each other off. The probe core has its own WARP identity.
 
 ### Fixed
+- **OpenVPN: stuck on "connecting".** A dead server kept the core dialling for ever, and a stop that took longer than 12 s left the page on "connecting"/"disconnecting" until the app was force-stopped. A stop now waits 5 s and then abandons the session (its tunnel and relay closed from outside); a connect not verified within 60 s ends with a reason.
+- **MAE: Google's apps (Maps, Gmail, Photos...) could not be ticked in the app picker**, while each tap still re-queued every app. They are now attached to Google (`extraPackages`, routed by UID) and untick cleanly.
 - **MAE: changes that never reached the tunnel.** A rotated WARP endpoint, a redeployed Worker or an edited config waited for the next manual connect. Meanwhile, the DoH path's timestamp forced a reconnect (and a FakeDNS reset) every 6 hours.
 - **MAE: routes locked out until restart.** The circuit breaker could hold a provider that was never probed, and it judged a route by whether a filtered app answered, so direct went "unavailable" after three filtered apps. It is now per route and network, and judges transport health.
 - **MAE: learning without internet.** A network that is not validated, or a captive portal, failed every route and blocked every app. Checks now wait until the network validates.
@@ -617,9 +628,17 @@ Optimized specifically for degraded/censored network conditions (server creation
   - از BPB، EDG، MLM، نترا و بقیه، اول روی آی‌پی تمیز IPv6 و اگر جواب نداد IPv4؛ سریع‌ترین انتخاب می‌شود.
   - وارپ، وایرگارد و ماسک آی‌پی ایران می‌دهند، پس برای این برنامه‌ها استفاده نمی‌شوند.
 - **مسیر کل برنامه (اندروید ۱۰ به بالا):** همهٔ ترافیک برنامهٔ انتخاب‌شده از مسیر خودش می‌رود، نه فقط دامنه‌های شناخته‌شده.
-- **تشخیص سیم‌کارت و منطقهٔ زمانی ایران** برای برنامه‌هایی مثل تیک‌تاک که خود گوشی را می‌خوانند، با راهنمای روشن روی ردیف برنامه.
+- **اول حساب کلادفلر:** موتور تطبیقی بدون حساب کلادفلر اجرا نمی‌شود و همان‌جا حساب را وصل می‌کنید؛ این حساب در بخش «ابری» هم اضافه می‌شود.
+- **بررسی مجدد:** دکمهٔ «بررسی مجدد همه»، کشیدن صفحه به پایین، و دکمهٔ بررسی کنار هر برنامه. ردیف‌ها مثل آیفون کشیده می‌شوند: چپ برای «حذف»، راست برای «بررسی مجدد».
+- **صفحهٔ هر برنامه** در «مدیریت اپلیکیشن‌ها»: مسیر با تیک، کلید روشن و خاموش، بررسی مجدد، و «حذف» قرمزِ جدا با تأیید.
+- **نسخه برای خروجی‌ها:** خروجی خارجی موتور، خروجی آمریکا برای جمینای و هویت وارپ از راه ورکر اگر به‌روز باشند با لمس دوباره نصب نمی‌شوند؛ نسخهٔ تازه با نشان قرمز اعلام می‌شود.
+- **سنجش واقعی OpenVPN:** تا جواب رمزنگاری سرور جلو می‌رود؛ سرورِ نیمه‌جواب «مسدود» نشان داده می‌شود. موازی، با نوار پیشرفت و شمارش.
+- **نشان به‌روزرسانی مثل آیفون** روی آیکون تنظیمات، و آیکون تازه برای موتور تطبیقی.
 
 **تغییر:**
+- **انتخاب برنامه دیگر اتصال را قطع و وصل نمی‌کند:** تغییرها یک بار موقع خروج از لیست اعمال می‌شوند و فقط برنامهٔ تازه بررسی می‌شود.
+- **نصب مجدد خروجی خارجی** دیگر همهٔ برنامه‌ها را از اول بررسی نمی‌کند.
+- هشدار سیم‌کارت و منطقهٔ زمانی از ردیف برنامه‌ها برداشته شد.
 - **نردبان «باز نشد» واقعاً ترمیم می‌کند.**
   - برای برنامه‌های تحریمی، پلهٔ اول مستقیم سراغ خروجی خارجی می‌رود.
   - ترمیم ۷ روز ماندگار است و بررسی دوره‌ای آن را برنمی‌گرداند.
@@ -630,6 +649,8 @@ Optimized specifically for degraded/censored network conditions (server creation
 - **وارپ** در هر هسته فقط یک نشست دارد و دیگر با خودش تداخل نمی‌کند.
 
 **رفع‌شده:**
+- **OpenVPN دیگر در «در حال اتصال» گیر نمی‌کند:** «لغو» حداکثر در ۵ ثانیه آزاد می‌شود و اتصالی که در ۶۰ ثانیه برقرار نشود، خودش لغو و اعلام می‌شود.
+- برنامه‌های گوگل (Maps، Gmail و…) در لیست انتخاب برنامه تیک نمی‌خوردند؛ حالا انتخاب می‌شوند.
 - تغییر مسیرها (چرخش وارپ، ورکر تازه، ویرایش کانفیگ) حالا به تونلِ روشن می‌رسد. قطع و وصل بی‌دلیلِ هر ۶ ساعت حذف شد.
 - مسیری که فقط برای یک برنامهٔ فیلترشده جواب نداده بود، دیگر برای همه خراب حساب نمی‌شود و تا اجرای دوبارهٔ برنامه قفل نمی‌ماند.
 - بدون اینترنت یا پشت صفحهٔ ورود وای‌فای، چیزی یاد گرفته نمی‌شود.

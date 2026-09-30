@@ -6,7 +6,30 @@ import android.net.VpnService
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.layout.absoluteOffset
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.AbsoluteAlignment
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
+import com.mlmvpn.scanner.ui.settings.SettingsFooter
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
@@ -61,7 +84,6 @@ import kotlinx.coroutines.flow.map
 import com.mlmvpn.scanner.MyVpnService
 import com.mlmvpn.scanner.R
 import com.mlmvpn.scanner.engines.mae.MaeEngine
-import com.mlmvpn.scanner.engines.mae.device.DeviceSignals
 import com.mlmvpn.scanner.engines.mae.model.FamilyPolicy
 import com.mlmvpn.scanner.engines.mae.model.ServiceDef
 import com.mlmvpn.scanner.engines.mae.policy.RepairLadder
@@ -152,6 +174,31 @@ private fun MaeContent(onBack: () -> Unit) {
     var page by rememberSaveable { mutableStateOf(Page.MAIN) }
     val ask by MaeEngine.pendingAsk.collectAsState()
 
+    // The Cloudflare account comes first: MAE's foreign exits all live on it. Shared with the
+    // Cloud tab, so an account added in either place is the other's too. Null while loading.
+    val cloud = remember { com.mlmvpn.scanner.data.CloudManager(context) }
+    val accounts by cloud.accountsFlow.collectAsState()
+    val hasAccount by produceState<Boolean?>(null, accounts) {
+        value = accounts.isNotEmpty() || withContext(Dispatchers.IO) { cloud.loadedAccounts().isNotEmpty() }
+    }
+    val phase by MyVpnService.connectionPhaseFlow.collectAsState()
+    val nodeId by MyVpnService.connectedNodeIdFlow.collectAsState()
+    val ours = nodeId == MaeEngine.NODE_ID
+    // A tunnel already up is never hidden behind the gate: it must stay possible to disconnect.
+    val live = ours && phase != MyVpnService.Phase.IDLE
+    when (hasAccount) {
+        null -> {
+            IosScreen(title = stringResource(R.string.mae_title), onBack = onBack, backLabel = stringResource(R.string.home)) {
+                Box(Modifier.fillMaxWidth().padding(top = 96.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = Ios.Blue)
+                }
+            }
+            return
+        }
+        false -> if (!live) { MaeCloudGate(onBack); return }
+        true -> Unit
+    }
+
     ask?.let { a ->
         SymptomDialog(a, onAnswer = { symptom -> MaeEngine.answerSymptom(a.serviceId, symptom) }, onDismiss = { MaeEngine.cancelAsk() })
     }
@@ -178,11 +225,8 @@ private fun MaeContent(onBack: () -> Unit) {
         Page.MAIN -> Unit
     }
 
-    val phase by MyVpnService.connectionPhaseFlow.collectAsState()
-    val nodeId by MyVpnService.connectedNodeIdFlow.collectAsState()
     val testing by MaeEngine.testingFlow.collectAsState()
     val views by MaeEngine.viewsFlow.collectAsState()
-    val ours = nodeId == MaeEngine.NODE_ID
     val connected = ours && phase == MyVpnService.Phase.CONNECTED
     val connecting = ours && phase == MyVpnService.Phase.CONNECTING
     // Set on the tap, cleared when the tunnel's state moves: building the config takes a moment,
@@ -190,6 +234,9 @@ private fun MaeContent(onBack: () -> Unit) {
     var busy by remember { mutableStateOf(false) }
     LaunchedEffect(phase, nodeId) { busy = false }
     LaunchedEffect(busy) { if (busy) { delay(12_000); busy = false } }
+    // One row open at a time, as in iOS lists: opening another closes the last.
+    var openRow by remember { mutableStateOf<String?>(null) }
+    var removing by remember { mutableStateOf<ServiceDef?>(null) }
 
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
         if (res.resultCode == Activity.RESULT_OK) MaeEngine.startTunnelAsync(context) else busy = false
@@ -200,7 +247,16 @@ private fun MaeContent(onBack: () -> Unit) {
         if (prep != null) launcher.launch(prep) else MaeEngine.startTunnelAsync(context)
     }
 
-    IosScreen(title = stringResource(R.string.mae_title), onBack = onBack, backLabel = stringResource(R.string.home)) {
+    removing?.let { def ->
+        MaeConfirmRemove(serviceName(context, def), stringResource(R.string.mae_remove_confirm_body),
+            onConfirm = { MaeEngine.remove(def.id) }, onDismiss = { removing = null })
+    }
+
+    IosScreen(
+        title = stringResource(R.string.mae_title), onBack = onBack, backLabel = stringResource(R.string.home),
+        // Pull down to check every app again -- the gesture iOS lists refresh with.
+        onRefresh = { MaeEngine.recheckAll(); delay(600) },
+    ) {
         Spacer(Modifier.height(24.dp))
         ConnectButton(connected, connecting || busy) {
             if (busy) return@ConnectButton
@@ -225,23 +281,159 @@ private fun MaeContent(onBack: () -> Unit) {
                 .pointerInput(Unit) { detectTapGestures(onLongPress = { page = Page.DIAGNOSTICS }) },
         )
 
-        SettingsSectionHeader(stringResource(R.string.mae_your_services))
+        // The section's own action on its trailing edge, where iOS puts "Edit" or "See All".
+        Row(
+            Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 22.dp, bottom = 3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(stringResource(R.string.mae_your_services), color = Ios.SecondaryLabel, fontSize = 13.sp, modifier = Modifier.weight(1f))
+            val idle = views.any { !it.paused } && testing.size < views.count { !it.paused }
+            Row(
+                Modifier.clip(RoundedCornerShape(50)).then(if (idle) Modifier.combinedClickableCompat { MaeEngine.recheckAll() } else Modifier)
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Default.Refresh, contentDescription = null, tint = if (idle) Ios.Blue else Ios.SecondaryLabel, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text(stringResource(R.string.mae_recheck_all), color = if (idle) Ios.Blue else Ios.SecondaryLabel, fontSize = 14.sp)
+            }
+        }
         SettingsGroup {
             views.forEachIndexed { i, v ->
                 if (i > 0) Separator()
                 androidx.compose.runtime.key(v.def.id) {
-                    ServiceRow(v, connected, onOk = {
-                        MaeEngine.feedbackOk(v.def.id)
-                        if (connected) Toast.makeText(context, context.getString(R.string.mae_thanks), Toast.LENGTH_SHORT).show()
-                    }, onFail = { MaeEngine.feedbackFailed(v.def.id) })
+                    SwipeActionsRow(
+                        id = v.def.id,
+                        openId = openRow,
+                        onOpenChange = { openRow = it },
+                        onDelete = { removing = v.def },
+                        onRecheck = { MaeEngine.recheck(v.def.id) },
+                    ) {
+                        ServiceRow(v, connected, testing = v.def.id in testing,
+                            onRecheck = { MaeEngine.recheck(v.def.id) },
+                            onOk = {
+                                MaeEngine.feedbackOk(v.def.id)
+                                if (connected) Toast.makeText(context, context.getString(R.string.mae_thanks), Toast.LENGTH_SHORT).show()
+                            }, onFail = { MaeEngine.feedbackFailed(v.def.id) })
+                    }
                 }
             }
         }
-        SettingsGroup(modifier = Modifier.padding(top = 20.dp)) {
+        SettingsFooter(stringResource(R.string.mae_swipe_hint))
+        SettingsGroup(modifier = Modifier.padding(top = 14.dp)) {
             SettingsRow(title = stringResource(R.string.mae_manage), icon = Icons.Default.Tune, tint = Ios.Blue,
                 onClick = { page = Page.MANAGE })
         }
         Spacer(Modifier.height(40.dp))
+    }
+}
+
+/**
+ * A row that swipes like one in iOS's Phone app: to the left it shows Delete, to the right Check
+ * again. A short swipe leaves the button open for a tap; a long one does it at once. Directions
+ * are physical, as the finger moves, whatever the layout direction.
+ */
+@Composable
+private fun SwipeActionsRow(
+    id: String,
+    openId: String?,
+    onOpenChange: (String?) -> Unit,
+    onDelete: () -> Unit,
+    onRecheck: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    val density = LocalDensity.current
+    val actionPx = with(density) { 88.dp.toPx() }
+    val offset = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    var width by remember { mutableIntStateOf(0) }
+    // Another row opened: this one closes.
+    LaunchedEffect(openId) { if (openId != id && offset.value != 0f) offset.animateTo(0f, tween(220)) }
+    // Unconditional: this row's buttons are only there while it is the open one, and a tap
+    // handler set up once would otherwise compare against the open row of its first frame.
+    fun close() { scope.launch { offset.animateTo(0f, tween(220)) }; onOpenChange(null) }
+
+    Box(
+        Modifier.fillMaxWidth().onSizeChanged { width = it.width }.clipToBounds()
+            .draggable(
+                orientation = Orientation.Horizontal,
+                state = rememberDraggableState { delta ->
+                    val limit = width * 0.92f
+                    scope.launch { offset.snapTo((offset.value + delta).coerceIn(-limit, limit)) }
+                },
+                onDragStarted = { if (openId != id) onOpenChange(id) },
+                onDragStopped = { velocity ->
+                    val v = offset.value
+                    when {
+                        // A long swipe does it at once, like iOS's full swipe.
+                        v < 0 && (-v > width * 0.55f || (velocity < -2500f && -v > actionPx)) -> {
+                            offset.animateTo(0f, tween(220)); onOpenChange(null); onDelete()
+                        }
+                        v > 0 && (v > width * 0.45f || (velocity > 2500f && v > actionPx)) -> {
+                            offset.animateTo(0f, tween(220)); onOpenChange(null); onRecheck()
+                        }
+                        v < 0 && -v > actionPx / 2 -> offset.animateTo(-actionPx, tween(200))
+                        v > 0 && v > actionPx / 2 -> offset.animateTo(actionPx, tween(200))
+                        else -> { offset.animateTo(0f, tween(200)); if (openId == id) onOpenChange(null) }
+                    }
+                },
+            ),
+    ) {
+        val shown = offset.value
+        if (shown < 0f) {
+            // Delete, on the physical right: revealed by a swipe to the left.
+            SwipeAction(
+                width = with(density) { (-shown).toDp() },
+                color = Ios.Red,
+                icon = Icons.Default.Delete,
+                label = stringResource(R.string.mae_remove),
+                modifier = Modifier.matchParentSize().wrapContentWidth(AbsoluteAlignment.Right),
+                onClick = { close(); onDelete() },
+            )
+        } else if (shown > 0f) {
+            // Check again, on the physical left: revealed by a swipe to the right.
+            SwipeAction(
+                width = with(density) { shown.toDp() },
+                color = Ios.Blue,
+                icon = Icons.Default.Refresh,
+                label = stringResource(R.string.mae_recheck),
+                modifier = Modifier.matchParentSize().wrapContentWidth(AbsoluteAlignment.Left),
+                onClick = { close(); onRecheck() },
+            )
+        }
+        Box(Modifier.fillMaxWidth().absoluteOffset { IntOffset(offset.value.roundToInt(), 0) }) {
+            content()
+            // While open, a tap on the row closes it rather than pressing what is under the finger.
+            if (shown != 0f) Box(Modifier.matchParentSize().pointerInput(Unit) { detectTapGestures { close() } })
+        }
+    }
+}
+
+@Composable
+private fun SwipeAction(
+    width: androidx.compose.ui.unit.Dp,
+    color: Color,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    modifier: Modifier,
+    onClick: () -> Unit,
+) {
+    Box(modifier) {
+        Box(
+            Modifier.fillMaxHeight().width(width).background(color).combinedClickableCompat(onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            // The label appears once there is room for it, as iOS's does.
+            if (width > 44.dp) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
+                    if (width > 70.dp) {
+                        Spacer(Modifier.height(2.dp))
+                        Text(label, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -303,7 +495,14 @@ private fun noteText(v: MaeEngine.ServiceView, n: MaeEngine.Note): String {
 }
 
 @Composable
-private fun ServiceRow(v: MaeEngine.ServiceView, connected: Boolean, onOk: () -> Unit, onFail: () -> Unit) {
+private fun ServiceRow(
+    v: MaeEngine.ServiceView,
+    connected: Boolean,
+    testing: Boolean,
+    onRecheck: () -> Unit,
+    onOk: () -> Unit,
+    onFail: () -> Unit,
+) {
     val context = LocalContext.current
     val name = serviceName(context, v.def)
     val (statusRes, dot) = when (v.phase) {
@@ -348,33 +547,32 @@ private fun ServiceRow(v: MaeEngine.ServiceView, connected: Boolean, onOk: () ->
                 Text(status, color = Ios.SecondaryLabel, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
             if (!v.paused) {
+                // Check again: a spinner while this app is being checked.
+                Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+                    if (testing) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Ios.Blue)
+                    else IconButton(onClick = onRecheck, modifier = Modifier.size(40.dp)) {
+                        Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.mae_recheck_cd, name), tint = Ios.Blue, modifier = Modifier.size(20.dp))
+                    }
+                }
                 // Feedback is about MAE's route: without MAE connected it would grade a route
                 // that carried nothing. Dimmed, and a tap says why.
                 val a = if (connected) 1f else 0.35f
-                IconButton(onClick = onOk, modifier = Modifier.size(48.dp).alpha(a)) {
-                    Icon(Icons.Outlined.ThumbUp, contentDescription = stringResource(R.string.mae_feedback_opened_cd, name), tint = Ios.Green)
+                IconButton(onClick = onOk, modifier = Modifier.size(40.dp).alpha(a)) {
+                    Icon(Icons.Outlined.ThumbUp, contentDescription = stringResource(R.string.mae_feedback_opened_cd, name), tint = Ios.Green, modifier = Modifier.size(20.dp))
                 }
-                IconButton(onClick = onFail, modifier = Modifier.size(48.dp).alpha(a)) {
-                    Icon(Icons.Outlined.ThumbDown, contentDescription = stringResource(R.string.mae_feedback_failed_cd, name), tint = Ios.Red)
+                IconButton(onClick = onFail, modifier = Modifier.size(40.dp).alpha(a)) {
+                    Icon(Icons.Outlined.ThumbDown, contentDescription = stringResource(R.string.mae_feedback_failed_cd, name), tint = Ios.Red, modifier = Modifier.size(20.dp))
                 }
             }
         }
-        val lines = buildList {
-            note?.let { add(noteText(v, it)) }
-            // What the phone itself says that the app checks: shown whenever it says Iran, so the
-            // user knows before trying route after route.
-            val blockers = (note?.blockers.orEmpty() + v.blockers).distinct()
-            if (!v.paused && blockers.isNotEmpty()) {
-                if (DeviceSignals.SIM in blockers) add(stringResource(R.string.mae_blocker_sim))
-                if (DeviceSignals.TIMEZONE in blockers) add(stringResource(R.string.mae_blocker_timezone))
-                add(stringResource(R.string.mae_blocker_hint))
-            }
-        }
-        if (lines.isNotEmpty()) {
-            val warn = v.blockers.isNotEmpty() ||
-                note?.kind?.let { it == MaeEngine.NoteKind.NO_FOREIGN_EXIT || it == MaeEngine.NoteKind.NOT_FOUND || it == MaeEngine.NoteKind.OFFLINE } == true
+        // What just happened to this app, in words. The SIM / time-zone warning that used to sit
+        // here is gone: the user found it wrong on a working phone (TikTok opened), and a warning
+        // that is wrong once is read as noise ever after.
+        if (note != null) {
+            val warn = note.kind == MaeEngine.NoteKind.NO_FOREIGN_EXIT || note.kind == MaeEngine.NoteKind.NOT_FOUND ||
+                note.kind == MaeEngine.NoteKind.OFFLINE
             Text(
-                lines.joinToString("\n"),
+                noteText(v, note),
                 color = if (warn) Ios.Orange else Ios.SecondaryLabel,
                 fontSize = 12.sp,
                 lineHeight = 18.sp,

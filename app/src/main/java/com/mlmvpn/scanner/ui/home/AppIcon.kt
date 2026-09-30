@@ -21,6 +21,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -73,6 +76,8 @@ fun AppIconTile(
     size: Dp,
     modifier: Modifier = Modifier,
     connected: Boolean = false,
+    /** iOS's red count badge, top-right. 0 draws nothing. */
+    badge: Int = 0,
 ) {
     // One Box around both shapes so the lamp is positioned against the tile rather than against
     // the cell: `size` is the tile, and the cell around it is wider by whatever the caption needs.
@@ -89,6 +94,44 @@ fun AppIconTile(
             }
             RunningLamp(size = size, modifier = Modifier.align(topLeft))
         }
+        if (badge > 0) {
+            // Top-RIGHT physically, the corner iOS gives the badge -- the opposite corner to the
+            // lamp, so an engine that is running and has news shows both.
+            val topRight = if (LocalLayoutDirection.current == LayoutDirection.Rtl) {
+                Alignment.TopStart
+            } else {
+                Alignment.TopEnd
+            }
+            CountBadge(count = badge, size = size, modifier = Modifier.align(topRight))
+        }
+    }
+}
+
+/**
+ * The red count badge iOS puts on an app with something waiting -- on Settings, "1" for a
+ * software update. Same red, same white bold figure, pulled half outside the corner.
+ */
+@Composable
+private fun CountBadge(count: Int, size: Dp, modifier: Modifier = Modifier) {
+    val d = (size * 0.36f).coerceIn(18.dp, 24.dp)
+    Box(
+        modifier = modifier
+            .absoluteOffset(x = d * 0.34f, y = -(d * 0.34f))
+            .height(d)
+            .widthIn(min = d)
+            .shadow(elevation = 2.dp, shape = CircleShape, clip = false)
+            .clip(RoundedCornerShape(50))
+            .background(Color(0xFFFF3B30))
+            .padding(horizontal = 5.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = if (count > 99) "99+" else count.toString(),
+            color = Color.White,
+            fontSize = (d.value * 0.58f).sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+        )
     }
 }
 
@@ -195,13 +238,17 @@ fun AppIconCell(
     connected: Boolean = false,
     onClick: (() -> Unit)? = null,
 ) {
+    // Settings wears the update badge, the way an iPhone announces a new iOS: no banner, no extra
+    // glyph in the status bar -- a red "1" on the Settings icon, wherever that icon sits.
+    val update by com.mlmvpn.scanner.update.UpdateChecker.updateAvailableFlow.collectAsState()
+    val badge = if (app.id == "settings" && update != null) 1 else 0
     Column(
         modifier = modifier.then(
             if (onClick != null) Modifier.noRippleClickable(onClick) else Modifier
         ),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        AppIconTile(app = app, size = tileSize, connected = connected)
+        AppIconTile(app = app, size = tileSize, connected = connected, badge = badge)
         if (showLabel) {
             Spacer(Modifier.height(6.dp))
             TileCaption(stringResource(app.labelRes))

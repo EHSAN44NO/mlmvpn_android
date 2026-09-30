@@ -31,32 +31,32 @@ internal fun GeminiExitRow() {
     val scope = rememberCoroutineScope()
     val cloud = remember { CloudManager(context) }
     val accounts by cloud.accountsFlow.collectAsState()
-    var ready by remember { mutableStateOf(XrayJsonGenerator.geminiExit != null) }
     var progress by remember { mutableStateOf<String?>(null) }
+    // The account that carries it, and the build it carries: a tap on an exit that is already on
+    // this app's build asks before uploading it again.
+    val carrier = accounts.firstOrNull { it.geminiExitStatus == "deployed" }
+    val deployed = if (XrayJsonGenerator.geminiExit == null) 0 else carrier?.let { cloud.geminiExitBuild(it) } ?: 1
 
-    SettingsRow(
+    WorkerSetupRow(
         title = stringResource(R.string.settings_gemini_exit),
-        subtitle = progress ?: stringResource(if (ready) R.string.settings_gemini_exit_on else R.string.settings_gemini_exit_off),
         icon = Icons.Default.Public,
         tint = Ios.Indigo,
-        value = when {
-            progress != null -> "…"
-            ready -> stringResource(R.string.on_2)
-            else -> stringResource(R.string.settings_gemini_exit_setup)
-        },
-        onClick = click@{
-            if (progress != null) return@click
-            // The account that already carries it, so a second tap updates rather than duplicates.
-            val account = accounts.firstOrNull { it.geminiExitStatus == "deployed" } ?: accounts.firstOrNull()
+        deployed = deployed,
+        latest = CloudManager.GEMINI_EXIT_VERSION,
+        progress = progress,
+        subtitleOff = stringResource(R.string.settings_gemini_exit_off),
+        subtitleOn = stringResource(R.string.settings_gemini_exit_on),
+        onDeploy = deploy@{
+            // The account that already carries it, so a second deploy updates rather than duplicates.
+            val account = carrier ?: accounts.firstOrNull()
             if (account == null) {
                 Toast.makeText(context, S(R.string.gemini_exit_no_account), Toast.LENGTH_LONG).show()
-                return@click
+                return@deploy
             }
             progress = S(R.string.gemini_exit_uploading)
             scope.launch {
                 val (_, message) = cloud.deployGeminiExit(account) { _, step -> scope.launch { progress = step } }
                 progress = null
-                ready = XrayJsonGenerator.geminiExit != null
                 Toast.makeText(context, message, Toast.LENGTH_LONG).show()
             }
         },

@@ -145,7 +145,7 @@ object HomeDestinations {
         // «گف»: Geph's own network and engine, with the Windows desktop's artwork.
         HomeApp("geph",              R.string.home_geph,          Icons.Default.Public,        Blue,   imageRes = R.drawable.ic_app_geph),
         HomeApp("quick",             R.string.home_quick,         Icons.Default.RocketLaunch,  Blue),
-        HomeApp("mae",               R.string.mae_short,          Icons.Default.AutoAwesome,   Blue),
+        HomeApp("mae",               R.string.mae_short,          Icons.Default.AutoAwesome,   Blue, imageRes = R.drawable.ic_app_mae),
         // A cloud server on the user's own GitHub allowance, reached through a Worker on their own
         // Cloudflare -- the Windows app's «گیت‌هاب تانل», whole. Beside Quick Connect: both are
         // "get me online", and this one is the fast one when the free networks are slow.

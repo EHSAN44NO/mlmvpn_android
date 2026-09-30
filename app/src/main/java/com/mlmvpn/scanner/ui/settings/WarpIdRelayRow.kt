@@ -31,25 +31,24 @@ internal fun WarpIdRelayRow() {
     val scope = rememberCoroutineScope()
     val cloud = remember { CloudManager(context) }
     val accounts by cloud.accountsFlow.collectAsState()
-    var ready by remember { mutableStateOf(WarpIdRelay.isReady(context)) }
     var progress by remember { mutableStateOf<String?>(null) }
+    // Read again after every deploy (progress back to null).
+    val deployed = remember(progress) { WarpIdRelay.deployedVersion(context) }
 
-    SettingsRow(
+    WorkerSetupRow(
         title = stringResource(R.string.settings_warp_id),
-        subtitle = progress ?: stringResource(if (ready) R.string.settings_warp_id_on else R.string.settings_warp_id_off),
         icon = Icons.Default.VpnKey,
         tint = Ios.Orange,
-        value = when {
-            progress != null -> "…"
-            ready -> stringResource(R.string.on_2)
-            else -> stringResource(R.string.settings_warp_id_setup)
-        },
-        onClick = click@{
-            if (progress != null) return@click
+        deployed = deployed,
+        latest = WarpIdRelay.VERSION,
+        progress = progress,
+        subtitleOff = stringResource(R.string.settings_warp_id_off),
+        subtitleOn = stringResource(R.string.settings_warp_id_on),
+        onDeploy = deploy@{
             val account = accounts.firstOrNull { it.accountId == WarpIdRelay.accountId(context) } ?: accounts.firstOrNull()
             if (account == null) {
                 Toast.makeText(context, S(R.string.warp_id_no_account), Toast.LENGTH_LONG).show()
-                return@click
+                return@deploy
             }
             progress = "…"
             scope.launch {
@@ -57,7 +56,6 @@ internal fun WarpIdRelayRow() {
                     WarpIdRelay.deploy(context, account) { step -> scope.launch { progress = step } }
                 }
                 progress = null
-                ready = WarpIdRelay.isReady(context)
                 Toast.makeText(context, message, Toast.LENGTH_LONG).show()
             }
         },

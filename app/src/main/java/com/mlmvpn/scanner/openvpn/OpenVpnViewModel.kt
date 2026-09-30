@@ -16,6 +16,8 @@ class OpenVpnViewModel(app: Application) : AndroidViewModel(app) {
     val data = state.asStateFlow()
     val message = MutableStateFlow<String?>(null)
     val testing = MutableStateFlow<Set<String>>(emptySet())
+    /** How many servers the running measurement started with, for its progress bar. */
+    val testTotal = MutableStateFlow(0)
     private var probes: Job? = null
     private val repo get() = OpenVpnRepository.get(getApplication())
     init { viewModelScope.launch(Dispatchers.IO) { repo.data.collect { state.value = it } } }
@@ -63,8 +65,11 @@ class OpenVpnViewModel(app: Application) : AndroidViewModel(app) {
     fun test(profiles: List<Profile>) {
         if (probes?.isActive == true) return
         testing.value = profiles.map { it.id }.toSet()
+        testTotal.value = testing.value.size
         probes = viewModelScope.launch {
-            val semaphore = Semaphore(4)
+            // Eight at a time: each one waits for a real TLS answer (a few seconds at worst), so
+            // the whole list is done in about the time four took for a bare reset.
+            val semaphore = Semaphore(8)
             try {
                 coroutineScope {
                     profiles.map { p -> launch {

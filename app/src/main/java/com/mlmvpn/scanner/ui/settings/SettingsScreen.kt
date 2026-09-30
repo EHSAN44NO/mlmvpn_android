@@ -482,6 +482,23 @@ fun SettingsScreen(
                 onAccountsClick = onOpenCloud,
             )
 
+            // iOS puts "Software Update Available" in a card of its own right under the account,
+            // with the same red "1" the Settings icon wears on the home screen.
+            val update by com.mlmvpn.scanner.update.UpdateChecker.updateAvailableFlow.collectAsState()
+            if (update != null) {
+                Spacer(Modifier.height(14.dp))
+                SettingsGroup {
+                    SettingsRow(
+                        title = stringResource(R.string.settings_update_available),
+                        subtitle = update?.versionName,
+                        icon = Icons.Default.SystemUpdate,
+                        tint = Ios.Gray,
+                        badge = 1,
+                        onClick = { push(P_UPDATE) },
+                    )
+                }
+            }
+
             Spacer(Modifier.height(14.dp))
             SettingsGroup {
                 SettingsRow(
@@ -674,6 +691,7 @@ fun SettingsScreen(
                     subtitle = stringResource(R.string.settings_software_update_desc),
                     icon = Icons.Default.SystemUpdate,
                     tint = Ios.Blue,
+                    badge = if (update != null) 1 else 0,
                     onClick = { push(P_UPDATE) },
                 )
                 Separator()

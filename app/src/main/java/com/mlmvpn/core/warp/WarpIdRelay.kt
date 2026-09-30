@@ -89,6 +89,19 @@ object WarpIdRelay {
 
     fun isReady(context: Context): Boolean = base(context) != null
 
+    /**
+     * The relay's build. Bump it whenever assets/warp_id_worker.js changes: a relay on an older
+     * build is offered the update, and one on this build is left alone -- tapping the row used to
+     * upload the worker again every time.
+     */
+    const val VERSION = 1
+
+    /** The build deployed, 0 when none. A relay deployed before builds were kept is build 1. */
+    fun deployedVersion(context: Context): Int =
+        if (!isReady(context)) 0 else prefs(context).getInt("version", 1)
+
+    fun upToDate(context: Context): Boolean = deployedVersion(context) >= VERSION
+
     fun accountId(context: Context): String? = prefs(context).getString("account", null)
 
     // ── putting the Worker on the account ─────────────────────────────────────────────────────
@@ -142,6 +155,7 @@ object WarpIdRelay {
                 .putString("key", key)
                 .putString("script", name)
                 .putString("account", account.accountId)
+                .putInt("version", VERSION)
                 .apply()
             true to fa(
                 "آماده است. از این به بعد هویت وایرگارد، وارپ در وارپ و ماسک از راه ورکر خودتان ساخته می‌شود.",

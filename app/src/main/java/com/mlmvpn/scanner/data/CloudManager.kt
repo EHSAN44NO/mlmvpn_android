@@ -32,6 +32,13 @@ class CloudManager private constructor(private val context: Context) {
         /** The Gemini exit's Durable Object class, its creating migration tag, and where it lives. */
         private const val GEMINI_EXIT_CLASS = "GeminiExit"
         private const val GEMINI_EXIT_DO_TAG = "v1"
+
+        /**
+         * The Gemini exit's build. Bump it whenever assets/gemini_exit_worker.js changes: an
+         * account on an older build is offered the update, and one on this build is left alone --
+         * tapping the row used to redeploy every time.
+         */
+        const val GEMINI_EXIT_VERSION = 2
         private const val GEMINI_EXIT_HINT = "enam"
 
         operator fun invoke(context: Context): CloudManager {
@@ -143,6 +150,7 @@ class CloudManager private constructor(private val context: Context) {
                         geminiExitId = obj.optString("geminiExitId", "").ifBlank { null },
                         geminiExitPath = obj.optString("geminiExitPath", "").ifBlank { null },
                         geminiExitStatus = obj.optString("geminiExitStatus", "idle"),
+                        geminiExitVersion = obj.optInt("geminiExitVersion", 0),
                         geminiExitDoTag = obj.optString("geminiExitDoTag", "").ifBlank { null },
                         poolWorkerUrl = obj.optString("poolWorkerUrl", ""),
                         poolDbId = obj.optString("poolDbId", ""),
@@ -254,6 +262,7 @@ class CloudManager private constructor(private val context: Context) {
                 put("geminiExitId", account.geminiExitId ?: "")
                 put("geminiExitPath", account.geminiExitPath ?: "")
                 put("geminiExitStatus", account.geminiExitStatus)
+                put("geminiExitVersion", account.geminiExitVersion)
                 put("geminiExitDoTag", account.geminiExitDoTag ?: "")
                 put("poolWorkerUrl", account.poolWorkerUrl ?: "")
                 put("poolDbId", account.poolDbId ?: "")
@@ -2947,6 +2956,7 @@ class CloudManager private constructor(private val context: Context) {
             account.geminiExitId = exitId
             account.geminiExitPath = exitPath
             account.geminiExitStatus = "deployed"
+            account.geminiExitVersion = GEMINI_EXIT_VERSION
             saveAccounts()
             com.mlmvpn.scanner.utils.NetworkSettings.setGeminiExit(
                 context,
@@ -2961,6 +2971,17 @@ class CloudManager private constructor(private val context: Context) {
         }
     }
 
+    /**
+     * The Gemini exit build deployed on [a], 0 when none. An exit deployed before builds were kept
+     * on the account is build 2 when MAE already brought it up to date (its own marker), else 1.
+     */
+    fun geminiExitBuild(a: CloudAccount): Int = when {
+        a.geminiExitStatus != "deployed" -> 0
+        a.geminiExitVersion > 0 -> a.geminiExitVersion
+        context.getSharedPreferences("mae", Context.MODE_PRIVATE).getInt("usx_script_ver", 0) >= 2 -> 2
+        else -> 1
+    }
+
     /** A path nobody guesses: the exit answers nothing anywhere else. */
     private fun randomExitPath(): String {
         val chars = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -2972,6 +2993,20 @@ class CloudManager private constructor(private val context: Context) {
     private fun cloudflareMessage(body: String): String = runCatching {
         JSONObject(body).optJSONArray("errors")?.optJSONObject(0)?.optString("message")?.takeIf { it.isNotBlank() }
     }.getOrNull() ?: body.take(160)
+
+    /**
+     * The accounts, loaded now if the constructor's background load has not finished yet -- for
+     * a caller that must not mistake "not loaded" for "no account" (MAE's account gate).
+     */
+    fun loadedAccounts(): List<CloudAccount> {
+        if (accountsFlow.value.isEmpty()) {
+            runCatching {
+                loadAccounts()
+                _accountsFlow.value = accounts.toList()
+            }
+        }
+        return accountsFlow.value
+    }
 
     /** The relay URLs across every connected account, for the repository to try in turn. */
     fun relayUrls(): List<String> {

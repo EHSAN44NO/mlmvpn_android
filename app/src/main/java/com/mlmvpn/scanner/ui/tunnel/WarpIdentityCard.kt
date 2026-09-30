@@ -179,14 +179,17 @@ internal fun ColumnScope.WarpIdentitySection(transport: Transport, refresh: Any?
             onClick = null,
         )
         Separator()
-        SettingsRow(
+        // Knows its build: a relay already on this app's build is not uploaded again on a tap.
+        com.mlmvpn.scanner.ui.settings.WorkerSetupRow(
             title = tr("ساخت هویت از راه ورکر", "Make identity through a worker"),
             icon = Icons.Default.VpnKey,
             tint = Ios.Orange,
-            value = step ?: if (relay) tr("فعال", "On") else tr("راه‌اندازی", "Set up"),
-            onClick = {
-                if (step == null) setUpRelay(context, scope, { step = it }) { bump++ }
-            },
+            deployed = remember(refresh, bump, step) { WarpIdRelay.deployedVersion(context) },
+            latest = WarpIdRelay.VERSION,
+            progress = step,
+            subtitleOff = tr("خاموش", "Off"),
+            subtitleOn = tr("فعال", "On"),
+            onDeploy = { if (step == null) setUpRelay(context, scope, { step = it }) { bump++ } },
         )
     }
     SettingsFooter(

@@ -53,9 +53,39 @@ fun changelogVersions(isFa: Boolean): List<ChangelogVersion> =
                             Icons.Default.ThumbsUpDown
                         ),
                         ChangelogItem(
-                            "سیم‌کارت و منطقهٔ زمانی",
-                            "تیک‌تاک کشور سیم‌کارت و منطقهٔ زمانی گوشی را هم می‌خواند، و این را هیچ مسیری درست نمی‌کند. موتور حالا این را تشخیص می‌دهد و روی ردیف برنامه راهنمایی می‌کند: سیم‌کارت ایرانی را موقتاً غیرفعال کنید یا منطقهٔ زمانی را عوض کنید، بعد برنامه را کامل ببندید و دوباره باز کنید.",
-                            Icons.Default.SimCard
+                            "اول حساب کلادفلر",
+                            "موتور تطبیقی بدون حساب کلادفلر کار نمی‌کند، چون خروجی‌های خارجی‌اش روی همان حساب ساخته می‌شوند. اگر حسابی وصل نباشد، همان‌جا وصلش می‌کنید و در بخش «ابری» هم اضافه می‌شود.",
+                            Icons.Default.Cloud
+                        ),
+                        ChangelogItem(
+                            "افزودن برنامه بدون قطع و وصل",
+                            "هنگام انتخاب برنامه‌های دیگر، اتصال دیگر با هر لمس قطع و وصل نمی‌شود و تغییرها یک بار موقع خروج از لیست اعمال می‌شوند. فقط برنامهٔ تازه بررسی می‌شود، نه کل لیست. برنامه‌های گوگل مثل Maps و Gmail هم حالا انتخاب می‌شوند.",
+                            Icons.Default.AddCircle
+                        ),
+                        ChangelogItem(
+                            "بررسی مجدد، و کشیدن ردیف‌ها مثل آیفون",
+                            "دکمهٔ «بررسی مجدد همه» و یک دکمهٔ بررسی کنار هر برنامه اضافه شد؛ کشیدن صفحه به پایین هم همه را بررسی می‌کند. ردیف برنامه را به چپ بکشید تا «حذف» و به راست تا «بررسی مجدد» ظاهر شود.",
+                            Icons.Default.Refresh
+                        ),
+                        ChangelogItem(
+                            "مدیریت برنامه‌ها با طراحی تازه",
+                            "هر برنامه صفحهٔ خودش را دارد: انتخاب مسیر با تیک، کلید روشن و خاموش، بررسی مجدد، و «حذف» قرمزِ جدا در پایین که قبلش تأیید می‌گیرد. هشدار سیم‌کارت و منطقهٔ زمانی هم از ردیف برنامه‌ها برداشته شد.",
+                            Icons.Default.Tune
+                        ),
+                        ChangelogItem(
+                            "خروجی‌ها شمارهٔ نسخه دارند",
+                            "خروجی خارجی موتور تطبیقی، خروجی آمریکا برای جمینای و ساخت هویت وارپ از راه ورکر حالا نسخه دارند. اگر به‌روز باشند با هر لمس از نو نصب نمی‌شوند و فقط «نصب مجدد» با پرسش می‌آید؛ نسخهٔ تازه با نشان قرمز اعلام می‌شود. نصب مجدد خروجی هم دیگر برنامه‌ها را از اول بررسی نمی‌کند.",
+                            Icons.Default.NewReleases
+                        ),
+                        ChangelogItem(
+                            "OpenVPN: سنجش واقعی و لغو مطمئن",
+                            "سنجش تأخیر حالا تا جواب رمزنگاری سرور جلو می‌رود و سروری که فقط جواب اول را بدهد «مسدود» نشان داده می‌شود. سنجش موازی و سریع‌تر است و نوار پیشرفت با شمارش دارد. اتصال به سرور خراب دیگر در «در حال اتصال» گیر نمی‌کند: «لغو» حداکثر در ۵ ثانیه آزاد می‌شود و اگر سرور در ۶۰ ثانیه وصل نشود، خودش لغو و اعلام می‌شود.",
+                            Icons.Default.VpnKey
+                        ),
+                        ChangelogItem(
+                            "نشان به‌روزرسانی مثل آیفون",
+                            "به‌جای آیکون کوچک بالای صفحه، حالا یک عدد قرمز روی آیکون تنظیمات می‌آید و بالای تنظیمات ردیف «به‌روزرسانی نرم‌افزار آماده است» دیده می‌شود. موتور تطبیقی هم آیکون تازه گرفت.",
+                            Icons.Default.SystemUpdate
                         ),
                         ChangelogItem(
                             "هوشمندتر و دقیق‌تر",
@@ -1646,9 +1676,39 @@ fun changelogVersions(isFa: Boolean): List<ChangelogVersion> =
                             Icons.Default.ThumbsUpDown
                         ),
                         ChangelogItem(
-                            "SIM card and time zone",
-                            "TikTok also reads the phone's SIM country and time zone, and no route can change those. The engine now detects this and says on the app's row what to do: disable the Iranian SIM for a while or change the time zone, then close the app completely and open it again.",
-                            Icons.Default.SimCard
+                            "A Cloudflare account first",
+                            "The adaptive engine does not run without a Cloudflare account, because its foreign exits are built on it. With no account connected, you connect one right there, and it is added to «Cloud» too.",
+                            Icons.Default.Cloud
+                        ),
+                        ChangelogItem(
+                            "Adding apps without reconnecting",
+                            "Picking other apps no longer reconnects the tunnel on every tap; the changes are applied once when you leave the list. Only the new app is checked, not the whole list. Google's apps such as Maps and Gmail can now be picked.",
+                            Icons.Default.AddCircle
+                        ),
+                        ChangelogItem(
+                            "Check again, and iPhone-style swipes",
+                            "A “Check all again” button and a check button beside each app were added; pulling the page down checks them all too. Swipe an app's row left for Delete and right for Check again.",
+                            Icons.Default.Refresh
+                        ),
+                        ChangelogItem(
+                            "A redesigned app manager",
+                            "Each app has its own page: its route as a checkmark list, an on/off switch, Check again, and a red Remove on its own at the bottom that asks first. The SIM and time-zone warning was taken off the app rows.",
+                            Icons.Default.Tune
+                        ),
+                        ChangelogItem(
+                            "Exits have version numbers",
+                            "The adaptive engine's foreign exit, the US exit for Gemini and the WARP identity worker now have versions. When up to date they are not reinstalled on every tap: only a Reinstall that asks first; a newer version shows a red badge. Reinstalling the exit no longer re-checks every app from scratch.",
+                            Icons.Default.NewReleases
+                        ),
+                        ChangelogItem(
+                            "OpenVPN: real measuring, reliable cancel",
+                            "The delay test now goes as far as the server's TLS answer, and a server that answers only the first packet shows as “Blocked”. Measuring runs in parallel, faster, with a progress bar and a count. Connecting to a dead server no longer sticks on “Connecting”: Cancel frees it within 5 seconds, and a server that has not connected within 60 seconds is stopped with a message.",
+                            Icons.Default.VpnKey
+                        ),
+                        ChangelogItem(
+                            "An iPhone-style update badge",
+                            "Instead of the small icon at the top of the screen, a red number now appears on the Settings icon, and a “Software Update Available” row at the top of Settings. The adaptive engine also has a new icon.",
+                            Icons.Default.SystemUpdate
                         ),
                         ChangelogItem(
                             "Smarter and more accurate",

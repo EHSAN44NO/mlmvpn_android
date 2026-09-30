@@ -62,8 +62,16 @@ class OpenVpnService : VpnService() {
                     continue
                 }
                 session?.stop()
-                val stopped = withTimeoutOrNull(12_000) { running?.join(); true } == true
-                if (!stopped) { notifyStatus("DISCONNECTING"); continue }
+                val stopped = withTimeoutOrNull(STOP_GRACE_MS) { running?.join(); true } == true
+                if (!stopped) {
+                    // The core did not let go (a dead server it keeps dialling, a blocked
+                    // handshake). Waiting on it left the page on "connecting" / "disconnecting"
+                    // for good -- users had to force-stop the app. The session is abandoned
+                    // instead: its tunnel and relay are closed from here, the state is freed at
+                    // once, and the stuck thread cleans up after itself whenever it returns.
+                    session?.abandon()
+                    OpenVpnRuntime.mutable.value = OpenVpnConnection()
+                }
                 running = null; session = null
                 if (command.profile == null || command.account == null) {
                     OpenVpnRuntime.mutable.value = OpenVpnConnection()
@@ -130,6 +138,24 @@ class OpenVpnService : VpnService() {
         session = newSession
         OpenVpnRuntime.mutable.value = OpenVpnConnection(ConnectionPhase.CONNECTING, profile, account)
         running = scope.launch(Dispatchers.IO) { newSession.run() }
+        // A server that never answers used to keep the core dialling for ever, with the page on
+        // "connecting". Not connected (data verified) by the deadline: it ends with a reason.
+        scope.launch {
+            delay(CONNECT_DEADLINE_MS)
+            if (session === newSession && OpenVpnRuntime.connection.value.phase != ConnectionPhase.CONNECTED &&
+                OpenVpnRuntime.connection.value.connectedAt == null) {
+                newSession.timeOut()
+                delay(STOP_GRACE_MS)
+                // Still not returned: given up on, like a stop that hangs.
+                if (session === newSession) {
+                    newSession.abandon()
+                    running = null; session = null
+                    OpenVpnRuntime.mutable.value = OpenVpnConnection(ConnectionPhase.ERROR, profile, account, error = "CONNECT_DEADLINE")
+                    if (latestStartId == newSession.requestId) stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelfResult(newSession.requestId)
+                }
+            }
+        }
     }
     override fun onDestroy() {
         shuttingDown = true
@@ -148,6 +174,22 @@ class OpenVpnService : VpnService() {
         private var builder: Builder? = null
         private var retainedTun: ParcelFileDescriptor? = null
         private var terminal: String? = null
+        /** The connect ran out of time: ends like a failure, with a reason on the page. */
+        fun timeOut() {
+            timedOut = true
+            if (terminal == null) terminal = "CONNECT_DEADLINE"
+            stop()
+        }
+        @Volatile private var timedOut = false
+
+        /** Given up on: everything this session holds is closed from outside its own thread. */
+        fun abandon() {
+            stopped.set(true)
+            handle.get().takeIf { it != 0L }?.let { runCatching { OpenVpnNative.stop(it) } }
+            relay?.let { r -> relay = null; runCatching { r.close() } }
+            synchronized(this) { runCatching { retainedTun?.close() }; retainedTun = null }
+        }
+
         fun stop() {
             stopped.set(true)
             if (session === this && OpenVpnRuntime.connection.value.active) {
@@ -195,11 +237,11 @@ class OpenVpnService : VpnService() {
             catch (_: LinkageError) { terminal = "CORE_UNAVAILABLE" }
             finally {
                 relay?.let { r -> relay = null; runCatching { r.close() } }
-                retainedTun?.close(); retainedTun = null
+                synchronized(this) { runCatching { retainedTun?.close() }; retainedTun = null }
                 handle.getAndSet(0).takeIf { it != 0L }?.let { OpenVpnNative.release(it) }
                 if (session === this) {
                     val state = OpenVpnRuntime.connection.value
-                    OpenVpnRuntime.mutable.value = state.copy(phase = if (terminal != null && !stopped.get()) ConnectionPhase.ERROR else ConnectionPhase.DISCONNECTED, error = terminal)
+                    OpenVpnRuntime.mutable.value = state.copy(phase = if (terminal != null && (!stopped.get() || timedOut)) ConnectionPhase.ERROR else ConnectionPhase.DISCONNECTED, error = terminal)
                     if (!shuttingDown) notifyStatus(terminal ?: "DISCONNECTED")
                 }
                 commands.trySend(Command(finished = this))
@@ -315,5 +357,9 @@ class OpenVpnService : VpnService() {
         const val DISCONNECT = "com.mlmvpn.openvpn.DISCONNECT"
         private const val CHANNEL = "mlmvpn_openvpn"
         private const val NOTIFICATION = 610
+        /** How long a stop may take before the session is abandoned. */
+        private const val STOP_GRACE_MS = 5_000L
+        /** Handshake plus the data check (up to ~22 s) on a slow network, and no longer. */
+        private const val CONNECT_DEADLINE_MS = 60_000L
     }
 }

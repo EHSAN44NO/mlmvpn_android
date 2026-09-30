@@ -345,9 +345,18 @@ object MaeEngine {
             id.startsWith("app:") -> s.customApps[id]?.let { a -> ServiceRegistry.customApp(id, a.pkg, a.label, a.domain) }
             else -> null
         } ?: return null
-        // An app or site also covers the domains its pages were seen loading from -- registry apps
-        // too: their learning used to be fetched and then never used. Another picked app's own
-        // domains stay with that app.
+        // Apps the user attached to this one (Google Maps under Google): their per-app rule too.
+        val pkgs = s.extraPackages[id].orEmpty().filter { it !in base.packages }
+        val withPkgs = if (pkgs.isEmpty()) base else base.copy(packages = base.packages + pkgs)
+        return withHosts(s, id, withPkgs)
+    }
+
+    /**
+     * An app or site also covers the domains its pages were seen loading from -- registry apps
+     * too: their learning used to be fetched and then never used. Another picked app's own
+     * domains stay with that app.
+     */
+    private fun withHosts(s: MaeState, id: String, base: ServiceDef): ServiceDef {
         val extra = s.siteHosts[id].orEmpty()
         if (extra.isEmpty()) return base
         val others = s.selected.asSequence().filter { it.id != id }.mapNotNull { registry.get(it.id) }.flatMap { it.domains.asSequence() }.toSet()
@@ -375,8 +384,14 @@ object MaeEngine {
         }
         // Google's own apps (Maps, Gmail, Photos...) talk to Google's domains: the Google entry
         // covers them. Guessing used to make "Photos" a site called google.com, beside Google.
+        // Picking one attaches its package to Google, so it is ticked and routed as Google.
         if (pkg.startsWith("com.google.android.")) registry.get("google")?.let { g ->
+            store.update { s ->
+                val have = s.extraPackages[g.id].orEmpty()
+                if (pkg in have || pkg in g.packages) s else s.copy(extraPackages = s.extraPackages + (g.id to (have + pkg)))
+            }
             setSelection(store.current.selected.map { it.id } + g.id)
+            scope.launch { applyIfConnected() }
             return AddApp.Added(g.id)
         }
         // A guess that is another known app's domain would steal that app's traffic.
@@ -429,7 +444,7 @@ object MaeEngine {
                 diagnoses = s.diagnoses.filterKeys { !it.startsWith("$id|") }, siteHosts = s.siteHosts - id)
         }
         Log.i(TAG, "app $pkg -> $domain${if (pick == null) " (unconfirmed)" else ""}")
-        enqueue(id)
+        enqueue(id, priority = true)
         applyIfConnected()
     }
 
@@ -502,13 +517,70 @@ object MaeEngine {
     }
 
     fun setSelection(ids: List<String>) {
+        val had = store.current.selected.map { it.id }.toSet()
         store.update { s ->
             val keep = s.selected.associateBy { it.id }
             s.copy(onboarded = true, selected = ids.distinct().map { keep[it] ?: SelectedService(it) })
         }
-        ids.forEach { enqueue(it) }
-        scope.launch { applyIfConnected() }
+        // Only the apps just picked are checked, first. Every app used to be queued again on each
+        // pick, so adding one app looked like the whole list starting over.
+        val added = ids.distinct().filter { it !in had }
+        added.forEach { enqueue(it, priority = true) }
+        if (added.isNotEmpty() || had.size != ids.distinct().size) scope.launch { applyIfConnected() }
     }
+
+    /**
+     * Unticks one of the phone's apps. One attached to another app (Google Maps under Google) is
+     * just detached; otherwise the app it belongs to is removed with everything learned.
+     */
+    fun detachPackage(pkg: String): Boolean {
+        val owner = store.current.extraPackages.entries.firstOrNull { pkg in it.value }?.key ?: return false
+        store.update { s ->
+            val left = s.extraPackages[owner].orEmpty() - pkg
+            s.copy(extraPackages = if (left.isEmpty()) s.extraPackages - owner else s.extraPackages + (owner to left))
+        }
+        scope.launch { applyIfConnected() }
+        return true
+    }
+
+    /** The user asked for this app to be checked again now: shown as checking at once. */
+    fun recheck(id: String) = enqueue(id, incident = true)
+
+    /**
+     * Every app checked again, as routine checks: shown as checking at once, the new decisions
+     * applied together once they are all done -- one reconnect at most, not one per app.
+     */
+    fun recheckAll() {
+        val net = currentNet()
+        val ids = store.current.selected.filterNot { it.paused }.map { it.id }
+        if (ids.isEmpty()) return
+        store.update { s ->
+            s.copy(policies = s.policies.mapValues { (k, p) ->
+                if (p.netKey == net && p.serviceId in ids && !p.pinned) p.copy(decidedAt = 0) else p
+            })
+        }
+        testing.update { it + ids }
+        ids.forEach { enqueue(it, priority = true) }
+    }
+
+    /**
+     * While the user is picking apps nothing is applied: every pick used to rebuild the tunnel, so
+     * the VPN key blinked on each tap and the list under the finger reset. Released when the
+     * picker closes; what changed is then applied once, after the new apps' checks.
+     */
+    fun holdApply(hold: Boolean) {
+        applyHeld = hold
+        if (!hold && applyPending) {
+            applyPending = false
+            scope.launch { applyIfConnected() }
+        }
+    }
+
+    @Volatile private var applyHeld = false
+    @Volatile private var applyPending = false
+
+    /** Whether a Cloudflare account is connected: MAE's foreign exits all live on it. */
+    fun hasCloudAccount(): Boolean = runCatching { CloudManager(app).loadedAccounts().isNotEmpty() }.getOrDefault(false)
 
     /**
      * Adds a site. Returns the id it was added as -- the known app's own id when the site is a
@@ -539,7 +611,7 @@ object MaeEngine {
                 diagnoses = s.diagnoses.drop(), policies = s.policies.drop(), metrics = s.metrics.drop(),
                 proofs = s.proofs.drop(), egress = s.egress.drop(), siteHosts = s.siteHosts - id, customApps = s.customApps - id,
                 repairs = s.repairs.drop(), userEvidence = s.userEvidence.drop(),
-                incidents = s.incidents.filterNot { it.serviceId == id },
+                incidents = s.incidents.filterNot { it.serviceId == id }, extraPackages = s.extraPackages - id,
             )
         }
         _notes.update { it - id }
@@ -665,8 +737,8 @@ object MaeEngine {
 
     @Volatile private var usExitFailedAt = 0L
 
-    /** Bumped whenever assets/gemini_exit_worker.js changes in a way a deployed exit must get. */
-    private const val USX_SCRIPT_VERSION = 2
+    /** The exit's build is CloudManager's: one number for this page and Settings' row. */
+    private const val USX_SCRIPT_VERSION = CloudManager.GEMINI_EXIT_VERSION
     private const val KEY_USX_VER = "usx_script_ver"
 
     /**
@@ -679,10 +751,12 @@ object MaeEngine {
         val prefs = app.getSharedPreferences("mae", Context.MODE_PRIVATE)
         // An exit set up with an older script is set up again (same name, path and user id, so
         // nothing that points at it changes).
-        if (com.mlmvpn.scanner.utils.NetworkSettings.geminiExit(app) != null && prefs.getInt(KEY_USX_VER, 0) >= USX_SCRIPT_VERSION) return false
-        if (System.currentTimeMillis() - usExitFailedAt < 3600_000L) return false
         val manager = CloudManager(app)
-        val account = manager.accounts.firstOrNull() ?: run { Log.i(TAG, "US exit: no Cloudflare account"); return false }
+        val deployed = manager.accounts.firstOrNull { it.geminiExitStatus == "deployed" }
+        if (com.mlmvpn.scanner.utils.NetworkSettings.geminiExit(app) != null &&
+            (prefs.getInt(KEY_USX_VER, 0) >= USX_SCRIPT_VERSION || (deployed != null && manager.geminiExitBuild(deployed) >= USX_SCRIPT_VERSION))) return false
+        if (System.currentTimeMillis() - usExitFailedAt < 3600_000L) return false
+        val account = deployed ?: manager.accounts.firstOrNull() ?: run { Log.i(TAG, "US exit: no Cloudflare account"); return false }
         // Cloudflare's API is blocked on some networks (Irancell, 2026-09-30: timeout directly):
         // through the bypass routes first (they reach Cloudflare fastest), then directly, then
         // through the foreign exits.
@@ -1254,7 +1328,12 @@ object MaeEngine {
     fun startTunnelAsync(context: Context) {
         init(context)
         wantConnected = true
-        scope.launch { applyLock.withLock { if (wantConnected) startTunnel(context) } }
+        scope.launch {
+            // Without a Cloudflare account MAE has none of its foreign exits: it does not start
+            // half-built (the screen asks for the account first).
+            if (!hasCloudAccount()) { wantConnected = false; Log.i(TAG, "not started: no Cloudflare account"); return@launch }
+            applyLock.withLock { if (wantConnected) startTunnel(context) }
+        }
     }
 
     fun stopTunnelAsync(context: Context) {
@@ -1299,7 +1378,9 @@ object MaeEngine {
         healthJob?.cancel()
         healthJob = scope.launch {
             delay(8_000)
-            runCanary("connected")
+            // Not after MAE's own reconnect to apply a change: its routes were proven moments
+            // ago, and a check of a tunnel still warming up moved apps that were fine.
+            if (System.currentTimeMillis() - selfReconnectAt > 60_000) runCanary("connected")
             while (isActive && isConnected()) {
                 delay(CANARY_EVERY_MS)
                 if (screenOn()) runCanary("periodic")
@@ -1384,6 +1465,7 @@ object MaeEngine {
     }.getOrDefault(0L)
 
     private var reconnectJob: Job? = null
+    @Volatile private var selfReconnectAt = 0L
 
     /**
      * A reconnect costs every app a second of nothing, so while apps are still being checked the
@@ -1406,6 +1488,7 @@ object MaeEngine {
                     val prev = applied
                     if (prev != null && prev.config == next.config) return@withLock
                     Log.i(TAG, "applying by reconnect")
+                    selfReconnectAt = System.currentTimeMillis()
                     startTunnel(app)
                 }
             }
@@ -1419,6 +1502,7 @@ object MaeEngine {
      */
     suspend fun applyIfConnected(urgent: Boolean = false, flush: Boolean = false) = applyLock.withLock {
         if (!isConnected()) return@withLock
+        if (applyHeld) { applyPending = true; return@withLock }
         val next = compileNow(withApi = store.current.liveApiWorks != false)
         val prev = applied
         if (prev != null && prev.structure == next.structure && prev.targets == next.targets) return@withLock
@@ -1602,7 +1686,16 @@ object MaeEngine {
 
     suspend fun deployEgress(accountIndex: Int = 0): Result<Unit> = runCatching {
         val account = cloudAccounts().getOrNull(accountIndex) ?: error("no Cloudflare account")
-        val w = MaeEgressDeployer.deploy(app, account, store.current.worker)
+        val before = store.current.worker
+        val w = MaeEgressDeployer.deploy(app, account, before)
+        // An update or reinstall in place (same address, same key) is the same exit to every app:
+        // nothing they proved through it changes, so nothing is checked again. Measured: an
+        // "update" of an exit already current re-checked every app from scratch.
+        if (before != null && before.url == w.url && before.accountId == w.accountId &&
+            MaeEgressDeployer.uuidOf(before) == MaeEgressDeployer.uuidOf(w)) {
+            store.update { it.copy(worker = w) }
+            return@runCatching
+        }
         store.update { s ->
             // A new exit invalidates what was concluded without it: forget those verdicts and
             // make every policy stale BEFORE queueing, or the queue skips them as fresh.

@@ -112,6 +112,12 @@ data class MaeState(
     val cloudLinks: List<String> = emptyList(),
     val cloudLinksAt: Long = 0L,
     val cloudLinksFailedAt: Long = 0L,
+    /**
+     * Service id -> more of the phone's apps it carries, picked by the user: Google Maps and Gmail
+     * talk to Google's domains, so picking one attaches its package to Google (its per-app rule
+     * and its tick in the picker) instead of adding a second copy of Google's domains.
+     */
+    val extraPackages: Map<String, List<String>> = emptyMap(),
 ) {
     companion object {
         fun sk(service: String, net: String) = "$service|$net"
@@ -182,6 +188,7 @@ object MaeStateCodec {
         put("cloudLinks", JSONArray(s.cloudLinks))
         put("cloudAt", s.cloudLinksAt)
         put("cloudFail", s.cloudLinksFailedAt)
+        put("xpk", JSONObject().apply { s.extraPackages.forEach { (k, v) -> put(k, JSONArray(v)) } })
     }.toString()
 
     private fun encodeWarp(w: WarpIdentity) = JSONObject().put("k", w.privateKeySealed).put("p", w.peerPublicKey).put("v4", w.v4).put("v6", w.v6)
@@ -257,6 +264,9 @@ object MaeStateCodec {
             cloudLinks = root.optJSONArray("cloudLinks").let { a -> if (a == null) emptyList() else (0 until a.length()).map { a.getString(it) } },
             cloudLinksAt = root.optLong("cloudAt"),
             cloudLinksFailedAt = root.optLong("cloudFail"),
+            extraPackages = root.optJSONObject("xpk")?.let { o ->
+                o.keys().asSequence().associateWith { k -> o.optJSONArray(k)?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty() }
+            }.orEmpty(),
         )
     }
 

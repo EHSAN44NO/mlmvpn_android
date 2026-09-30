@@ -1,6 +1,29 @@
 package com.mlmvpn.scanner.ui.mae
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.filled.AddCircle
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.Public
+import androidx.compose.material3.Icon
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.LayoutDirection
+import com.mlmvpn.scanner.engines.mae.egress.MaeEgressDeployer
+import com.mlmvpn.scanner.ui.settings.IosAlert
+import com.mlmvpn.scanner.ui.settings.IosAlertAction
+import com.mlmvpn.scanner.ui.settings.SettingsToggle
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -144,43 +167,45 @@ internal fun MaeOnboarding(
     }
 }
 
-/** A remove that says what goes with it -- everything learned about the app. */
+/**
+ * A remove that says what goes with it -- everything learned about the app. iOS's own alert: the
+ * destructive choice in red, Cancel the safe default.
+ */
 @Composable
-private fun ConfirmRemove(title: String, body: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
-    androidx.compose.material3.AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = Ios.Card,
-        title = { Text(title, color = Ios.Label, fontSize = 18.sp) },
-        text = { Text(body, color = Ios.SecondaryLabel, fontSize = 14.sp) },
-        confirmButton = {
-            androidx.compose.material3.TextButton(onClick = { onDismiss(); onConfirm() }) {
-                Text(stringResource(R.string.mae_remove), color = Ios.Red)
-            }
-        },
-        dismissButton = {
-            androidx.compose.material3.TextButton(onClick = onDismiss) { Text(stringResource(R.string.mae_cancel)) }
-        },
+internal fun MaeConfirmRemove(name: String, body: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    IosAlert(
+        title = stringResource(R.string.mae_remove_confirm_title, name),
+        message = body,
+        actions = listOf(
+            IosAlertAction(stringResource(R.string.mae_cancel), onClick = onDismiss, preferred = true),
+            IosAlertAction(stringResource(R.string.mae_remove), onClick = { onDismiss(); onConfirm() }, destructive = true),
+        ),
+        onDismiss = onDismiss,
     )
 }
 
-/** Add / remove / pause services, pin a route, and manage the foreign exit. */
-@OptIn(ExperimentalLayoutApi::class)
+/**
+ * The apps, as iOS lists things you own: one row per app, a chevron, and everything about it on
+ * its own page. The row of equal chips that used to sit under each app -- pause, auto, every
+ * route and remove, all the same shape -- put a destructive action one mis-tap from a harmless one.
+ */
 @Composable
 internal fun MaeManageScreen(onBack: () -> Unit, openPicker: Boolean = false) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     // The rows, as the main screen has them: worked out off the main thread and emitted only
-    // when a row changes -- the raw state changes many times a second while apps are checked,
-    // and this page used to be rebuilt on every one of them.
+    // when a row changes -- the raw state changes many times a second while apps are checked.
     val views by MaeEngine.viewsFlow.collectAsState()
     val worker by remember { MaeEngine.store.state.map { it.worker }.distinctUntilChanged() }.collectAsState(MaeEngine.store.current.worker)
     var site by rememberSaveable { mutableStateOf("") }
     var siteError by remember { mutableStateOf<String?>(null) }
     var exitBusy by remember { mutableStateOf(false) }
     var exitError by remember { mutableStateOf<String?>(null) }
-    var removing by remember { mutableStateOf<ServiceDef?>(null) }
+    var askReinstall by remember { mutableStateOf(false) }
+    var askRemoveExit by remember { mutableStateOf(false) }
     val invalid = stringResource(R.string.mae_add_site_invalid)
     var showPicker by rememberSaveable { mutableStateOf(openPicker) }
+    var detail by rememberSaveable { mutableStateOf<String?>(null) }
     val installedIds = rememberInstalledRegistryIds()
     val accounts by produceState(emptyList<com.mlmvpn.scanner.models.CloudAccount>(), worker) {
         value = withContext(Dispatchers.IO) { MaeEngine.cloudAccounts() }
@@ -202,7 +227,7 @@ internal fun MaeManageScreen(onBack: () -> Unit, openPicker: Boolean = false) {
                     else -> routeName(context, p.id)
                 }
             }
-            // Two routes with one name get a number each, so no chip is ambiguous.
+            // Two routes with one name get a number each, so no row is ambiguous.
             val counts = named.groupingBy { it.second }.eachCount()
             val seen = HashMap<String, Int>()
             named.map { (id, label) ->
@@ -211,64 +236,99 @@ internal fun MaeManageScreen(onBack: () -> Unit, openPicker: Boolean = false) {
         }
     }
 
-    removing?.let { def ->
-        val name = serviceName(context, def)
-        ConfirmRemove(stringResource(R.string.mae_remove_confirm_title, name), stringResource(R.string.mae_remove_confirm_body),
-            onConfirm = { MaeEngine.remove(def.id) }, onDismiss = { removing = null })
+    detail?.let { id ->
+        val v = views.firstOrNull { it.def.id == id }
+        if (v == null) { LaunchedEffect(id) { detail = null }; return }
+        androidx.activity.compose.BackHandler { detail = null }
+        MaeAppDetail(v, routes, onBack = { detail = null })
+        return
+    }
+
+    if (askReinstall) {
+        IosAlert(
+            title = stringResource(R.string.mae_exit_current_title),
+            message = stringResource(R.string.mae_exit_current_body, worker?.version ?: MaeEgressDeployer.VERSION),
+            actions = listOf(
+                IosAlertAction(stringResource(R.string.worker_reinstall), onClick = {
+                    askReinstall = false
+                    exitBusy = true; exitError = null
+                    scope.launch {
+                        MaeEngine.deployEgress().onFailure { exitError = it.message ?: it.javaClass.simpleName }
+                        exitBusy = false
+                    }
+                }),
+                IosAlertAction(stringResource(R.string.worker_ok), onClick = { askReinstall = false }, preferred = true),
+            ),
+            onDismiss = { askReinstall = false },
+        )
+    }
+    if (askRemoveExit) {
+        IosAlert(
+            title = stringResource(R.string.mae_exit_remove_title),
+            message = stringResource(R.string.mae_exit_remove_body),
+            actions = listOf(
+                IosAlertAction(stringResource(R.string.mae_cancel), onClick = { askRemoveExit = false }, preferred = true),
+                IosAlertAction(stringResource(R.string.mae_foreign_exit_remove), destructive = true, onClick = {
+                    askRemoveExit = false
+                    exitBusy = true
+                    scope.launch { MaeEngine.removeEgress(); exitBusy = false }
+                }),
+            ),
+            onDismiss = { askRemoveExit = false },
+        )
     }
 
     IosScreen(title = stringResource(R.string.mae_manage), onBack = onBack, backLabel = stringResource(R.string.mae_short)) {
         SettingsSectionHeader(stringResource(R.string.mae_your_services))
         SettingsGroup {
             views.forEachIndexed { i, v ->
-                val def = v.def
                 if (i > 0) Separator()
-                val name = serviceName(context, def)
-                androidx.compose.runtime.key(def.id) {
-                    androidx.compose.foundation.layout.Row(
-                        Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
-                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-                    ) {
-                        MaeAppIcon(def, name, 36.dp)
-                        Spacer(Modifier.width(12.dp))
-                        androidx.compose.foundation.layout.Column(Modifier.weight(1f)) {
-                            Text(name, color = Ios.Label, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(stringResource(R.string.mae_route) + ": " +
-                                (if (v.pinned) routes.firstOrNull { it.first == v.routeId }?.second ?: routeName(context, v.routeId)
-                                else stringResource(R.string.mae_route_auto) + (v.routeId?.let { " (" + routeName(context, it, v.family, v.country) + ")" } ?: "")),
-                                color = Ios.SecondaryLabel, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        }
-                        if (v.paused) Text(stringResource(R.string.mae_phase_paused), color = Ios.SecondaryLabel, fontSize = 14.sp)
-                    }
-                    FlowRow(Modifier.padding(start = 12.dp, bottom = 8.dp)) {
-                        ServiceChip(stringResource(if (v.paused) R.string.mae_resume else R.string.mae_pause), false, false) {
-                            MaeEngine.setPaused(def.id, !v.paused)
-                        }
-                        ServiceChip(stringResource(R.string.mae_route_auto), !v.pinned, false) { MaeEngine.pin(def.id, null) }
-                        routes.forEach { (id, label) ->
-                            ServiceChip(label, v.pinned && v.routeId == id, false) { MaeEngine.pin(def.id, id) }
-                        }
-                        ServiceChip(stringResource(R.string.mae_remove), false, false) { removing = def }
-                    }
+                androidx.compose.runtime.key(v.def.id) {
+                    val name = serviceName(context, v.def)
+                    ManageAppRow(
+                        v = v,
+                        name = name,
+                        subtitle = when {
+                            v.paused -> stringResource(R.string.mae_phase_paused)
+                            v.pinned -> (routes.firstOrNull { it.first == v.routeId }?.second ?: routeName(context, v.routeId)) +
+                                " · " + stringResource(R.string.mae_route_manual)
+                            else -> stringResource(R.string.mae_route_auto) +
+                                (v.routeId?.let { " · " + routeName(context, it, v.family, v.country) } ?: "")
+                        },
+                        onClick = { detail = v.def.id },
+                    )
                 }
             }
         }
 
-        // Services not picked yet
+        // Installed apps MAE knows and the user has not picked: one tap adds, as iOS's
+        // "More Controls" list does, with the green plus in front.
         val unpicked = MaeEngine.registry.services.filter { s -> s.id in installedIds && views.none { it.def.id == s.id } }
         if (unpicked.isNotEmpty()) {
             SettingsSectionHeader(stringResource(R.string.mae_onboard_more))
-            FlowRow(Modifier.padding(horizontal = 12.dp)) {
-                unpicked.forEach { s ->
-                    ServiceChip(serviceName(context, s), false, false, s) {
-                        MaeEngine.setSelection(MaeEngine.store.current.selected.map { it.id } + s.id)
+            SettingsGroup {
+                unpicked.forEachIndexed { i, s ->
+                    if (i > 0) Separator()
+                    val name = serviceName(context, s)
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .clickable { MaeEngine.setSelection(MaeEngine.store.current.selected.map { it.id } + s.id) }
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Default.AddCircle, contentDescription = null, tint = Ios.Green, modifier = Modifier.size(24.dp))
+                        Spacer(Modifier.width(12.dp))
+                        MaeAppIcon(s, name, 30.dp)
+                        Spacer(Modifier.width(12.dp))
+                        Text(name, color = Ios.Label, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
         }
 
-        SettingsGroup(modifier = Modifier.padding(top = 16.dp)) {
-            SettingsActionRow(label = stringResource(R.string.mae_add_app), icon = Icons.Default.Apps, tint = Ios.Blue) { showPicker = true }
+        SettingsGroup(modifier = Modifier.padding(top = 20.dp)) {
+            SettingsRow(title = stringResource(R.string.mae_add_app), icon = Icons.Default.Apps, tint = Ios.Blue,
+                onClick = { showPicker = true })
         }
 
         SettingsSectionHeader(stringResource(R.string.mae_add_site))
@@ -276,7 +336,8 @@ internal fun MaeManageScreen(onBack: () -> Unit, openPicker: Boolean = false) {
             SettingsTextRow(title = stringResource(R.string.mae_add_site), value = site,
                 onValueChange = { site = it; siteError = null }, placeholder = stringResource(R.string.mae_add_site_hint), error = siteError)
             Separator()
-            SettingsActionRow(label = stringResource(R.string.mae_add), icon = Icons.Default.Add, tint = Ios.Blue) {
+            SettingsActionRow(label = stringResource(R.string.mae_add), icon = Icons.Default.Add, tint = Ios.Blue, labelColor = Ios.Blue,
+                enabled = site.isNotBlank()) {
                 val typed = site
                 when (val id = MaeEngine.addSite(typed)) {
                     null -> siteError = invalid
@@ -292,16 +353,25 @@ internal fun MaeManageScreen(onBack: () -> Unit, openPicker: Boolean = false) {
             }
         }
 
+        // The foreign exit, versioned: it says which build is on the account, and a tap on one
+        // that is already current asks before installing it again -- an "update" of a current
+        // exit used to check every app again from scratch.
         SettingsSectionHeader(stringResource(R.string.mae_foreign_exit))
         SettingsGroup {
             val w = worker
+            val outdated = w != null && MaeEgressDeployer.needsUpgrade(w)
             SettingsRow(
                 title = stringResource(R.string.mae_foreign_exit),
-                value = when {
+                icon = Icons.Default.Public,
+                tint = Ios.CloudflareOrange,
+                subtitle = when {
                     exitBusy -> stringResource(R.string.mae_foreign_exit_working)
-                    w != null -> stringResource(R.string.mae_foreign_exit_ready, "v${w.version}")
-                    else -> stringResource(R.string.mae_foreign_exit_none)
+                    w == null -> stringResource(R.string.mae_foreign_exit_none)
+                    outdated -> stringResource(R.string.worker_update_available, MaeEgressDeployer.VERSION, w.version)
+                    else -> stringResource(R.string.mae_exit_current, w.version)
                 },
+                value = if (w != null && !outdated && !exitBusy) stringResource(R.string.on_2) else null,
+                badge = if (outdated && !exitBusy) 1 else 0,
                 showChevron = false,
             )
             Separator()
@@ -309,30 +379,153 @@ internal fun MaeManageScreen(onBack: () -> Unit, openPicker: Boolean = false) {
                 SettingsRow(title = stringResource(R.string.mae_foreign_exit_no_account), showChevron = false)
             } else {
                 SettingsActionRow(
-                    label = stringResource(if (w == null) R.string.mae_foreign_exit_deploy else R.string.mae_foreign_exit_update),
-                    icon = Icons.Default.CloudUpload, tint = Ios.CloudflareOrange, busy = exitBusy,
+                    label = stringResource(when {
+                        w == null -> R.string.mae_foreign_exit_deploy
+                        outdated -> R.string.mae_foreign_exit_update
+                        else -> R.string.worker_reinstall
+                    }),
+                    icon = if (w != null && !outdated) Icons.Default.Refresh else Icons.Default.CloudUpload,
+                    tint = Ios.CloudflareOrange, busy = exitBusy,
                 ) {
                     if (exitBusy) return@SettingsActionRow
+                    if (w != null && !outdated) { askReinstall = true; return@SettingsActionRow }
                     exitBusy = true; exitError = null
                     scope.launch {
                         MaeEngine.deployEgress().onFailure { exitError = it.message ?: it.javaClass.simpleName }
                         exitBusy = false
                     }
                 }
-                if (w != null) {
-                    Separator()
-                    SettingsActionRow(label = stringResource(R.string.mae_foreign_exit_remove), icon = Icons.Default.Delete,
-                        tint = Ios.Red, labelColor = Ios.Red, busy = exitBusy) {
-                        if (exitBusy) return@SettingsActionRow
-                        exitBusy = true
-                        scope.launch { MaeEngine.removeEgress(); exitBusy = false }
-                    }
-                }
             }
         }
         exitError?.let { SettingsFooter(stringResource(R.string.mae_foreign_exit_failed, it)) }
         SettingsFooter(stringResource(R.string.mae_foreign_exit_footer))
+        if (worker != null && accounts.isNotEmpty()) {
+            // Destructive, alone in its own card and centred, the way iOS sets apart "Delete Account".
+            SettingsGroup(modifier = Modifier.padding(top = 18.dp)) {
+                DestructiveRow(stringResource(R.string.mae_foreign_exit_remove), enabled = !exitBusy) { askRemoveExit = true }
+            }
+        }
         Spacer(Modifier.height(40.dp))
+    }
+}
+
+/** One app in the manage list: icon, name, where it goes, and a chevron to its own page. */
+@Composable
+private fun ManageAppRow(v: MaeEngine.ServiceView, name: String, subtitle: String, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(start = 16.dp, end = 12.dp, top = 9.dp, bottom = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.alpha(if (v.paused) 0.45f else 1f)) { MaeAppIcon(v.def, name, 36.dp) }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(name, color = if (v.paused) Ios.SecondaryLabel else Ios.Label, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(subtitle, color = Ios.SecondaryLabel, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Icon(
+            Icons.Default.ChevronRight, contentDescription = null, tint = Ios.Chevron,
+            modifier = Modifier.size(18.dp).scale(if (LocalLayoutDirection.current == LayoutDirection.Rtl) -1f else 1f, 1f),
+        )
+    }
+}
+
+/** iOS's destructive button in a card: red, centred, nothing else on the row. */
+@Composable
+private fun DestructiveRow(label: String, enabled: Boolean = true, onClick: () -> Unit) {
+    Box(
+        Modifier.fillMaxWidth().then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
+            .heightIn(min = 48.dp).padding(horizontal = 16.dp, vertical = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, color = if (enabled) Ios.Red else Ios.SecondaryLabel, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+/**
+ * One app's own page, the way iOS shows one contact: who it is at the top, then its settings as
+ * grouped rows -- its route as a checkmark list, whether MAE carries it as a switch, "Check again"
+ * as an action -- and Remove alone at the bottom, red, behind a confirmation.
+ */
+@Composable
+private fun MaeAppDetail(v: MaeEngine.ServiceView, routes: List<Pair<String, String>>, onBack: () -> Unit) {
+    val context = LocalContext.current
+    val name = serviceName(context, v.def)
+    val testing by MaeEngine.testingFlow.collectAsState()
+    var removing by remember { mutableStateOf(false) }
+    if (removing) {
+        MaeConfirmRemove(name, stringResource(R.string.mae_remove_confirm_body),
+            onConfirm = { MaeEngine.remove(v.def.id); onBack() }, onDismiss = { removing = false })
+    }
+
+    IosScreen(title = name, onBack = onBack, backLabel = stringResource(R.string.mae_manage)) {
+        Column(Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            MaeAppIcon(v.def, name, 72.dp)
+            Spacer(Modifier.height(10.dp))
+            Text(name, color = Ios.Label, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            val now = when {
+                v.def.id in testing -> stringResource(R.string.mae_phase_testing)
+                v.paused -> stringResource(R.string.mae_phase_paused)
+                v.routeId != null -> routeName(context, v.routeId, v.family, v.country)
+                else -> stringResource(R.string.mae_phase_waiting)
+            }
+            Text(now, color = Ios.SecondaryLabel, fontSize = 14.sp)
+        }
+
+        SettingsGroup(modifier = Modifier.padding(top = 14.dp)) {
+            SettingsToggle(
+                title = stringResource(R.string.mae_app_enabled),
+                checked = !v.paused,
+                onCheckedChange = { MaeEngine.setPaused(v.def.id, !it) },
+                icon = Icons.Default.PowerSettingsNew,
+                tint = Ios.Green,
+            )
+        }
+        SettingsFooter(stringResource(R.string.mae_app_enabled_footer))
+
+        SettingsSectionHeader(stringResource(R.string.mae_route))
+        SettingsGroup {
+            CheckRow(
+                label = stringResource(R.string.mae_route_auto),
+                detail = if (!v.pinned) v.routeId?.let { routeName(context, it, v.family, v.country) } else null,
+                checked = !v.pinned,
+            ) { MaeEngine.pin(v.def.id, null) }
+            routes.forEach { (id, label) ->
+                Separator()
+                CheckRow(label = label, detail = null, checked = v.pinned && v.routeId == id) { MaeEngine.pin(v.def.id, id) }
+            }
+        }
+        SettingsFooter(stringResource(R.string.mae_route_footer))
+
+        SettingsGroup(modifier = Modifier.padding(top = 18.dp)) {
+            SettingsActionRow(
+                label = stringResource(R.string.mae_recheck),
+                icon = Icons.Default.Refresh,
+                tint = Ios.Blue,
+                labelColor = Ios.Blue,
+                busy = v.def.id in testing,
+                enabled = !v.paused,
+            ) { MaeEngine.recheck(v.def.id) }
+        }
+
+        SettingsGroup(modifier = Modifier.padding(top = 28.dp)) {
+            DestructiveRow(stringResource(R.string.mae_remove_app)) { removing = true }
+        }
+        Spacer(Modifier.height(40.dp))
+    }
+}
+
+/** A choice in a checkmark list: the label, a detail under it, and the blue check when chosen. */
+@Composable
+private fun CheckRow(label: String, detail: String?, checked: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).heightIn(min = 44.dp).padding(horizontal = 16.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(label, color = Ios.Label, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (detail != null) Text(detail, color = Ios.SecondaryLabel, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        if (checked) Icon(Icons.Default.Check, contentDescription = null, tint = Ios.Blue, modifier = Modifier.size(20.dp))
     }
 }
 
@@ -430,8 +623,13 @@ private fun InstalledAppPicker(onBack: () -> Unit) {
         val name = serviceName(context, def)
         val body = if (def.packages.size > 1) stringResource(R.string.mae_remove_confirm_part, pkgLabel, name)
             else stringResource(R.string.mae_remove_confirm_body)
-        ConfirmRemove(stringResource(R.string.mae_remove_confirm_title, name), body,
-            onConfirm = { MaeEngine.remove(def.id) }, onDismiss = { confirm = null })
+        MaeConfirmRemove(name, body, onConfirm = { MaeEngine.remove(def.id) }, onDismiss = { confirm = null })
+    }
+    // Nothing is applied to the running tunnel while the user picks: every tap used to rebuild
+    // it, the VPN key blinked, and the list under the finger jumped. Applied once on the way out.
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        MaeEngine.holdApply(true)
+        onDispose { MaeEngine.holdApply(false) }
     }
 
     com.mlmvpn.scanner.ui.settings.AppPickerPage(
@@ -445,7 +643,9 @@ private fun InstalledAppPicker(onBack: () -> Unit) {
             val label = apps.firstOrNull { it.packageName == pkg }?.name ?: pkg
             val existing = MaeEngine.store.current.selected
                 .firstNotNullOfOrNull { sel -> MaeEngine.serviceDef(sel.id)?.takeIf { pkg in it.packages } }
-            if (existing != null) {
+            if (MaeEngine.detachPackage(pkg)) {
+                // An app attached to another (Google Maps under Google): just untied.
+            } else if (existing != null) {
                 // Unticking removes the app and all it learned -- and for an app with several
                 // packages (YouTube Music is YouTube) the whole app: asked first.
                 confirm = label to existing

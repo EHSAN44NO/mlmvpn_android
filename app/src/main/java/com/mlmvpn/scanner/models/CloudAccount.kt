@@ -148,6 +148,8 @@ data class CloudAccount(
     var geminiExitStatus: String = "idle", // 'idle', 'deployed'
     /** The Durable Object migration tag, once created. Re-sending the creating migration errors. */
     var geminiExitDoTag: String? = null,
+    /** The exit's build as deployed (CloudManager.GEMINI_EXIT_VERSION); 0 = deployed before builds were kept. */
+    var geminiExitVersion: Int = 0,
 
     // Smart Verification fields
     var isEmailVerified: Boolean = true,

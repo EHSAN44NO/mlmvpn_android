@@ -9,7 +9,6 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.runtime.collectAsState
-import androidx.compose.material.icons.filled.SystemUpdateAlt
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -187,14 +186,9 @@ fun HomeScreen(
                     .only(WindowInsetsSides.Horizontal)
             )
     ) {
-        // Whether a newer release has been found. The automatic dialog that used to announce
-        // this was removed for interrupting whatever the user was doing; a dot beside the shield
-        // says the same thing and waits to be asked.
-        val update by com.mlmvpn.scanner.update.UpdateChecker.updateAvailableFlow.collectAsState()
-
+        // A newer release is announced the iOS way: a red badge on the Settings icon (see
+        // AppIconCell) and a row at the top of Settings -- not a glyph in this strip.
         HomeStatusStrip(
-            updateReady = update != null,
-            onOpenUpdate = onOpenUpdate,
             isRunning = isRunning,
             showTraffic = showTraffic,
             trafficDown = trafficDown,
@@ -281,8 +275,6 @@ fun HomeScreen(
  */
 @Composable
 private fun HomeStatusStrip(
-    updateReady: Boolean,
-    onOpenUpdate: () -> Unit,
     isRunning: Boolean,
     showTraffic: Boolean,
     trafficDown: Float,
@@ -308,26 +300,6 @@ private fun HomeStatusStrip(
                 tint = if (isRunning) green else muted.copy(alpha = 0.55f),
                 modifier = Modifier.size(16.dp),
             )
-
-            // Present only when there is something to go to. A permanently visible control that
-            // does nothing most of the time is one the user stops reading, and this one needs to
-            // be noticed on the day it matters.
-            if (updateReady) {
-                Spacer(Modifier.width(10.dp))
-                Icon(
-                    Icons.Default.SystemUpdateAlt,
-                    contentDescription = stringResource(R.string.settings_software_update),
-                    tint = Color(0xFF5AC8FA),
-                    modifier = Modifier
-                        .size(16.dp)
-                        // The tap target is the padding, not the glyph: 16dp of icon is well under
-                        // what a finger can reliably hit, and this sits beside nothing else that
-                        // would catch a near miss.
-                        .clip(RoundedCornerShape(50))
-                        .clickable(onClick = onOpenUpdate)
-                        .padding(1.dp),
-                )
-            }
         }
 
         if (editMode) {
