@@ -41,23 +41,43 @@ object MaeConfigCompiler {
         val blockUdp: Boolean,
         /** Extra domains this service claims (its account family) because it exits abroad. */
         val bundle: List<String> = emptyList(),
+        /**
+         * The Android UIDs of the service's installed app (Android 10+): every connection the app
+         * opens follows the service's route, whatever name or address it uses -- TikTok talks to
+         * dozens of API hosts, Instagram's videos come from `fbcdn.net`, which is Facebook's.
+         */
+        val uids: List<Int> = emptyList(),
     )
+
+    /** Outbound tags for one service's three kinds of traffic. */
+    data class Targets(val tcp: String, val udp: String, val quic: String)
 
     fun balancerTag(serviceId: String) = "svc-" + serviceId.replace(Regex("[^A-Za-z0-9_-]"), "_")
     fun udpBalancerTag(serviceId: String) = balancerTag(serviceId) + "-u"
+    fun quicBalancerTag(serviceId: String) = balancerTag(serviceId) + "-q"
 
     /**
-     * (TCP target, UDP target) outbound tags for a service's decision, or null when the chosen
-     * provider is not in this config. UDP goes to block when the route cannot carry it or the
-     * service must not leak it ([ServiceRoute.blockUdp]).
+     * The outbound tags for a service's decision, or null when the chosen provider is not in this
+     * config. UDP goes to block when the route cannot carry it or the service must not leak it
+     * ([ServiceRoute.blockUdp]); QUIC (UDP/443) also when the route does not help it
+     * ([com.mlmvpn.scanner.engines.mae.route.Capabilities.quic]), so the app goes to TCP at once.
      */
-    fun targetsFor(r: ServiceRoute, providers: List<RouteProvider>): Pair<String, String>? = when (val d = r.decision) {
-        is Decision.Block -> BLOCK_TAG to BLOCK_TAG
+    fun targetsFor(r: ServiceRoute, providers: List<RouteProvider>): Targets? = when (val d = r.decision) {
+        is Decision.Block -> Targets(BLOCK_TAG, BLOCK_TAG, BLOCK_TAG)
         is Decision.Use -> {
             val p = providers.firstOrNull { it.id == d.routeId }
             if (p == null) null
-            else p.tag(d.family) to (if (p.caps.udp && !r.blockUdp) p.tag(d.family) else BLOCK_TAG)
+            else {
+                val udp = if (p.caps.udp && !r.blockUdp) p.tag(d.family) else BLOCK_TAG
+                Targets(p.tag(d.family), udp, if (p.caps.quic && udp != BLOCK_TAG) udp else BLOCK_TAG)
+            }
         }
+    }
+
+    /** Balancer tag -> target, for every balancer of [r] (what a live switch re-points). */
+    fun balancerTargets(r: ServiceRoute, providers: List<RouteProvider>): Map<String, String> {
+        val t = targetsFor(r, providers) ?: return emptyMap()
+        return mapOf(balancerTag(r.service.id) to t.tcp, udpBalancerTag(r.service.id) to t.udp, quicBalancerTag(r.service.id) to t.quic)
     }
 
     private fun balancer(tag: String, target: String) = JSONObject().put("tag", tag)
@@ -77,6 +97,12 @@ object MaeConfigCompiler {
         defaultVia: String? = null,
         /** Developer mode: Xray's info log and access log, one line per connection and route. */
         verbose: Boolean = false,
+        /**
+         * A loopback HTTP proxy inbound on this port: MAE's live check sends one small request per
+         * route in use through it, so it tests exactly the path an app's traffic takes. It is the
+         * port the app's own connectivity probe already expects (local port + 10000).
+         */
+        canaryPort: Int? = null,
     ): String {
         val json = JSONObject(base)
         if (verbose) json.put("log", JSONObject().put("loglevel", "info").put("access", "").put("dnsLog", false))
@@ -109,23 +135,37 @@ object MaeConfigCompiler {
         // `googleapis.com` must follow Gemini abroad, not stay on Google's local route. More
         // specific domains of other apps (YouTube's `youtubei.googleapis.com`) keep their own.
         val claimed = routes.flatMap { it.bundle }.toSet()
+        // Apps, by who opened the connection: before any name, so every connection of the app
+        // follows it. A UID claimed twice goes to the first service that claims it.
+        val appRules = JSONArray()
+        val uidTaken = HashSet<Int>()
         for (r in routes) {
             val s = r.service
             val own = (s.domains.filter { d -> r.bundle.contains(d) || d !in claimed } + r.bundle).distinct()
             val byDepth = own.groupBy { depth(it) }
-            fun both(net: String, bal: String) {
-                byDepth.forEach { (dep, ds) -> emits += Emit(dep, rule(ds.map { "domain:$it" }, null, net, null, bal)) }
-                if (s.ipRanges.isNotEmpty()) emits += Emit(-1, rule(null, s.ipRanges, net, null, bal))
+            // QUIC first: the UDP/443 rule has to win over the service's general UDP rule.
+            fun each(net: String, port: String?, bal: String) {
+                byDepth.forEach { (dep, ds) -> emits += Emit(dep, rule(ds.map { "domain:$it" }, null, net, null, bal, port)) }
+                if (s.ipRanges.isNotEmpty()) emits += Emit(-1, rule(null, s.ipRanges, net, null, bal, port))
             }
-            // Every service gets the same shape whatever its decision: one TCP balancer and one
-            // UDP balancer. A route change -- including to or from "blocked", and from a TCP-only
-            // exit to one that carries UDP -- is then only a balancer target, switchable live.
-            val (tcpTarget, udpTarget) = targetsFor(r, providers) ?: continue
-            balancers.put(balancer(balancerTag(s.id), tcpTarget))
-            balancers.put(balancer(udpBalancerTag(s.id), udpTarget))
-            both("tcp", balancerTag(s.id))
-            both("udp", udpBalancerTag(s.id))
+            // Every service gets the same shape whatever its decision: a TCP, a QUIC and a UDP
+            // balancer. A route change -- including to or from "blocked", and from a TCP-only exit
+            // to one that carries UDP -- is then only a balancer target, switchable live.
+            val t = targetsFor(r, providers) ?: continue
+            balancers.put(balancer(balancerTag(s.id), t.tcp))
+            balancers.put(balancer(quicBalancerTag(s.id), t.quic))
+            balancers.put(balancer(udpBalancerTag(s.id), t.udp))
+            each("tcp", null, balancerTag(s.id))
+            each("udp", "443", quicBalancerTag(s.id))
+            each("udp", null, udpBalancerTag(s.id))
+            val uids = r.uids.filter { uidTaken.add(it) }.map { it.toString() }
+            if (uids.isNotEmpty()) {
+                appRules.put(appRule(uids, "tcp", null, balancerTag(s.id)))
+                appRules.put(appRule(uids, "udp", "443", quicBalancerTag(s.id)))
+                appRules.put(appRule(uids, "udp", null, udpBalancerTag(s.id)))
+            }
         }
+        for (k in 0 until appRules.length()) ours.put(appRules.get(k))
         // Stable sort: depth descending, emission order kept within a depth.
         emits.sortedByDescending { it.depth }.forEach { ours.put(it.json) }
 
@@ -146,7 +186,25 @@ object MaeConfigCompiler {
         addFakeDns(json, routes.filter { it.decision is Decision.Use }.flatMap { it.service.domains + it.bundle }.distinct())
 
         if (apiSocketPath != null) addApi(json, apiSocketPath)
+        canaryPort?.let { addCanary(json, it) }
         return json.toString()
+    }
+
+    const val CANARY_IN_TAG = "mae-canary-in"
+
+    private fun addCanary(json: JSONObject, port: Int) {
+        val inbounds = json.optJSONArray("inbounds") ?: JSONArray().also { json.put("inbounds", it) }
+        val taken = (0 until inbounds.length()).any { inbounds.optJSONObject(it)?.optInt("port") == port }
+        if (!taken) inbounds.put(JSONObject().put("tag", CANARY_IN_TAG).put("listen", "127.0.0.1").put("port", port)
+            .put("protocol", "http").put("settings", JSONObject()))
+    }
+
+    private fun appRule(uids: List<String>, network: String, port: String?, balancerTag: String) = JSONObject().apply {
+        put("type", "field")
+        put("process", JSONArray(uids))
+        put("network", network)
+        port?.let { put("port", it) }
+        put("balancerTag", balancerTag)
     }
 
     /**
@@ -253,12 +311,13 @@ object MaeConfigCompiler {
 
     private fun depth(domain: String) = domain.count { it == '.' }
 
-    private fun rule(domains: List<String>?, ips: List<String>?, network: String?, outboundTag: String?, balancerTag: String?) =
+    private fun rule(domains: List<String>?, ips: List<String>?, network: String?, outboundTag: String?, balancerTag: String?, port: String? = null) =
         JSONObject().apply {
             put("type", "field")
             domains?.let { put("domain", JSONArray(it)) }
             ips?.let { put("ip", JSONArray(it)) }
             network?.let { put("network", it) }
+            port?.let { put("port", it) }
             outboundTag?.let { put("outboundTag", it) }
             balancerTag?.let { put("balancerTag", it) }
         }

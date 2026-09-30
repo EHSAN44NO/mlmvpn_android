@@ -120,7 +120,10 @@ class VpnTileService : TileService() {
                 when (val last = LastEngine.read(applicationContext)) {
                     is LastEngine.Record.Tunnel -> connectTransport(last.transportId)
 
-                    is LastEngine.Record.Xray -> {
+                    is LastEngine.Record.Xray -> if (last.nodeId == LastEngine.MAE_MARKER) {
+                        // MAE decides per network: a fresh config for this one, never the last one.
+                        startMae()
+                    } else {
                         // An SNI config is in the user's list too, but racing the list would
                         // connect to something else entirely -- and the SNI configs all point at
                         // the same local port, so a race between them measures one socket eight
@@ -172,6 +175,13 @@ class VpnTileService : TileService() {
                     .putExtra(TunnelVpnService.EXTRA_CONFIG, config)
             )
         }
+    }
+
+    /** MAE, compiled now for this network (its engine then follows the session by itself). */
+    private suspend fun startMae() {
+        withContext(Dispatchers.IO) { TunnelExclusion.releaseForXray(applicationContext) }
+        val config = withContext(Dispatchers.IO) { com.mlmvpn.scanner.engines.mae.MaeEngine.freshConfig(applicationContext) }
+        startXray(config, com.mlmvpn.scanner.engines.mae.MaeEngine.NODE_ID)
     }
 
     /** Replay one specific engine, exactly as it was. */

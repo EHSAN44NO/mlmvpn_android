@@ -172,13 +172,13 @@ class MaeUnitsTest {
         assertEquals("fragment", (d as Decision.Use).routeId)
     }
 
-    @Test fun `circuit breaker - opens after repeated failures, backs off exponentially, allows one recovery probe`() {
+    @Test fun `circuit breaker - opens after repeated failures, backs off exponentially, allows a recovery probe`() {
         val b = CircuitBreaker(threshold = 3, baseBackoffMs = 1000, maxBackoffMs = 60_000)
         repeat(3) { b.failure("worker", 0) }
         assertEquals(Health.UNAVAILABLE, b.health("worker", 500))
         assertFalse(b.allow("worker", 500))
-        assertTrue("one recovery probe after the backoff", b.allow("worker", 1500))
-        assertFalse("but only one at a time", b.allow("worker", 1600))
+        assertTrue("a recovery probe after the backoff", b.allow("worker", 1500))
+        assertTrue("asking again changes nothing: a route allowed but not probed is not locked out", b.allow("worker", 1600))
         b.failure("worker", 1600)
         assertFalse("backoff doubled", b.allow("worker", 1600 + 1500))
         assertTrue(b.allow("worker", 1600 + 2100))
@@ -304,12 +304,13 @@ class MaeUnitsTest {
         assertEquals("tcp-fragment-tls", r.first { it.optJSONArray("inboundTag")?.toString()?.contains("no-filter-dns") == true }.getString("outboundTag"))
     }
 
-    @Test fun `WARP outbound - WireGuard with noise, per-family strategy, identity fields`() {
+    @Test fun `WARP outbound - ONE WireGuard session per core, with noise and the identity fields`() {
         val outs = warp.outbounds().associateBy { it.getString("tag") }
-        assertEquals(setOf("mae-wg4", "mae-wg6", "mae-wgd"), outs.keys)
-        val o = outs["mae-wg4"]!!
+        assertEquals("one key, one session: per-family copies knocked each other off", setOf("mae-wgd"), outs.keys)
+        assertEquals("every family maps to it", setOf("mae-wgd"), FamilyPolicy.values().map { warp.tag(it) }.toSet())
+        val o = outs["mae-wgd"]!!
         assertEquals("wireguard", o.getString("protocol"))
-        assertEquals("ForceIPv4", o.getJSONObject("settings").getString("domainStrategy"))
+        assertEquals("ForceIP", o.getJSONObject("settings").getString("domainStrategy"))
         assertEquals("[1,2,3]", o.getJSONObject("settings").getJSONArray("reserved").toString())
         assertEquals("162.159.192.1:2408", o.getJSONObject("settings").getJSONArray("peers").getJSONObject(0).getString("endpoint"))
         assertEquals("noise", o.getJSONObject("streamSettings").getJSONObject("finalmask").getJSONArray("udp").getJSONObject(0).getString("type"))

@@ -33,14 +33,17 @@ import kotlinx.coroutines.withContext
 @Composable
 fun MaeAppIcon(def: ServiceDef, label: String, size: Dp = 36.dp) {
     val context = LocalContext.current
-    val icon by produceState<ImageBitmap?>(initialValue = cache[def.id], def.id) {
+    // At the size it is drawn on this screen: a fixed 96 px was blurry on dense screens.
+    val px = with(androidx.compose.ui.platform.LocalDensity.current) { size.roundToPx() }.coerceAtLeast(48)
+    val key = "${def.id}@$px"
+    val icon by produceState<ImageBitmap?>(initialValue = cache[key], key) {
         if (value != null) return@produceState
         value = withContext(Dispatchers.IO) {
             val pm = context.packageManager
             def.packages.firstNotNullOfOrNull { pkg ->
-                runCatching { pm.getApplicationIcon(pkg).toBitmap(96, 96).asImageBitmap() }.getOrNull()
+                runCatching { pm.getApplicationIcon(pkg).toBitmap(px, px).asImageBitmap() }.getOrNull()
             }
-        }?.also { cache[def.id] = it }
+        }?.also { cache[key] = it }
     }
     val shape = RoundedCornerShape(size * 0.24f)
     val current = icon

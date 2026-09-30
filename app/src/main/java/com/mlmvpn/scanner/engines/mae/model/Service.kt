@@ -28,6 +28,18 @@ data class ServiceHints(
      */
     val usExit: Boolean = false,
     val failMode: FailMode = FailMode.OPEN,
+    /**
+     * The app refuses Iranian addresses whatever its probe page shows. TikTok's website opens
+     * from Iran while its app does not (the user, 2026-09-30: five dislikes on Iranian routes, none
+     * opened it): the web page is no evidence for the app, so the app always goes abroad.
+     */
+    val requiresForeign: Boolean = false,
+    /**
+     * What the app checks on the phone itself, beyond the network: `sim` (the SIM card's country),
+     * `timezone` (the phone's time zone). No route changes these; when the phone says Iran, MAE
+     * tells the user instead of trying route after route.
+     */
+    val clientChecks: List<String> = emptyList(),
 )
 
 /**
@@ -93,7 +105,8 @@ data class ObservedRequirements(
             fun from(a: Axis, fallback: AxisValue) = d[a].takeIf { it.state != Tri.UNKNOWN } ?: fallback
             return base.copy(
                 needsBypass = from(Axis.CENSORSHIP, base.needsBypass),
-                needsForeignGeo = from(Axis.GEO_RESTRICTION, base.needsForeignGeo),
+                needsForeignGeo = if (hints.requiresForeign) AxisValue(Tri.YES, 0.8, listOf("registry: the app refuses Iranian addresses"))
+                    else from(Axis.GEO_RESTRICTION, base.needsForeignGeo),
                 needsUdp = base.needsUdp,
             )
         }

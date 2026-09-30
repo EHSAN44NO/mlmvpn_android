@@ -26,9 +26,15 @@ object PolicyEngine {
     fun isStale(p: ServicePolicy?, now: Long): Boolean =
         p == null || now - p.decidedAt > ttlMs(p.confidence)
 
-    fun requirements(state: MaeState, service: ServiceDef, net: String): ObservedRequirements {
-        val d = state.diagnoses[MaeState.sk(service.id, net)] ?: Diagnosis()
-        return ObservedRequirements.fromDiagnosis(d, service.hints)
+    fun requirements(state: MaeState, service: ServiceDef, net: String, now: Long = System.currentTimeMillis()): ObservedRequirements {
+        val key = MaeState.sk(service.id, net)
+        val d = state.diagnoses[key] ?: Diagnosis()
+        val r = ObservedRequirements.fromDiagnosis(d, service.hints)
+        // What the user saw outranks what a probe saw: the probe reads a web page, the user the app.
+        return if (state.userEvidence[key]?.geo(now) == true && !r.wantsForeign)
+            r.copy(needsForeignGeo = com.mlmvpn.scanner.engines.mae.model.AxisValue(
+                com.mlmvpn.scanner.engines.mae.model.Tri.YES, 0.9, listOf("user: the app refused the country")))
+        else r
     }
 
     fun candidates(
@@ -63,10 +69,12 @@ object PolicyEngine {
         health: (String) -> Health,
         now: Long,
         plan: RepairPlan? = null,
+        /** The network's default path, for a fail-open app with nothing working (see [RouteScorer.decide]). */
+        fallbackRoute: String? = null,
     ): Pair<Decision, ServicePolicy?> {
         val key = MaeState.sk(service.id, net)
         val current = state.policies[key]
-        var req = requirements(state, service, net)
+        var req = requirements(state, service, net, now)
         if (plan?.needsForeign == true) {
             // The user saw the service refuse the country: that is evidence, not a guess.
             req = req.copy(needsForeignGeo = com.mlmvpn.scanner.engines.mae.model.AxisValue(
@@ -74,6 +82,25 @@ object PolicyEngine {
         }
         val byId = providers.associateBy { it.id }
         var cands = candidates(state, service, net, providers, health)
+        // Each filter narrows the field; if one would leave nothing, it is skipped rather than
+        // leave the app with no route at all.
+        fun narrow(keep: (Candidate) -> Boolean) { cands.filter(keep).takeIf { it.isNotEmpty() }?.let { cands = it } }
+
+        // A fail-closed app MAE has not checked on this network yet: the foreign exit it proved on
+        // another network, if that is available here, rather than an Iranian address or nothing
+        // while the check runs.
+        if (service.hints.failMode == com.mlmvpn.scanner.engines.mae.model.FailMode.CLOSED && plan == null &&
+            current == null && cands.none { it.usable != null }) {
+            val elsewhere = state.policies.values.filter { it.serviceId == service.id && it.netKey != net }
+                .sortedByDescending { it.decidedAt }
+                .firstOrNull { p -> byId[p.routeId]?.kind == RouteKind.FOREIGN && health(p.routeId) != Health.UNAVAILABLE }
+            if (elsewhere != null) return Decision.Use(elsewhere.routeId, elsewhere.family, 0.0, "proven on another network; being checked here") to null
+        }
+
+        // Routes the user said this app did not open on, this week: not chosen again while
+        // anything else is there -- a routine re-check must not walk back into a reported failure.
+        state.userEvidence[key]?.failedRoutes(now)?.takeIf { it.isNotEmpty() }?.let { bad -> narrow { it.routeId !in bad } }
+
         // An app that needs the US exit takes it whenever it is proven here: other Cloudflare
         // exits can pass a page check and still be refused per prompt (Gemini, error 1060).
         if (service.hints.usExit) {
@@ -81,9 +108,6 @@ object PolicyEngine {
                 .takeIf { it.isNotEmpty() }?.let { cands = it }
         }
         if (plan != null) {
-            // Each rung narrows the field differently; if a filter would leave nothing, it is
-            // skipped rather than leave the app with no route at all.
-            fun narrow(keep: (Candidate) -> Boolean) { cands.filter(keep).takeIf { it.isNotEmpty() }?.let { cands = it } }
             narrow { it.routeId !in plan.excludedRoutes }
             if (plan.requireUdp) narrow { byId[it.routeId]?.caps?.udp == true }
             if (plan.stableExit) {
@@ -104,16 +128,41 @@ object PolicyEngine {
             // A repair must be free to leave the current route: no hysteresis toward it.
             current = if (plan != null) null else current?.routeId,
             pinned = current?.takeIf { it.pinned && plan == null }?.routeId,
+            fallbackRoute = fallbackRoute,
         )
         val policy = when (decision) {
             is Decision.Use -> ServicePolicy(
                 serviceId = service.id, netKey = net, routeId = decision.routeId, family = decision.family,
                 confidence = if (current?.routeId == decision.routeId) current.confidence else 0.5,
-                why = decision.why, decidedAt = now, pinned = current?.pinned == true,
+                // Only the route the user pinned is "pinned": when it is gone the decision is Auto's,
+                // and the manage page must not show another route as the user's choice.
+                why = decision.why, decidedAt = now, pinned = current?.pinned == true && current.routeId == decision.routeId,
             )
             is Decision.Block -> null
         }
         return decision to policy
+    }
+
+    /**
+     * Records what the user reported about [serviceId] on [net]: a route it did not open on
+     * ([failedRoute], `route:FAMILY`), a country refusal ([geo]), or that it opened on
+     * [openedRoute] (which clears that route and -- on a local route -- the country claim).
+     */
+    fun withEvidence(
+        state: MaeState, serviceId: String, net: String, now: Long,
+        failedRoute: String? = null, geo: Boolean = false,
+        openedRoute: String? = null, openedLocally: Boolean = false,
+    ): MaeState {
+        val key = MaeState.sk(serviceId, net)
+        val old = state.userEvidence[key] ?: com.mlmvpn.scanner.engines.mae.store.UserEvidence()
+        var failed = old.failed.filterValues { now - it < com.mlmvpn.scanner.engines.mae.store.UserEvidence.TTL_MS }
+        failedRoute?.let { failed = failed + (it to now) }
+        openedRoute?.let { r -> failed = failed.filterKeys { it.substringBefore(':') != r.substringBefore(':') } }
+        val next = old.copy(
+            failed = failed,
+            geoAt = when { geo -> now; openedLocally -> 0L; else -> old.geoAt },
+        )
+        return state.copy(userEvidence = if (next.isEmpty(now)) state.userEvidence - key else state.userEvidence + (key to next))
     }
 
     /**
@@ -130,6 +179,7 @@ object PolicyEngine {
         now: Long,
         incident: Boolean = false,
         plan: RepairPlan? = null,
+        fallbackRoute: String? = null,
     ): Pair<MaeState, Decision> {
         val key = MaeState.sk(service.id, net)
         var proofs = state.proofs
@@ -157,11 +207,12 @@ object PolicyEngine {
             metrics = metrics, proofs = proofs,
             egress = state.egress + (key to (keptEgress ?: result.egress)),
         )
-        val (decision, policy) = decide(next, service, net, providers(next), health, now, plan)
+        val (decision, policy) = decide(next, service, net, providers(next), health, now, plan, fallbackRoute)
         next = if (policy != null) next.copy(policies = next.policies + (key to policy)) else next.copy(policies = next.policies - key)
         if (incident) {
             val outcome = when (decision) { is Decision.Use -> "route ${decision.routeId}"; is Decision.Block -> "no route" }
-            next = next.copy(incidents = next.incidents + com.mlmvpn.scanner.engines.mae.store.Incident(service.id, net, now, outcome))
+            next = next.copy(incidents = (next.incidents + com.mlmvpn.scanner.engines.mae.store.Incident(service.id, net, now, outcome))
+                .takeLast(com.mlmvpn.scanner.engines.mae.store.MaeStateCodec.MAX_INCIDENTS))
         }
         return next to decision
     }

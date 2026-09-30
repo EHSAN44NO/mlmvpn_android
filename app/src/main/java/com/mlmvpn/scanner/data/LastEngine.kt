@@ -47,11 +47,21 @@ object LastEngine {
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
+    /**
+     * MAE is recorded by name only. Its config is compiled per network and carries MAE's sealed
+     * secrets unsealed (the WARP key, the Worker's id, the user's configs): stored here it went
+     * into Android backups and, replayed, brought one network's routes to another. The tile builds
+     * a fresh one instead.
+     */
+    const val MAE_MARKER = "mae"
+
+    private fun isMae(nodeId: String?) = nodeId == MAE_MARKER
+
     fun recordXray(context: Context, uri: String?, nodeId: String?) {
         if (uri.isNullOrBlank()) return
         prefs(context).edit()
             .putString(KEY_KIND, KIND_XRAY)
-            .putString(KEY_URI, uri)
+            .putString(KEY_URI, if (isMae(nodeId)) MAE_MARKER else uri)
             .putString(KEY_NODE_ID, nodeId)
             .apply()
     }
@@ -69,7 +79,12 @@ object LastEngine {
         return when (p.getString(KEY_KIND, null)) {
             KIND_XRAY -> p.getString(KEY_URI, null)
                 ?.takeIf { it.isNotBlank() }
-                ?.let { Record.Xray(it, p.getString(KEY_NODE_ID, null)) }
+                ?.let { uri ->
+                    val nodeId = p.getString(KEY_NODE_ID, null)
+                    // A record from before the marker still holds a whole MAE config: dropped here.
+                    if (isMae(nodeId) && uri != MAE_MARKER) p.edit().putString(KEY_URI, MAE_MARKER).apply()
+                    Record.Xray(if (isMae(nodeId)) MAE_MARKER else uri, nodeId)
+                }
 
             KIND_TUNNEL -> p.getString(KEY_TRANSPORT, null)
                 ?.takeIf { it.isNotBlank() }

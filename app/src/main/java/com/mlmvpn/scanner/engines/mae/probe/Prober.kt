@@ -10,6 +10,8 @@ data class ProbeRoute(
     val kind: RouteKind,
     val family: FamilyPolicy = FamilyPolicy.BOTH,
     val socksPort: Int? = null,
+    /** The route cannot reach Cloudflare-hosted destinations (see [com.mlmvpn.scanner.engines.mae.route.Capabilities]). */
+    val limited: Boolean = false,
 )
 
 /** What an exit looks like from outside, seen through the route itself. */

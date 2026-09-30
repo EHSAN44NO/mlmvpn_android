@@ -41,8 +41,14 @@ object NetworkKey {
 
         return when {
             caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> {
+                // The SIM that carries DATA. The default TelephonyManager speaks for the default
+                // (voice) SIM: on a dual-SIM phone with MCI for calls and Irancell for data, every
+                // mobile network looked like MCI, and switching the data SIM went unnoticed.
                 val carrier = try {
-                    (app.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager)?.networkOperatorName
+                    val tm = app.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+                    val dataSub = android.telephony.SubscriptionManager.getDefaultDataSubscriptionId()
+                    val dataTm = if (dataSub != android.telephony.SubscriptionManager.INVALID_SUBSCRIPTION_ID) tm?.createForSubscriptionId(dataSub) else null
+                    dataTm?.networkOperatorName?.takeIf { it.isNotBlank() } ?: tm?.networkOperatorName
                 } catch (e: Exception) {
                     null
                 }

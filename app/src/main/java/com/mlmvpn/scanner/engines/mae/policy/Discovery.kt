@@ -44,7 +44,35 @@ data class DiscoveryResult(
     val egress: ForeignEgressStatus,
     /** Stage C was run on these route ids (for tests and diagnostics). */
     val measured: Set<String>,
-)
+) {
+    /**
+     * Nothing got through anywhere -- no TCP connection, no answer, no exit echo: the network itself
+     * was down (a captive portal, a dead minute). Such a result says nothing about the routes and
+     * is not recorded.
+     */
+    val offline: Boolean get() = com.mlmvpn.scanner.engines.mae.route.RouteHealth.networkLooksDown(observations)
+}
+
+/**
+ * Exit echoes are a property of a route and family on one network, not of a service: kept for a
+ * few minutes across discoveries, so checking five apps does not ask the same exit where it is
+ * five times (and does not run into ip-api's rate limit). A missing echo is kept only briefly.
+ */
+class EchoCache(private val ttlMs: Long = 10 * 60_000L, private val missTtlMs: Long = 2 * 60_000L) {
+    private data class E(val echo: EgressEcho?, val at: Long)
+    private val m = HashMap<String, E>()
+
+    /** (known, echo): known is false when there is nothing fresh for [key]. */
+    @Synchronized fun get(key: String, now: Long): Pair<Boolean, EgressEcho?> {
+        val e = m[key] ?: return false to null
+        val ttl = if (e.echo == null) missTtlMs else ttlMs
+        return if (now - e.at < ttl) true to e.echo else false to null
+    }
+
+    @Synchronized fun put(key: String, echo: EgressEcho?, now: Long) { m[key] = E(echo, now) }
+
+    @Synchronized fun clear() = m.clear()
+}
 
 /**
  * The staged discovery for one service on one network:
@@ -63,9 +91,17 @@ class Discovery(
     private val prober: Prober,
     private val budget: ProbeBudget = ProbeBudget.WIFI,
     private val now: () -> Long = System::currentTimeMillis,
+    /** Shared across discoveries on one network (see [EchoCache]); a private one by default. */
+    private val echoes: EchoCache = EchoCache(),
+    /** The network the echoes are cached under. */
+    private val net: String = "",
 ) {
-    /** Egress echoes are per route+family per network, not per service: cache them per run. */
-    private val echoes = HashMap<String, EgressEcho?>()
+    private suspend fun echo(r: ProbeRoute): EgressEcho? {
+        val k = "$net|${key(r)}"
+        val (known, cached) = echoes.get(k, now())
+        if (known) return cached
+        return prober.egress(r).also { echoes.put(k, it, now()) }
+    }
 
     suspend fun run(
         service: ServiceDef,
@@ -110,20 +146,22 @@ class Discovery(
 
         // --- Stage A, foreign: only if geo is not already ruled out by a clean local answer.
         val first = Classifier.classify(obs, now())
-        val geoRuledOut = first[Axis.GEO_RESTRICTION].state == Tri.NO
+        // An app that refuses Iran whatever its web page shows: a local page proves nothing.
+        val geoRuledOut = first[Axis.GEO_RESTRICTION].state == Tri.NO && !service.hints.requiresForeign
         val localWorks = obs.any { it.usable }
         val foreignRoutes = routes.filter { it.kind == RouteKind.FOREIGN }
         val rejected = LinkedHashMap<String, String>()
         // Nothing suggests a geo block (no hint, no refusal text to look for) and a local route
         // works: a foreign exit has nothing to add, so no Worker quota is spent proving one.
-        val nothingToProve = localWorks && !service.hints.likelyGeoRestricted &&
+        val nothingToProve = localWorks && !service.hints.likelyGeoRestricted && !service.hints.requiresForeign &&
             spec.geoSignatures.isEmpty() && obs.none { it.refusedCountry }
-        if (forceForeign || (!nothingToProve && (!geoRuledOut || !localWorks))) {
+        val probeForeign = forceForeign || service.hints.requiresForeign || (!nothingToProve && (!geoRuledOut || !localWorks))
+        if (probeForeign) {
             val results = foreignRoutes.map { r ->
                 async {
                     gate.withPermit {
-                        val echo = echoes.getOrPut(key(r)) { prober.egress(r) }
-                        val o = observeAll(r).copy(exitAlive = echo != null)
+                        val echo = echo(r)
+                        val o = observeAll(r).copy(exitAlive = echo != null, limitedExit = r.limited)
                         Triple(r, echo, o)
                     }
                 }
@@ -156,8 +194,10 @@ class Discovery(
             .distinctBy { it.routeId to it.family }
         val rtts = survivors.map { r -> async { gate.withPermit { r to prober.rtt(r, spec, budget.rttSamples) } } }.map { it.await() }
 
-        // --- Stage C: throughput, finalists only
-        val finalists = rtts.filter { it.second != null }.sortedBy { it.second }.take(budget.finalists).map { it.first }
+        // --- Stage C: throughput, finalists only -- different routes: two families of one route
+        // share its speed and would leave the runner-up route unmeasured.
+        val finalists = rtts.filter { it.second != null }.sortedBy { it.second }.distinctBy { it.first.routeId }
+            .take(budget.finalists).map { it.first }
         val tputs = finalists.map { r -> async { gate.withPermit { r to prober.throughput(r, budget.throughputBytes) } } }.map { it.await() }
 
         // --- Metrics per route id (families of one route merge; the scorer picks the family)
@@ -188,7 +228,7 @@ class Discovery(
                     else -> FamilyPolicy.V4_ONLY
                 })
             }
-            foreignRoutes.isEmpty() || (!forceForeign && ((geoRuledOut && localWorks) || nothingToProve)) -> ForeignEgressStatus.Untested
+            foreignRoutes.isEmpty() || !probeForeign -> ForeignEgressStatus.Untested
             else -> ForeignEgressStatus.NoneFound(rejected)
         }
         DiscoveryResult(diagnosis, obs, metrics, proofs, egress, finalists.map { it.routeId }.toSet())

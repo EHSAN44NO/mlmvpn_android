@@ -75,6 +75,8 @@ class ServiceRegistry private constructor(
                     heavy = h.optBoolean("heavy"),
                     usExit = h.optBoolean("usExit"),
                     failMode = if (h.optString("failMode") == "CLOSED") FailMode.CLOSED else FailMode.OPEN,
+                    requiresForeign = h.optBoolean("requiresForeign"),
+                    clientChecks = h.optJSONArray("clientChecks").strings(),
                 ),
             )
         }

@@ -69,6 +69,12 @@ data class AppInfo(
     val packageName: String,
     val icon: Drawable?,
     val system: Boolean = false,
+    /**
+     * The icon, already a bitmap at list size -- made off the main thread when the list loads.
+     * Converting the Drawable in the row meant a full-size bitmap allocated on the main thread
+     * for every visible row on every recomposition: the list stuttered as it scrolled.
+     */
+    val bitmap: androidx.compose.ui.graphics.ImageBitmap? = null,
 )
 
 /**
@@ -131,9 +137,11 @@ internal fun rememberInstalledApps(
         apps = loaded
         loading = false
         val pm = context.packageManager
+        val px = (34 * context.resources.displayMetrics.density).toInt().coerceAtLeast(48)
         apps = withContext(Dispatchers.Default) {
             loaded.map { app ->
-                app.copy(icon = try { pm.getApplicationIcon(app.packageName) } catch (e: Exception) { null })
+                val d = try { pm.getApplicationIcon(app.packageName) } catch (e: Exception) { null }
+                app.copy(icon = d, bitmap = d?.let { runCatching { it.toBitmap(px, px).asImageBitmap() }.getOrNull() })
             }
         }
     }
@@ -653,10 +661,15 @@ internal fun AppPickerPage(
                         .padding(horizontal = 12.dp, vertical = 9.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    val icon = app.icon
+                    // Made once per app, off the main thread where the loader could, and at the
+                    // size it is shown -- never a full-size conversion per frame.
+                    val icon = app.bitmap ?: app.icon?.let { d ->
+                        val px = with(androidx.compose.ui.platform.LocalDensity.current) { 34.dp.roundToPx() }
+                        remember(app.packageName) { runCatching { d.toBitmap(px, px).asImageBitmap() }.getOrNull() }
+                    }
                     if (icon != null) {
                         Image(
-                            bitmap = icon.toBitmap().asImageBitmap(),
+                            bitmap = icon,
                             contentDescription = null,
                             modifier = Modifier.size(34.dp).clip(RoundedCornerShape(8.dp)),
                         )

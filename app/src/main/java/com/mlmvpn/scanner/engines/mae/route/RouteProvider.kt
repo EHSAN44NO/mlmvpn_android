@@ -21,6 +21,13 @@ data class Capabilities(
     val quotaLimited: Boolean = false,
     /** Cannot reach Cloudflare-fronted destinations (Worker `connect()` refuses Cloudflare IPs). */
     val noCloudflareDestinations: Boolean = false,
+    /**
+     * QUIC (UDP/443) gets through. A fragment route passes UDP untouched -- the trick is for TLS
+     * over TCP -- so a filtered service's QUIC leaves as plain as it came and stalls until the app
+     * gives up on it. The Serverless base refuses QUIC outright for exactly that reason, which
+     * sends the app to TCP at once; a route with `quic = false` does the same for its services.
+     */
+    val quic: Boolean = udp,
 )
 
 /**
@@ -79,7 +86,7 @@ object DirectRoute : RouteProvider {
 object ServerlessRoute : RouteProvider {
     override val id = "serverless"
     override val kind = RouteKind.BYPASS
-    override val caps = Capabilities(udp = true)
+    override val caps = Capabilities(udp = true, quic = false)
     const val TAG = "tcp-fragment-tls"
     override fun outbounds() = emptyList<JSONObject>()
     override fun tag(family: FamilyPolicy) = TAG
@@ -131,27 +138,27 @@ class WarpRoute(
     override val kind = RouteKind.BYPASS
     override val caps = Capabilities(udp = true)
     override val cost = 0.1
-    override val families = listOf(FamilyPolicy.V4_ONLY, FamilyPolicy.V6_ONLY, FamilyPolicy.BOTH)
 
-    override fun tag(family: FamilyPolicy) = when (family) {
-        FamilyPolicy.V4_ONLY -> "mae-wg4"
-        FamilyPolicy.V6_ONLY -> "mae-wg6"
-        FamilyPolicy.BOTH -> "mae-wgd"
-    }
+    /**
+     * ONE WireGuard session per core. Each WireGuard outbound is its own session, and Cloudflare
+     * keeps one per key: three per-family outbounds with one key (plus the probe core's copies)
+     * took the session from each other -- the server answers whichever handshook last -- and the
+     * route died under the apps using it. Families are not what WARP is chosen for (its exit is
+     * Iranian anyway); every family maps to the one outbound.
+     */
+    override val families = listOf(FamilyPolicy.BOTH)
 
-    override fun outbounds() = families.map { f ->
-        JSONObject().put("tag", tag(f)).put("protocol", "wireguard")
+    override fun tag(family: FamilyPolicy) = TAG
+
+    override fun outbounds() = listOf(
+        JSONObject().put("tag", TAG).put("protocol", "wireguard")
             .put("settings", JSONObject()
                 .put("secretKey", privateKey)
                 .put("address", JSONArray().apply { if (v4.isNotBlank()) put("$v4/32"); if (v6.isNotBlank()) put("$v6/128") })
                 .put("mtu", 1280)
                 .put("reserved", JSONArray(reserved))
                 // WireGuard's own family choice for the destination (not a proxied targetStrategy).
-                .put("domainStrategy", when (f) {
-                    FamilyPolicy.V4_ONLY -> "ForceIPv4"
-                    FamilyPolicy.V6_ONLY -> "ForceIPv6"
-                    FamilyPolicy.BOTH -> "ForceIP"
-                })
+                .put("domainStrategy", "ForceIP")
                 .put("peers", JSONArray().put(JSONObject()
                     .put("publicKey", peerPublicKey)
                     .put("endpoint", endpoint)
@@ -160,11 +167,12 @@ class WarpRoute(
             .put("streamSettings", JSONObject().put("finalmask", JSONObject().put("udp", JSONArray().put(
                 JSONObject().put("type", "noise").put("settings", JSONObject().put("noise", JSONArray()
                     .put(JSONObject().put("rand", "10-20").put("delay", "10"))
-                    .put(JSONObject().put("rand", "10-20").put("delay", "10"))))))))
-    }
+                    .put(JSONObject().put("rand", "10-20").put("delay", "10")))))))),
+    )
 
     companion object {
         const val ID = "warp"
+        const val TAG = "mae-wgd"
         /** Tried in order, one per network until one carries traffic (MCI: all of these did). */
         val ENDPOINTS = listOf("162.159.192.1:2408", "162.159.192.1:500", "188.114.97.1:4500", "[2606:4700:d0::a29f:c001]:2408", "162.159.195.1:1701")
     }
@@ -181,7 +189,12 @@ class WarpRoute(
  * per family with the outbound-level `targetStrategy`.
  */
 class UserConfigRoute(
-    /** Stable, short: `cfg1`..`cfg3`. */
+    /**
+     * `cfg-` and six hex digits of the config's own id ([idFor]): the SAME config keeps the same
+     * id whatever the order of the list. It used to be its position (`cfg1`..`cfg3`) in a list
+     * re-sorted by delay -- every ping test re-dealt the positions, and a proof earned by one
+     * server was then credited to another.
+     */
     override val id: String,
     private val proxy: JSONObject,
     /** For diagnostics only: the config's own name. */
@@ -192,6 +205,7 @@ class UserConfigRoute(
     override val cost = 0.15
     override val families = listOf(FamilyPolicy.V4_ONLY, FamilyPolicy.V6_ONLY, FamilyPolicy.BOTH)
 
+    // Same length for every config, so no tag is a prefix of another.
     override fun tag(family: FamilyPolicy) = "mae-$id-" + when (family) {
         FamilyPolicy.V4_ONLY -> "4"
         FamilyPolicy.V6_ONLY -> "6"
@@ -210,8 +224,23 @@ class UserConfigRoute(
     }
 
     companion object {
-        const val PREFIX = "cfg"
+        const val PREFIX = "cfg-"
         const val MAX = 3
+
+        /** Configs from the user's own Cloudflare panels (see MaeCloudConfigs), not the saved list. */
+        const val CLOUD_PREFIX = "cfc-"
+
+        /** The route id of the saved config whose own id is [nodeId] (or of a panel link, with [CLOUD_PREFIX]). */
+        fun idFor(nodeId: String, prefix: String = PREFIX): String {
+            val d = java.security.MessageDigest.getInstance("SHA-256").digest(nodeId.toByteArray())
+            return prefix + d.take(3).joinToString("") { "%02x".format(it) }
+        }
+
+        /** A route that is one of the user's configs, saved or from a panel. */
+        fun isConfigRoute(id: String) = id.startsWith(PREFIX) || id.startsWith(CLOUD_PREFIX)
+
+        /** Route ids from before [idFor] (positions, not identities): what was learned under them is dropped. */
+        val LEGACY_IDS = setOf("cfg1", "cfg2", "cfg3")
     }
 }
 

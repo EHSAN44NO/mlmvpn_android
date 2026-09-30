@@ -190,7 +190,19 @@ class MyVpnService : VpnService() {
             // so use a flat delay generous enough for the slowest engine (Aether killing a native
             // process) rather than racing a fresh connect against teardown still in flight.
             kotlinx.coroutines.delay(3000)
-            startService(intentToRestore)
+            // MAE compiles its config per network. The network that came back may be another one
+            // (Wi-Fi -> mobile data): replaying the old config ran the previous network's routes
+            // and DNS path, and MAE's own re-apply found the tunnel down and skipped. It builds a
+            // fresh one instead; if that fails, the old config is still better than nothing.
+            val restore = if (intentToRestore.getStringExtra("NODE_ID") == com.mlmvpn.scanner.engines.mae.MaeEngine.NODE_ID) {
+                val fresh = runCatching {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        com.mlmvpn.scanner.engines.mae.MaeEngine.freshConfig(applicationContext)
+                    }
+                }.getOrNull()
+                if (fresh != null) Intent(intentToRestore).putExtra("NODE_URI", fresh) else intentToRestore
+            } else intentToRestore
+            startService(restore)
         }
     }
 
@@ -1291,8 +1303,12 @@ class MyVpnService : VpnService() {
             fun isGameSession() = getSharedPreferences("game_booster_prefs", android.content.Context.MODE_PRIVATE)
                 .getBoolean("game_mode_active", false)
 
+            // Never while MAE is the tunnel either: it routes each app by itself, and swapping it
+            // for one node (after 15 minutes, by default) quietly took every app's route away.
+            fun isMaeSession() = connectedNodeId == com.mlmvpn.scanner.engines.mae.MaeEngine.NODE_ID
+
             while (true) {
-                val isAutoSwitchEnabled = prefs.getBoolean("auto_switch_enabled", false) && !isGameSession()
+                val isAutoSwitchEnabled = prefs.getBoolean("auto_switch_enabled", false) && !isGameSession() && !isMaeSession()
                 if (!isAutoSwitchEnabled) {
                     // Auto-switch is off by default, so for most users this branch is the only
                     // one that ever runs. Re-checking a single boolean every 10s meant ~8.6k
@@ -1306,7 +1322,7 @@ class MyVpnService : VpnService() {
                 kotlinx.coroutines.delay(intervalMinutes * 60 * 1000L)
                 
                 // Double check if still enabled after delay
-                if (!prefs.getBoolean("auto_switch_enabled", false) || !isRunning || isGameSession()) continue
+                if (!prefs.getBoolean("auto_switch_enabled", false) || !isRunning || isGameSession() || isMaeSession()) continue
                 
                 val platformStr = prefs.getString("auto_switch_platform", "None") ?: "None"
                 
@@ -1364,7 +1380,7 @@ class MyVpnService : VpnService() {
                     }
                 }
                 
-                if (bestNode != null && connectedNodeId != bestNode.id && isRunning && !isGameSession()) {
+                if (bestNode != null && connectedNodeId != bestNode.id && isRunning && !isGameSession() && !isMaeSession()) {
                     Log.d("AutoSwitch", "Found better node: ${bestNode.name} with score $bestScore. Switching...")
                     
                     val isProxyMode = com.mlmvpn.scanner.utils.NetworkSettings.proxyMode(this@MyVpnService)

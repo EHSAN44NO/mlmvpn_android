@@ -32,9 +32,14 @@ data class RouteMetrics(
     val throughputBps: Double? = null,
     val lastOkAt: Long = 0L,
     val lastTestedAt: Long = 0L,
+    /**
+     * Success as a moving average. The plain success/failure counts never forget: a route that
+     * failed twenty times last month kept a poor rate long after it started working again.
+     */
+    val okRate: Double? = null,
 ) {
     val successRate: Double
-        get() = if (successes + failures == 0) 0.5 else successes.toDouble() / (successes + failures)
+        get() = okRate ?: if (successes + failures == 0) 0.5 else successes.toDouble() / (successes + failures)
 
     fun record(ok: Boolean, rtt: Double?, now: Long): RouteMetrics = copy(
         successes = successes + if (ok) 1 else 0,
@@ -43,6 +48,7 @@ data class RouteMetrics(
         rttMs = if (ok && rtt != null) ewma(rttMs, rtt) else rttMs,
         lastOkAt = if (ok) now else lastOkAt,
         lastTestedAt = now,
+        okRate = ewma(okRate ?: successRate, if (ok) 1.0 else 0.0),
     )
 
     fun withThroughput(bps: Double): RouteMetrics = copy(throughputBps = ewma(throughputBps, bps))

@@ -106,8 +106,10 @@ object Classifier {
         // --- Service down: nothing reaches it, including abroad
         // Only when an exit abroad was itself alive: if the exits were dead too, nothing about
         // the service is known (Irancell 2026-09-29: TikTok read "down" while every exit was).
+        // And not a Worker's exit alone: its connect() cannot reach Cloudflare-hosted services at
+        // all, so its failing there says nothing about the service.
         Rule(Axis.SERVICE_DOWN, Tri.YES, 0.75, "a working exit abroad did not reach it either") { o ->
-            foreign(o).any { it.exitAlive == true } && local(o).isNotEmpty() && o.none { it.answered }
+            foreign(o).any { it.exitAlive == true && !it.limitedExit } && local(o).isNotEmpty() && o.none { it.answered }
         },
         Rule(Axis.SERVICE_DOWN, Tri.YES, 0.5, "the service answered 5xx on every route") { o ->
             o.count { it.answered } >= 2 && o.filter { it.answered }.all { it.http!!.status >= 500 }

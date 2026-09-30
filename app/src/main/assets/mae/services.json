@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "version": 6,
+ "version": 7,
  "note": "MAE service registry. Hints are priors only; MAE learns the truth per network. Data only -- never code. Probe signatures measured from MCI on 2026-09-29 (IPv4 vs IPv6 differ for OpenAI/Anthropic).",
  "services": [
   {
@@ -222,9 +222,7 @@
     "googleapis.com",
     "gstatic.com",
     "googleusercontent.com",
-    "gvt1.com",
     "gvt2.com",
-    "ggpht.com",
     "googleadservices.com",
     "clients6.google.com",
     "withgoogle.com",
@@ -288,9 +286,7 @@
     "googleapis.com",
     "gstatic.com",
     "googleusercontent.com",
-    "gvt1.com",
     "gvt2.com",
-    "ggpht.com",
     "googleadservices.com",
     "clients6.google.com",
     "withgoogle.com",
@@ -343,7 +339,17 @@
     "byteoversea.com",
     "ibytedtos.com",
     "tiktokcdn-us.com",
-    "muscdn.com"
+    "muscdn.com",
+    "tiktokv.us",
+    "tiktokv.eu",
+    "tiktokw.us",
+    "tiktokcdn-eu.com",
+    "ttwstatic.com",
+    "ibyteimg.com",
+    "byteimg.com",
+    "isnssdk.com",
+    "ttlivecdn.com",
+    "bytefcdn-oversea.com"
    ],
    "probes": [
     {
@@ -360,7 +366,12 @@
    "hints": {
     "likelyCensored": true,
     "likelyGeoRestricted": true,
-    "heavy": true
+    "heavy": true,
+    "requiresForeign": true,
+    "clientChecks": [
+     "sim",
+     "timezone"
+    ]
    }
   },
   {

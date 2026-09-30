@@ -34,6 +34,31 @@ class NetProber(private val context: Context) : Prober {
 
     private val network: Network? get() = GameNetwork.pick(context)?.network
 
+    /**
+     * Answers per host and family for this prober's life (one discovery). Resolving afresh on
+     * every sample added a DoH round trip -- up to 4 × 3 s where a resolver is filtered -- to the
+     * direct route's measured latency only (proxied routes resolve inside the core, cached), so
+     * direct always looked slower than it is.
+     */
+    private val dnsCache = java.util.concurrent.ConcurrentHashMap<String, DnsEvidence>()
+
+    private suspend fun resolve(host: String, family: FamilyPolicy): DnsEvidence {
+        val key = "$host|$family"
+        dnsCache[key]?.let { return it }
+        val v6 = family == FamilyPolicy.V6_ONLY
+        val v4 = family == FamilyPolicy.V4_ONLY
+        val system = runCatching { (network?.getAllByName(host) ?: java.net.InetAddress.getAllByName(host)).toList() }
+            .getOrDefault(emptyList())
+            .filter { a -> when { v4 -> a is java.net.Inet4Address; v6 -> a is java.net.Inet6Address; else -> true } }
+            .map { it.hostAddress.orEmpty().substringBefore('%') }
+        val doh = when {
+            v6 -> dohResolve(host, 28)
+            v4 -> dohResolve(host, 1)
+            else -> dohResolve(host, 1).ifEmpty { runCatching { DnsRaceTester.resolveViaDohByIp(host) }.getOrDefault(emptyList()) }
+        }
+        return DnsEvidence(system, doh).also { dnsCache[key] = it }
+    }
+
     override suspend fun observe(route: ProbeRoute, spec: ProbeSpec): Observation = withContext(Dispatchers.IO) {
         val uri = URI(spec.url)
         val host = uri.host ?: return@withContext Observation(route.routeId, route.kind == RouteKind.FOREIGN, route.kind == RouteKind.DIRECT)
@@ -43,22 +68,18 @@ class NetProber(private val context: Context) : Prober {
 
         var dns: DnsEvidence? = null
         val raw: Socket
-        val t0 = System.nanoTime()
+        var t0 = System.nanoTime()
         if (route.socksPort == null) {
-            val v6 = route.family == FamilyPolicy.V6_ONLY
-            val v4 = route.family == FamilyPolicy.V4_ONLY
-            val system = runCatching { (network?.getAllByName(host) ?: java.net.InetAddress.getAllByName(host)).toList() }
-                .getOrDefault(emptyList())
-                .filter { a -> when { v4 -> a is java.net.Inet4Address; v6 -> a is java.net.Inet6Address; else -> true } }
-                .map { it.hostAddress.orEmpty().substringBefore('%') }
-            val doh = when {
-                v6 -> dohResolve(host, 28)
-                v4 -> dohResolve(host, 1)
-                else -> dohResolve(host, 1).ifEmpty { runCatching { DnsRaceTester.resolveViaDohByIp(host) }.getOrDefault(emptyList()) }
+            if (route.kind != RouteKind.DIRECT) {
+                // A bypass or foreign route with no port of its own would silently be probed
+                // directly and credited with what the plain network did.
+                return@withContext Observation(route.routeId, foreign, direct, tcp = Step.ERROR)
             }
-            dns = DnsEvidence(system, doh)
-            val ip = doh.firstOrNull() ?: system.firstOrNull { !DnsEvidence.isBogus(it) }
+            dns = resolve(host, route.family)
+            val ip = dns.dohIps.firstOrNull() ?: dns.systemIps.firstOrNull { !DnsEvidence.isBogus(it) }
                 ?: return@withContext Observation(route.routeId, foreign, direct, dns = dns, tcp = Step.ERROR)
+            // Timed from here: the name was resolved once, above; what is measured is the path.
+            t0 = System.nanoTime()
             raw = network?.socketFactory?.createSocket() ?: Socket()
             try {
                 raw.connect(InetSocketAddress(ip, 443), CONNECT_MS)
@@ -142,7 +163,12 @@ class NetProber(private val context: Context) : Prober {
             val status = Regex("^HTTP/\\d(?:\\.\\d)? (\\d{3})").find(text)?.groupValues?.get(1)?.toIntOrNull() ?: return@withContext text
             val location = Regex("(?im)^location:\\s*(\\S+)").find(text)?.groupValues?.get(1)
             if (status !in 300..399 || location == null) return@withContext text
-            target = if (location.startsWith("http")) location else "https://$host${if (location.startsWith("/")) "" else "/"}$location"
+            target = when {
+                location.startsWith("http") -> location
+                // Protocol-relative (`//www.example.com/en`): the scheme is ours, the host is theirs.
+                location.startsWith("//") -> "https:$location"
+                else -> "https://$host${if (location.startsWith("/")) "" else "/"}$location"
+            }
         }
         null
     }
@@ -206,7 +232,16 @@ class NetProber(private val context: Context) : Prober {
 
     private fun open(route: ProbeRoute, host: String, port: Int): Socket =
         if (route.socksPort == null) {
-            (network?.socketFactory?.createSocket() ?: Socket()).also { it.connect(InetSocketAddress(host, port), CONNECT_MS) }
+            // The family the route stands for: a V6_ONLY sample must not quietly measure IPv4.
+            val target = when (route.family) {
+                FamilyPolicy.BOTH -> InetSocketAddress(host, port)
+                else -> {
+                    val want6 = route.family == FamilyPolicy.V6_ONLY
+                    val addrs = runCatching { (network?.getAllByName(host) ?: java.net.InetAddress.getAllByName(host)).toList() }.getOrDefault(emptyList())
+                    addrs.firstOrNull { (it is java.net.Inet6Address) == want6 }?.let { InetSocketAddress(it, port) } ?: InetSocketAddress(host, port)
+                }
+            }
+            (network?.socketFactory?.createSocket() ?: Socket()).also { it.connect(target, CONNECT_MS) }
         } else {
             Socket(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", route.socksPort)))
                 .also { it.connect(InetSocketAddress.createUnresolved(host, port), CONNECT_MS * 2) }
@@ -222,9 +257,16 @@ class NetProber(private val context: Context) : Prober {
         }
     }.getOrNull()
 
-    private fun tlsGet(raw: Socket, host: String, path: String, spec: ProbeSpec): Pair<Step, HttpEvidence?> {
+    /**
+     * TLS + one small GET over an already connected [raw] socket (a proxy's CONNECT tunnel, for the
+     * live check). [handshakeMs] / [readMs] are the budgets; the socket is closed afterwards.
+     */
+    fun tlsGetThrough(raw: Socket, host: String, path: String, spec: ProbeSpec, handshakeMs: Int, readMs: Int): Pair<Step, HttpEvidence?> =
+        tlsGet(raw, host, path, spec, handshakeMs, readMs)
+
+    private fun tlsGet(raw: Socket, host: String, path: String, spec: ProbeSpec, handshakeMs: Int = TLS_MS, readMs: Int = READ_MS): Pair<Step, HttpEvidence?> {
         val ssl: SSLSocket = try {
-            raw.soTimeout = TLS_MS
+            raw.soTimeout = handshakeMs
             (SSLSocketFactory.getDefault() as SSLSocketFactory).createSocket(raw, host, 443, true) as SSLSocket
         } catch (e: Exception) {
             raw.close(); return Step.ERROR to null
@@ -245,7 +287,7 @@ class NetProber(private val context: Context) : Prober {
             ssl.close(); return Step.CERT_MISMATCH to null
         }
         return try {
-            ssl.soTimeout = READ_MS
+            ssl.soTimeout = readMs
             ssl.outputStream.write(("GET $path HTTP/1.1\r\nHost: $host\r\nUser-Agent: $UA\r\n" +
                 "Accept: text/html,application/json,*/*\r\nAccept-Language: en\r\nConnection: close\r\n\r\n").toByteArray())
             val text = readUpTo(ssl.inputStream, if (spec.readBytes > 0) spec.readBytes else MAX_READ)

@@ -47,6 +47,8 @@ data class Observation(
     val rttMs: Long? = null,
     /** FOREIGN only: the exit itself answered the echo (null: not a foreign probe). */
     val exitAlive: Boolean? = null,
+    /** The exit cannot reach every destination (a Worker's `connect()` refuses Cloudflare's own). */
+    val limitedExit: Boolean = false,
 ) {
     /** The service itself answered, over its own certificate. */
     val answered: Boolean get() = tls == Step.OK && http != null
