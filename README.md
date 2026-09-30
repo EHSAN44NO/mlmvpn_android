@@ -47,6 +47,22 @@ three-tier emergency fallback system, all in one app.
   - Aether engine (`core/aether`) — MASQUE / WireGuard / WARP-in-WARP
     censorship circumvention; see [`AETHER.md`](AETHER.md)
   - VPN Gate public relay browsing (`engines/vpngate`, SoftEther/OpenVPN)
+  - Standalone WARP, Psiphon, Tor and Geph (Geph's official, signature-checked
+    client) engines, each on its own home-screen tile
+  - OpenVPN with the user's own TunnelBear account (`engines/openvpn`)
+  - GitHub Tunnel (`engines/github`) and a ready-made Quick Connect pool
+- **MLM Adaptive Engine (MAE, experimental)** (`engines/mae`) — the user picks
+  the apps and sites they use; MAE learns, per network, which route each one
+  needs (direct, Serverless, WARP, or a proven foreign exit from the user's own
+  configs) and routes every app separately on one Xray tunnel, so only what
+  truly needs a foreign IP leaves through one. "Didn't open" feedback runs a
+  5-step repair ladder. Gemini and Google Flow go through a US exit (a Durable
+  Object on the user's own Cloudflare account) set up automatically. See
+  [`MAE_ARCHITECTURE.md`](MAE_ARCHITECTURE.md).
+- **Config Studio** (`configstudio`) — a user/quota/device-limit panel for the
+  user's own Cloudflare Worker, with VLESS and Trojan links and multi-location
+  exits; plus the Config Arena, which races the user's cloud panels (BPB, Edge,
+  Nahan, MLM, Spider, Netra, Gozargah) on one clean IP.
 - **Cloud panel (Cloudflare account integration)** (`CloudTab`,
   `data/CloudManager`) — connect one or more Cloudflare accounts (email +
   Global API Key or scoped API token) directly in the app and, without
@@ -80,14 +96,13 @@ three-tier emergency fallback system, all in one app.
   it; setup is a guided in-app card that hands the certificate to Android's
   own installer (or, on Android 11+, walks the user through Settings, since
   the platform no longer accepts a certificate handed in by an app).
-- **Side (hamburger) menu** — quick access to: Settings, data-usage
-  statistics, Fixed-IP management, deployed-Workers list, personal
-  anti-sanction DNS, a subscription-link generator, an in-app tutorial, and
-  About.
+- **iOS-style home screen** — every engine and tool is a tile that can be
+  reordered and grouped into folders (Fixed IP, subscription links, LAN
+  sharing, usage and tutorials live in a Tools folder), plus an engine store
+  that updates engines from their signed upstream releases.
 - **Three-tier Emergency fallback system** — guided, progressively more
   aggressive recovery paths (Emergency 1/2/3 in the side menu) for when
-  primary connectivity is fully blocked, up to and including a Vercel-based
-  relay bootstrap.
+  primary connectivity is fully blocked.
 
 ### Tech stack
 
@@ -192,6 +207,23 @@ MLM VPN بسیار فراتر از یک کلاینت تک‌پروتکلی VPN �
   - موتور Aether (`core/aether`) — دورزدن محدودیت با MASQUE / WireGuard /
     WARP-in-WARP؛ به [`AETHER.md`](AETHER.md) مراجعه کنید
   - مرور رله‌های عمومی VPN Gate (`engines/vpngate`، SoftEther/OpenVPN)
+  - موتورهای مستقل وارپ، سایفون، تور و گف (کلاینت رسمی گف با بررسی امضا)،
+    هرکدام با آیکون خودش در صفحهٔ اصلی
+  - OpenVPN با حساب TunnelBear خود کاربر (`engines/openvpn`)
+  - گیت‌هاب تانل (`engines/github`) و «اتصال سریع» با مجموعه‌ای آمادهٔ سرور
+- **موتور تطبیقی MLM (MAE، آزمایشی)** (`engines/mae`) — کاربر اپلیکیشن‌ها و
+  سایت‌هایی را که استفاده می‌کند انتخاب می‌کند؛ موتور برای هر کدام روی هر
+  اینترنت یاد می‌گیرد کدام مسیر لازم است (مستقیم، سرورلس، وارپ، یا یک خروجی
+  خارجیِ آزموده‌شده از کانفیگ‌های خود کاربر) و هر اپلیکیشن را روی یک تونل
+  Xray جداگانه مسیریابی می‌کند؛ فقط آنچه واقعاً آی‌پی خارجی لازم دارد از
+  خروجی خارجی می‌رود. بازخورد «باز نشد» یک نردبان تعمیر ۵مرحله‌ای را اجرا
+  می‌کند. جمینای و گوگل فلو از یک خروجی آمریکا (Durable Object روی حساب
+  کلادفلر خود کاربر) می‌روند که خودکار ساخته می‌شود. به
+  [`MAE_ARCHITECTURE.md`](MAE_ARCHITECTURE.md) مراجعه کنید.
+- **کانفیگ استدیو** (`configstudio`) — پنل کاربر، حجم و محدودیت دستگاه برای
+  ورکر کلادفلر خود کاربر، با لینک‌های VLESS و Trojan و خروجی چندکشوری؛ به‌همراه
+  «میدان کانفیگ» که پنل‌های ابری کاربر (BPB، Edge، نهان، MLM، اسپایدر، نترا،
+  گذرگاه) را روی یک آی‌پی تمیز مسابقه می‌دهد.
 - **پنل ابری (اتصال حساب کلودفلر)** (`CloudTab`، `data/CloudManager`) —
   اتصال یک یا چند حساب کلودفلر (ایمیل + Global API Key یا توکن محدودشده)
   مستقیماً داخل اپ، بدون نیاز به داشبورد کلودفلر:
@@ -224,12 +256,13 @@ MLM VPN بسیار فراتر از یک کلاینت تک‌پروتکلی VPN �
   داخل اپ است که گواهی را به نصب‌کننده‌ی خود اندروید می‌سپارد (یا در
   اندروید ۱۱ به بالا، چون پلتفرم دیگر گواهی داده‌شده توسط اپ را قبول
   نمی‌کند، کاربر را قدم‌به‌قدم در تنظیمات راهنمایی می‌کند).
-- **منوی کناری (همبرگری)** — دسترسی سریع به: تنظیمات، آمار مصرف داده،
-  مدیریت IP ثابت، لیست ورکرهای مستقرشده، DNS ضد تحریم شخصی، تولیدکننده
-  لینک اشتراک، آموزش داخل‌اپ، و درباره ما.
+- **صفحهٔ اصلی به سبک iOS** — هر موتور و ابزار یک آیکون است که می‌شود
+  جابه‌جا کرد و در پوشه گذاشت (IP ثابت، لینک اشتراک، اشتراک در شبکهٔ محلی،
+  آمار مصرف و آموزش در پوشهٔ «ابزارها»)، به‌همراه استور موتورها که موتورها
+  را از نسخه‌های امضاشدهٔ سازنده‌شان به‌روز می‌کند.
 - **سیستم پشتیبان اضطراری سه‌سطحی** — مسیرهای بازیابی هدایت‌شده و به‌مرور
   تهاجمی‌تر (اضطراری ۱/۲/۳ در منوی کناری) برای زمانی که مسیرهای اصلی اتصال
-  کاملاً مسدود شده باشند، تا سطح بوت‌استرپ رله مبتنی بر Vercel.
+  کاملاً مسدود شده باشند.
 
 ### ساختار پروژه
 
