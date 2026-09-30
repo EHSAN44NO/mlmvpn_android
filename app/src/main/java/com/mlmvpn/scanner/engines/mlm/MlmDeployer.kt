@@ -100,6 +100,14 @@ class MlmDeployer(private val context: Context) {
                 }
             }
 
+            // 1b. The account's own legacy MLM panel first (PanelRegistry) -- its Worker, D1 and
+            // password -- never a second one beside it.
+            com.mlmvpn.scanner.engines.cloud.PanelRegistry.live(account, "MLM")?.let { g ->
+                account.mlmWorkerUrl = g.url
+                g.d1?.let { account.mlmDbId = it }
+                g.s.optString("password").takeIf { it.isNotBlank() }?.let { account.mlmAdminPassword = it }
+            }
+
             // 2. Reuse the existing D1 Database if this account was already deployed before
             // (a redeploy/update used to always create a brand-new D1 database and never
             // cleaned up the old one on failure, so repeated retries silently ate into the
@@ -258,6 +266,8 @@ class MlmDeployer(private val context: Context) {
             account.mlmVersion = com.mlmvpn.scanner.data.PanelBuild.MLM
             account.mlmWorkerUrl = finalUrl
             account.mlmDbId = databaseId
+            com.mlmvpn.scanner.engines.cloud.PanelRegistry.publish(account, "MLM", workerName, finalUrl, null, databaseId,
+                JSONObject().put("password", account.mlmAdminPassword ?: ""))
 
             Pair(true, "Deployment Successful! URL: $finalUrl")
 

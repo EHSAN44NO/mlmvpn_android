@@ -92,6 +92,15 @@ class NahanDeployer(private val context: Context) {
                 }
             }
 
+            // 1b. The account's own Nahan first (PanelRegistry): the Worker, the D1 and the KEY that
+            // Windows or this phone already use -- never a second panel and database beside them.
+            com.mlmvpn.scanner.engines.cloud.PanelRegistry.live(account, "NHN")?.let { g ->
+                account.nahanWorkerUrl = g.url
+                g.d1?.let { account.nahanDbId = it }
+                g.s.optString("masterKey").takeIf { it.isNotBlank() }?.let { account.nahanMasterKey = it }
+                g.s.optString("apiRoute").takeIf { it.isNotBlank() }?.let { account.nahanApiRoute = it }
+            }
+
             // 2. Reuse the existing D1 Database if this account was already deployed before,
             // instead of always provisioning a new one (see MlmDeployer.kt for why: repeated
             // retries used to silently eat into the account's D1 quota).
@@ -228,8 +237,12 @@ class NahanDeployer(private val context: Context) {
             account.nahanVersion = com.mlmvpn.scanner.data.PanelBuild.NHN
             account.nahanWorkerUrl = finalUrl
             account.nahanDbId = databaseId
-            account.nahanMasterKey = "admin" // Default master key
-            account.nahanApiRoute = "sync"
+            // A panel this account already had keeps ITS key and route (the registry's, or the ones
+            // Windows made random); only a first install starts on the panel's own defaults.
+            if (account.nahanMasterKey.isNullOrBlank()) account.nahanMasterKey = "admin"
+            if (account.nahanApiRoute.isBlank()) account.nahanApiRoute = "sync"
+            com.mlmvpn.scanner.engines.cloud.PanelRegistry.publish(account, "NHN", workerName, finalUrl, null, databaseId,
+                JSONObject().put("masterKey", account.nahanMasterKey).put("apiRoute", account.nahanApiRoute))
 
             // Note: Caller is responsible for saving the account logic.
             Pair(true, "Deployment Successful! URL: $finalUrl")

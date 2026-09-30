@@ -3,6 +3,7 @@ package com.mlmvpn.scanner.engines.netra
 import android.content.Context
 import android.util.Log
 import com.mlmvpn.scanner.engines.cloud.CfWorkers
+import com.mlmvpn.scanner.engines.cloud.PanelRegistry
 import com.mlmvpn.scanner.models.CloudAccount
 import com.mlmvpn.scanner.store.StoreFiles
 import com.mlmvpn.scanner.store.StoreNet
@@ -35,6 +36,8 @@ object NetraPanel {
     /** The store's asset name. Not shipped: [code] falls back to the developer's latest release. */
     const val ASSET = "netra_worker.js"
     private const val PREFS = "netra_panel"
+    /** This panel's key in the account's shared registry (PanelRegistry). */
+    const val CODE = "NTR"
 
     data class Install(val script: String, val url: String, val uuid: String, val trPass: String, val subPath: String, val kvId: String)
 
@@ -50,6 +53,22 @@ object NetraPanel {
     private fun save(context: Context, accountId: String, i: Install) {
         prefs(context).edit().putString("i_$accountId", JSONObject().put("script", i.script).put("url", i.url).put("uuid", i.uuid)
             .put("tr", i.trPass).put("sub", i.subPath).put("kv", i.kvId).toString()).apply()
+    }
+
+    private fun fromRecord(g: PanelRegistry.Record) = Install(g.script, g.url, g.s.optString("uuid"), g.s.optString("trPass"), g.s.optString("subPath"), g.kv.orEmpty())
+
+    private fun publish(account: CloudAccount, i: Install) = PanelRegistry.publish(account, CODE, i.script, i.url, i.kvId.ifBlank { null }, null,
+        JSONObject().put("uuid", i.uuid).put("trPass", i.trPass).put("subPath", i.subPath))
+
+    /**
+     * The account's shared Netra (PanelRegistry) → this phone; this phone's → the account when the
+     * registry has none yet. Blocking; call on IO.
+     */
+    fun sync(context: Context, account: CloudAccount) {
+        val g = PanelRegistry.live(account, CODE)
+        if (g != null) { save(context, account.accountId, fromRecord(g)); return }
+        val mine = install(context, account.accountId) ?: return
+        if (PanelRegistry.scriptExists(account, mine.script)) publish(account, mine)
     }
 
     /** The store's copy when it has one, else `worker.js` from the developer's latest release. */
@@ -72,6 +91,15 @@ object NetraPanel {
         runCatching {
             onStep(tr("بررسی زیردامنه…", "Checking the subdomain…"))
             val sub = CfWorkers.subdomain(account)
+            // The account's own Netra first -- the one Windows or this phone already installed --
+            // never a second Worker and KV beside it.
+            PanelRegistry.live(account, CODE)?.let { g ->
+                val shared = fromRecord(g)
+                if (install(context, account.accountId) != shared) {
+                    save(context, account.accountId, shared)
+                    onStep(tr("همان نترای مشترک این حساب به کار می‌رود — ورکر یا KV تازه ساخته نمی‌شود.", "Using this account's shared Netra — no new Worker or KV."))
+                }
+            }
             val prev = install(context, account.accountId)
             val script = prev?.script ?: (com.mlmvpn.scanner.utils.AntiDpi.generateSafeWorkerName() + "-ntr")
             val inst = prev ?: Install(
@@ -101,7 +129,7 @@ object NetraPanel {
             )
             onStep(tr("فعال کردن آدرس…", "Enabling the address…"))
             CfWorkers.enableWorkersDev(account, script)
-            inst.copy(kvId = kv).also { save(context, account.accountId, it) }
+            inst.copy(kvId = kv).also { save(context, account.accountId, it); publish(account, it) }
         }.onFailure { Log.w(TAG, "deploy", it) }
     }
 
@@ -135,6 +163,7 @@ object NetraPanel {
             val inst = install(context, account.accountId) ?: return@runCatching
             CfWorkers.remove(account, inst.script, kvId = inst.kvId)
             prefs(context).edit().remove("i_${account.accountId}").apply()
+            PanelRegistry.removeIf(account, CODE, inst.script)
         }
     }
 }

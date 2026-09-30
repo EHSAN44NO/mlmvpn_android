@@ -1119,10 +1119,22 @@ class CloudManager private constructor(private val context: Context) {
                 }
             }
 
-            // 2. Generate Secrets
-            val workerUuid = java.util.UUID.randomUUID().toString()
-            val trPass = java.util.UUID.randomUUID().toString().replace("-", "")
-            val subPath = java.util.UUID.randomUUID().toString().substring(0, 8)
+            // 2. The account's own BPB first (PanelRegistry): the one Windows or this phone already
+            // installed, with ITS UUID, password and path -- never a second Worker beside it. A
+            // redeploy of the same Worker keeps its credentials, so the configs handed out keep working.
+            com.mlmvpn.scanner.engines.cloud.PanelRegistry.live(account, "BPB")?.let { g ->
+                if (!g.s.optString("uuid").isNullOrBlank()) {
+                    account.workerUrl = g.url
+                    account.uuid = g.s.optString("uuid")
+                    account.trPass = g.s.optString("trPass").ifBlank { account.trPass }
+                    account.subPath = g.s.optString("subPath").ifBlank { account.subPath }
+                    g.kv?.let { account.kvNamespaceId = it }
+                }
+            }
+            val keep = !account.workerUrl.isNullOrBlank()
+            val workerUuid = account.uuid?.takeIf { keep && it.isNotBlank() } ?: java.util.UUID.randomUUID().toString()
+            val trPass = account.trPass?.takeIf { keep && it.isNotBlank() } ?: java.util.UUID.randomUUID().toString().replace("-", "")
+            val subPath = account.subPath?.takeIf { keep && it.isNotBlank() } ?: java.util.UUID.randomUUID().toString().substring(0, 8)
 
             // 3. KV namespace: find it, and only create it if it is genuinely not there.
             //
@@ -1329,6 +1341,9 @@ class CloudManager private constructor(private val context: Context) {
             account.uuid = workerUuid
             account.trPass = trPass
             account.subPath = subPath
+            // And to the account, for the Windows app: this is THE BPB of this account now.
+            com.mlmvpn.scanner.engines.cloud.PanelRegistry.publish(account, "BPB", workerName, finalUrl, namespaceId, null,
+                JSONObject().put("uuid", workerUuid).put("trPass", trPass).put("subPath", subPath))
             
             // Save to shared preferences
             saveAccounts()
@@ -1640,7 +1655,16 @@ class CloudManager private constructor(private val context: Context) {
             }
 
             // 2. Setup Variables
-            val edgUuid = java.util.UUID.randomUUID().toString()
+            // The account's own Edge first (PanelRegistry), with its UUID -- and a redeploy of the same
+            // Worker keeps its UUID, so its configs keep working.
+            com.mlmvpn.scanner.engines.cloud.PanelRegistry.live(account, "EDG")?.let { g ->
+                if (!g.s.optString("uuid").isNullOrBlank()) {
+                    account.edgWorkerUrl = g.url
+                    account.edgUuid = g.s.optString("uuid")
+                    g.kv?.let { account.edgKvNamespaceId = it }
+                }
+            }
+            val edgUuid = account.edgUuid?.takeIf { !account.edgWorkerUrl.isNullOrBlank() && it.isNotBlank() } ?: java.util.UUID.randomUUID().toString()
             val edgAdminPass = account.edgAdminPass.takeIf { !it.isNullOrEmpty() } ?: java.util.UUID.randomUUID().toString().substring(0, 8)
             val proxyIp = "proxyip.cmliussss.net"
 
@@ -1792,6 +1816,7 @@ class CloudManager private constructor(private val context: Context) {
             account.edgWorkerUrl = finalUrl
             account.edgUuid = edgUuid
             account.edgAdminPass = edgAdminPass
+            com.mlmvpn.scanner.engines.cloud.PanelRegistry.publish(account, "EDG", workerName, finalUrl, kvId, null, JSONObject().put("uuid", edgUuid))
             
             saveAccounts()
 

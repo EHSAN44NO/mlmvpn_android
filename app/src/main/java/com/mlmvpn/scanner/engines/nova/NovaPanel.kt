@@ -49,6 +49,24 @@ object NovaPanel {
 
     private fun prefs(context: Context) = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
+    /** This panel's key in the account's shared registry (engines/cloud/PanelRegistry). */
+    const val CODE = "NVA"
+
+    private fun fromRecord(g: com.mlmvpn.scanner.engines.cloud.PanelRegistry.Record) =
+        Install(g.script, g.url, g.s.optString("password"), g.d1.orEmpty(), g.kv.orEmpty())
+
+    private fun publish(account: CloudAccount, i: Install) = com.mlmvpn.scanner.engines.cloud.PanelRegistry.publish(
+        account, CODE, i.script, i.url, i.kvId.ifBlank { null }, i.d1Id.ifBlank { null }, JSONObject().put("password", i.password))
+
+    /** The account's shared Nova → this phone; this phone's → the account when it has none. */
+    fun sync(context: Context, account: CloudAccount) {
+        val reg = com.mlmvpn.scanner.engines.cloud.PanelRegistry
+        val g = reg.live(account, CODE)
+        if (g != null && g.s.optString("password").isNotBlank()) { save(context, account.accountId, fromRecord(g)); return }
+        val mine = install(context, account.accountId) ?: return
+        if (reg.scriptExists(account, mine.script)) publish(account, mine)
+    }
+
     fun install(context: Context, accountId: String): Install? = runCatching {
         val o = JSONObject(prefs(context).getString("i_$accountId", null) ?: return null)
         Install(o.getString("script"), o.getString("url"), o.getString("pw"), o.optString("d1"), o.optString("kv"))
@@ -108,6 +126,14 @@ object NovaPanel {
         runCatching {
             onStep(tr("بررسی زیردامنه…", "Checking the subdomain…"))
             val sub = CfWorkers.subdomain(account)
+            // The account's own Nova first (Windows' or this phone's): no second Worker, D1 or KV.
+            com.mlmvpn.scanner.engines.cloud.PanelRegistry.live(account, CODE)?.takeIf { it.s.optString("password").isNotBlank() }?.let { g ->
+                val shared = fromRecord(g)
+                if (install(context, account.accountId) != shared) {
+                    save(context, account.accountId, shared)
+                    onStep(tr("همان نوای مشترک این حساب به کار می‌رود — ورکر یا دیتابیس تازه ساخته نمی‌شود.", "Using this account's shared Nova — no new Worker or database."))
+                }
+            }
             val prev = install(context, account.accountId)
             val script = prev?.script ?: (com.mlmvpn.scanner.utils.AntiDpi.generateSafeWorkerName() + "-nva")
             val url = prev?.url ?: "https://$script.$sub.workers.dev"
@@ -131,7 +157,7 @@ object NovaPanel {
             onStep(tr("فعال کردن آدرس…", "Enabling the address…"))
             CfWorkers.enableWorkersDev(account, script)
 
-            if (prev != null) return@runCatching prev.copy(d1Id = d1, kvId = kv).also { save(context, account.accountId, it) }
+            if (prev != null) return@runCatching prev.copy(d1Id = d1, kvId = kv).also { save(context, account.accountId, it); publish(account, it) }
 
             // First run: /install is public until a password is set, so it is set at once.
             onStep(tr("امن کردن پنل…", "Securing the panel…"))
@@ -154,6 +180,7 @@ object NovaPanel {
             if (!claimed) error(tr("پنل نوا پس از نصب رمز نگرفت", "Nova did not take a password after the install") + " ($lastError)")
             val inst = Install(script, url, password, d1, kv)
             save(context, account.accountId, inst)
+            publish(account, inst)
             inst
         }.onFailure { Log.w(TAG, "deploy", it) }
     }
@@ -217,6 +244,7 @@ object NovaPanel {
             val inst = install(context, account.accountId) ?: return@runCatching
             CfWorkers.remove(account, inst.script, kvId = inst.kvId, d1Id = inst.d1Id)
             prefs(context).edit().remove("i_${account.accountId}").apply()
+            com.mlmvpn.scanner.engines.cloud.PanelRegistry.removeIf(account, CODE, inst.script)
         }
     }
 }

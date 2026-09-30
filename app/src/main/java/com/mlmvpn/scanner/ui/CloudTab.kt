@@ -174,6 +174,16 @@ fun CloudTab(
         }
     }
 
+    // «هماهنگ با ویندوز» (engines/cloud/PanelRegistry): once per session per account, the account's
+    // shared panel installs → this phone, and this phone's → the account. Quiet: a panel that cannot
+    // be synced stays as it was; the list is refreshed only when something moved.
+    LaunchedEffect(accounts.size) {
+        val moved = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            accounts.toList().map { acc -> runCatching { com.mlmvpn.scanner.engines.cloud.PanelSync.syncOnce(context, acc) }.getOrDefault(false) }.any { it }
+        }
+        if (moved) accounts = cloudManager.accounts.toList()
+    }
+
     val troubleshootDetail: (@Composable () -> Unit)? =
         if (troubleshootFor == null && troubleshootCredential == null) null else ({
         androidx.activity.compose.BackHandler(enabled = true) {

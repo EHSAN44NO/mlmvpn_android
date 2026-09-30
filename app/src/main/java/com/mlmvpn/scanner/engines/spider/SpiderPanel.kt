@@ -77,6 +77,23 @@ object SpiderPanel {
             .put("script", i.script).put("url", i.url).put("token", i.token).put("kv", i.kvId).toString()).apply()
     }
 
+    /** This panel's key in the account's shared registry (engines/cloud/PanelRegistry). */
+    const val CODE = "SPD"
+
+    private fun fromRecord(g: com.mlmvpn.scanner.engines.cloud.PanelRegistry.Record) = Install(g.script, g.url, g.s.optString("token"), g.kv.orEmpty())
+
+    private fun publish(account: CloudAccount, i: Install) = com.mlmvpn.scanner.engines.cloud.PanelRegistry.publish(
+        account, CODE, i.script, i.url, i.kvId.ifBlank { null }, null, JSONObject().put("token", i.token))
+
+    /** The account's shared Spider → this phone; this phone's → the account when it has none. */
+    fun sync(context: Context, account: CloudAccount) {
+        val reg = com.mlmvpn.scanner.engines.cloud.PanelRegistry
+        val g = reg.live(account, CODE)
+        if (g != null && g.s.optString("token").isNotBlank()) { saveInstall(context, account.accountId, fromRecord(g)); return }
+        val mine = install(context, account.accountId) ?: return
+        if (reg.scriptExists(account, mine.script)) publish(account, mine)
+    }
+
     fun forget(context: Context, accountId: String) {
         prefs(context).edit().remove("i_$accountId").remove("x_$accountId").apply()
     }
@@ -149,6 +166,14 @@ object SpiderPanel {
             }
             if (sub.isBlank()) error(tr("این حساب هنوز زیردامنهٔ workers.dev ندارد.", "This account has no workers.dev subdomain yet."))
 
+            // The account's own Spider first (Windows' or this phone's): no second Worker or KV.
+            com.mlmvpn.scanner.engines.cloud.PanelRegistry.live(account, CODE)?.takeIf { it.s.optString("token").isNotBlank() }?.let { g ->
+                val shared = fromRecord(g)
+                if (install(context, account.accountId) != shared) {
+                    saveInstall(context, account.accountId, shared)
+                    onStep(tr("همان اسپایدر مشترک این حساب به کار می‌رود — ورکر یا KV تازه ساخته نمی‌شود.", "Using this account's shared Spider — no new Worker or KV."))
+                }
+            }
             val prev = install(context, account.accountId)
             val script = prev?.script ?: (com.mlmvpn.scanner.utils.AntiDpi.generateSafeWorkerName() + "-spd")
             val host = "$script.$sub.workers.dev"
@@ -191,6 +216,7 @@ object SpiderPanel {
 
             val inst = Install(script, "https://$host", token, kv)
             saveInstall(context, account.accountId, inst)
+            publish(account, inst)
             inst
         }.onFailure { Log.w(TAG, "deploy", it) }
     }

@@ -36,6 +36,8 @@ object GozargahPanel {
     const val RELEASE_ASSET = "gozargah-worker.js"
     const val ASSET = "gozargah_worker.js"
     private const val PREFS = "gozargah_panel"
+    /** This panel's key in the account's shared registry (engines/cloud/PanelRegistry). */
+    const val CODE = "GZG"
     /** The user the arena and «دریافت کانفیگ» use, so the operator's own users are never touched. */
     const val ARENA_USER = "mlmvpn-arena"
 
@@ -45,6 +47,23 @@ object GozargahPanel {
     data class Install(val script: String, val url: String, val panelPath: String, val subPath: String, val password: String, val d1Id: String)
 
     fun looksLikeGozargah(code: String) = code.contains("GZ_DB") && code.contains("gozargah")
+
+    private fun fromRecord(g: com.mlmvpn.scanner.engines.cloud.PanelRegistry.Record) = Install(
+        g.script, g.url, g.s.optString("panelPath").ifBlank { DEFAULT_PANEL }, g.s.optString("subPath").ifBlank { "sub" },
+        g.s.optString("password").ifBlank { DEFAULT_PASSWORD }, g.d1.orEmpty())
+
+    private fun publish(account: CloudAccount, i: Install) = com.mlmvpn.scanner.engines.cloud.PanelRegistry.publish(
+        account, CODE, i.script, i.url, null, i.d1Id.ifBlank { null },
+        JSONObject().put("panelPath", i.panelPath).put("subPath", i.subPath).put("password", i.password))
+
+    /** The account's shared Gozargah → this phone; this phone's → the account when it has none. */
+    fun sync(context: Context, account: CloudAccount) {
+        val reg = com.mlmvpn.scanner.engines.cloud.PanelRegistry
+        val g = reg.live(account, CODE)
+        if (g != null) { save(context, account.accountId, fromRecord(g)); return }
+        val mine = install(context, account.accountId) ?: return
+        if (reg.scriptExists(account, mine.script)) publish(account, mine)
+    }
 
     private fun prefs(context: Context) = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -101,6 +120,14 @@ object GozargahPanel {
         runCatching {
             onStep(tr("بررسی زیردامنه…", "Checking the subdomain…"))
             val sub = CfWorkers.subdomain(account)
+            // The account's own Gozargah first (Windows' or this phone's): no second Worker or D1.
+            com.mlmvpn.scanner.engines.cloud.PanelRegistry.live(account, CODE)?.let { g ->
+                val shared = fromRecord(g)
+                if (install(context, account.accountId) != shared) {
+                    save(context, account.accountId, shared)
+                    onStep(tr("همان گذرگاه مشترک این حساب به کار می‌رود — ورکر یا D1 تازه ساخته نمی‌شود.", "Using this account's shared Gozargah — no new Worker or D1."))
+                }
+            }
             val prev = install(context, account.accountId)
             val script = prev?.script ?: (com.mlmvpn.scanner.utils.AntiDpi.generateSafeWorkerName() + "-gzg")
             val url = prev?.url ?: "https://$script.$sub.workers.dev"
@@ -118,7 +145,8 @@ object GozargahPanel {
             onStep(tr("فعال کردن آدرس…", "Enabling the address…"))
             CfWorkers.enableWorkersDev(account, script)
 
-            if (prev != null) return@runCatching prev.copy(d1Id = d1).also { save(context, account.accountId, it) }
+            // Only a panel still on its public defaults is secured below; any other keeps its own.
+            if (prev != null && prev.password != DEFAULT_PASSWORD) return@runCatching prev.copy(d1Id = d1).also { save(context, account.accountId, it); publish(account, it) }
 
             // First run: the panel is on its public defaults until this replaces them.
             onStep(tr("امن کردن پنل…", "Securing the panel…"))
@@ -136,6 +164,7 @@ object GozargahPanel {
                 JSONObject().put("newPassword", password).put("panelPath", panel).put("subPath", subPath))
             val inst = Install(script, url, panel, subPath, password, d1)
             save(context, account.accountId, inst)
+            publish(account, inst)
             inst
         }.onFailure { Log.w(TAG, "deploy", it) }
     }
@@ -182,6 +211,7 @@ object GozargahPanel {
             val inst = install(context, account.accountId) ?: return@runCatching
             CfWorkers.remove(account, inst.script, d1Id = inst.d1Id)
             prefs(context).edit().remove("i_${account.accountId}").apply()
+            com.mlmvpn.scanner.engines.cloud.PanelRegistry.removeIf(account, CODE, inst.script)
         }
     }
 }
