@@ -199,8 +199,15 @@ object MaeConfigCompiler {
             .put("protocol", "http").put("settings", JSONObject()))
     }
 
+    /** The tag MyVpnService gives the tun inbound it puts in front of every JSON config. */
+    const val TUN_IN_TAG = "tun-in"
+
+    // Only the tun's own connections: an app is known only for those (the canary, the probe port
+    // and a proxy client are loopback sockets), and Xray tests inboundTag before process, so the
+    // owner lookup -- a binder call per rule -- is never paid for them.
     private fun appRule(uids: List<String>, network: String, port: String?, balancerTag: String) = JSONObject().apply {
         put("type", "field")
+        put("inboundTag", JSONArray().put(TUN_IN_TAG))
         put("process", JSONArray(uids))
         put("network", network)
         port?.let { put("port", it) }

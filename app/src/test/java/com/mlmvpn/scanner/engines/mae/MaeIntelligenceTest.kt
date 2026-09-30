@@ -254,6 +254,8 @@ class MaeIntelligenceTest {
         val firstDomain = rules.indexOfFirst { it.has("domain") && it.optString("balancerTag").startsWith("svc-") }
         assertTrue("app rules come before domain rules", firstApp in 0 until firstDomain)
         assertEquals("10123", rules[firstApp].getJSONArray("process").getString(0))
+        // Only the tun's connections have an owner to look up.
+        assertTrue(rules.filter { it.has("process") }.all { it.getJSONArray("inboundTag").getString(0) == MaeConfigCompiler.TUN_IN_TAG })
         val inbounds = j.getJSONArray("inbounds").let { a -> (0 until a.length()).map { a.getJSONObject(it) } }
         assertTrue(inbounds.any { it.optString("tag") == MaeConfigCompiler.CANARY_IN_TAG && it.getInt("port") == 20808 && it.getString("listen") == "127.0.0.1" })
         val bal = j.getJSONObject("routing").getJSONArray("balancers").let { a -> (0 until a.length()).map { a.getJSONObject(it).getString("tag") } }
