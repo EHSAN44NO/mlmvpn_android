@@ -1,12 +1,13 @@
 # MAE — implementation state
 
-_Read this first when continuing MAE work. Architecture: `MAE_ARCHITECTURE.md`. Last update: 2026-09-29 (phone session)._
+_Read this first when continuing MAE work. Architecture: `MAE_ARCHITECTURE.md`. Last update: 2026-09-30 (review + self-healing, version 1.2.38)._
 
 ## Current phase
 M0–M6 are built and **tested on a real phone**: Samsung A50, Android 11, MCI network over Wi-Fi.
 - The MAE suite is 42 tests, and the full project suite passes (306 JVM + 224 Worker tests, 0 failures).
 - The debug APK is installed on the phone.
-- M5b is still open: WARP / other foreign providers.
+- Foreign providers: the Worker, the user's saved configs, configs from the user's Cloudflare panels, and the US exit. WARP exits with an Iranian address, so it is a bypass route.
+- Session 4 (below) is **not yet verified on a phone**. The scenarios to run are at the end of that section.
 
 ## Proven on the phone (MCI Wi-Fi, 2026-09-29)
 | What | Result |
@@ -85,6 +86,94 @@ M0–M6 are built and **tested on a real phone**: Samsung A50, Android 11, MCI n
 - **Fixes for Android 8:** OpenVPN relay crash; Google Script CA install through KeyChain below Android 11.
 - **Tests:** 319 JVM (+224 Worker), 0 failures.
 
+## Session 4 (2026-09-30): full review, self-healing, the TikTok case
+Three reports from the user's phone drove this session:
+1. **TikTok** (refuses Iranian addresses) never opened, even after five 👎.
+2. **Instagram** videos stopped playing after ~20 min idle with MAE connected.
+3. A manual disconnect/reconnect fixed Instagram.
+
+The user also set a rule for such apps: WARP, WARP-in-WARP, WireGuard and MASQUE all exit with an
+Iranian address. Only Cloudflare configs will do: take them from the user's own panels (MLM, BPB,
+Netra, EDG), put them on IPv6 first and fall back to IPv4, and use the fastest. YouTube and
+Instagram on local routes are right as they are.
+
+**Root causes found**
+- **Nothing watched the route in use.** The probe core measures with its own sessions. A route that died under the tunnel stayed dead until the user reconnected.
+- **WARP:** three WireGuard outbounds with one key in each core (`mae-wg4/6/d`), plus copies in the probe core. These were same-key sessions that knocked each other off.
+- **Changes never reached the live tunnel.** Outbound contents (rotated WARP endpoint, redeployed Worker, edited config) were not part of `structure`. Meanwhile the DoH path's timestamp was, and forced a reconnect every 6 h.
+- **Breaker:**
+  - `allow()` set a probing flag even for providers that were never probed, which locked them out until restart.
+  - Health was judged by whether a *filtered app* answered, so direct went "unavailable" after three filtered apps.
+- **Ladder:**
+  - The web probe of tiktok.com passes from Iran, so GEO=NO. Rungs 1–2 only rotated local routes (all Iranian addresses), and rung 5 dropped `needsForeign`.
+  - The next routine refresh undid the repair.
+  - Live switching kept TikTok's open connections on the old route.
+  - Learned hosts were never applied to registry apps.
+- **TikTok also reads the SIM country and time zone.** No route fixes that, and nothing said so.
+- **Session and control:**
+  - Lost updates to `testing` left an app "checking" forever.
+  - A scheduled reconnect could restart a tunnel the user had stopped.
+  - Auto-switch replaced MAE with one node after 15 min.
+  - The watchdog and the Quick Settings tile replayed another network's config.
+  - `LastEngine` kept the whole compiled config (unsealed secrets) in backed-up prefs.
+
+**Fixes (by area)**
+- **Self-healing:**
+  - `LiveCanary` runs through the tunnel's own loopback inbound: on unlock after 3+ min idle, every 5 min with the screen on, and 8 s after connecting.
+  - WARP dead, or every route dead → reconnect (at most once in 3 min). Otherwise → live failover to the next proven route, plus a priority re-check.
+- **WARP:** one outbound (`mae-wgd`, `ForceIP`) per core, and a second identity (`warpProbe`) for the probe core. Without it, WARP is not probed while connected.
+- **Outbound hashes in `structure`**; `DnsPath.at` taken out of it.
+- **Breaker:**
+  - Keyed per `route@net`; `allow()` is pure.
+  - `RouteHealth` judges transport (direct: TCP connects; bypass: anything answered; foreign: the exit is alive).
+  - A route seen alive in the last 10 min is not failed by one bad round.
+- **Offline guard:** no learning on a network that is not validated or is a captive portal. Deferred checks resume when it validates.
+- **TikTok:**
+  - Registry v7 marks it `requiresForeign` with `clientChecks: [sim, timezone]`, and adds its missing domains.
+  - Foreign exits are always probed and required for it.
+  - Rung 1 goes abroad for geo-restricted apps on a local route; rung 5 stays foreign.
+- **User evidence** (`MaeState.userEvidence`, 7 days) keeps a repair through refreshes. 👍 on the route clears it.
+- **A repair that changes the route reconnects**, so open connections move.
+- **`DeviceSignals`** reads SIM/network country and time zone. The row explains when the app itself refuses Iran.
+- **Cloudflare panel configs as foreign exits** (`MaeCloudConfigs`, `cfc-<hash>`): BPB, EDG, MLM, NTR, then GZG, NVA, NHN, through the arena's adapters. Each link goes on a clean IPv6 edge first, IPv4 as the fallback, gated by the network's family verdict. Discovery keeps the fastest.
+- **Per-app `process` rules** (UID, Android 10+) route the whole app. There is also a QUIC balancer per service (blocked on bypass routes).
+- **Scoring and policy:**
+  - Stable config ids `cfg-<hash>`, with schema 2 migrating away `cfg1..3`.
+  - EWMA success rate.
+  - Fail-open never blocks. A fail-closed app on a new network takes its proven foreign exit from another network, or blocks until proven.
+- **Measurement:**
+  - DNS resolved once per discovery; RTT timed from the TCP connect.
+  - 10-min exit echo cache.
+  - Distinct stage-C finalists.
+  - `SERVICE_DOWN` needs an unlimited exit.
+  - The data SIM keys cellular networks.
+- **Session:**
+  - `testing.update {}`, a `wantConnected` guard, and a `CoroutineExceptionHandler`.
+  - A session observer on MyVpnService's phase.
+  - Auto-switch skips MAE.
+  - The watchdog and the tile compile a fresh config; `LastEngine` stores only the marker `mae`.
+- **UI:**
+  - Engine init off the main thread.
+  - Localized route names, and notes on each row instead of toasts.
+  - Feedback dimmed while disconnected.
+  - The symptom dialog lives in the engine (survives rotation; cancelling costs nothing).
+  - Confirmations before removing.
+  - A prebuilt, density-sized icon bitmap in the app picker; the diagnostics page throttled to 2 Hz.
+
+**Verification here:**
+- No Android SDK is available in this environment, so everything was checked in a scratch harness instead:
+  - 72 MAE JVM tests pass (21 new in `MaeIntelligenceTest`).
+  - The engine sources compile against `android-all` 14.
+  - The MAE UI compiles against Compose Multiplatform 1.5.11 (the Jetpack Compose 1.5.4 / material3 1.1.2 APIs).
+- To do: `./gradlew assembleDebug testDebugUnitTest`.
+
+**Phone scenarios to run**
+1. TikTok with the Iranian SIM active → the row explains SIM/time zone. With the SIM disabled (or another time zone) → it opens through a Cloudflare panel config.
+2. Instagram → screen off for 20 min → unlock → videos play. logcat `MAE`: `canary (unlock)`, and `healing` if a route had died.
+3. Wi-Fi ↔ mobile data; a captive portal; switching the data SIM on a dual-SIM phone.
+4. 👎 then Cancel on the question → no rung is used.
+5. Connect from the Quick Settings tile; auto-switch on together with MAE.
+
 ## Architecture decisions (unchanged, now validated)
 - **Data plane:** Xray (the app's core runs 26.6.27, not the 26.3.27 the binary strings suggested). Kotlin is the control plane.
 - **Base config:** the Serverless profile, whose own DNS and default path are adapted per network.
@@ -114,7 +203,7 @@ M0–M6 are built and **tested on a real phone**: Samsung A50, Android 11, MCI n
 - Diagnostics page: long-press the status line under the connect button.
 
 ## Known issues / next
-- **Foreign exit #2 is done:** the user's own saved configs (`UserConfigRoute`, `cfg1..3`). The three lowest-delay VLESS/Trojan links are taken, excluding the Iran/SNI/fronting groups. The window moves on when all three are dead on a network.
+- **Foreign exit #2 is done:** the user's own saved configs (`UserConfigRoute`, now `cfg-<hash>`, at most 3). The three lowest-delay VLESS/Trojan links are taken, excluding the Iran/SNI/fronting groups. The window moves on when all three are dead on a network.
   - Phone (MCI): accepted for ChatGPT, Gemini, Claude and TikTok (exits BG/RO/AZ), so they **reach Cloudflare-hosted services**, which the Worker cannot. TikTok moved to `cfg3`.
   - One config's v6 claim was caught as false ("asked for V6_ONLY, exit used the other family").
 - **Live add/remove of apps: decided against** (measured reconnect ≈ 1.2 s).

@@ -194,7 +194,8 @@ private fun MaeContent(onBack: () -> Unit) {
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
         if (res.resultCode == Activity.RESULT_OK) MaeEngine.startTunnelAsync(context) else busy = false
     }
-    fun connect() = com.mlmvpn.scanner.data.ScanGuard.run(com.mlmvpn.scanner.data.ScanGuard.Reason.CONNECT_VPN) {
+    // False when a running scan holds the tap for the user's answer: then nothing is starting yet.
+    fun connect(): Boolean = com.mlmvpn.scanner.data.ScanGuard.run(com.mlmvpn.scanner.data.ScanGuard.Reason.CONNECT_VPN) {
         val prep = try { VpnService.prepare(context) } catch (e: Exception) { null }
         if (prep != null) launcher.launch(prep) else MaeEngine.startTunnelAsync(context)
     }
@@ -203,8 +204,7 @@ private fun MaeContent(onBack: () -> Unit) {
         Spacer(Modifier.height(24.dp))
         ConnectButton(connected, connecting || busy) {
             if (busy) return@ConnectButton
-            busy = true
-            if (connected || connecting) MaeEngine.stopTunnelAsync(context) else connect()
+            if (connected || connecting) { busy = true; MaeEngine.stopTunnelAsync(context) } else busy = connect()
         }
         Spacer(Modifier.height(12.dp))
         val active = views.count { !it.paused }

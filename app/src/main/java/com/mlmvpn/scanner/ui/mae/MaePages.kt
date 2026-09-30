@@ -48,11 +48,10 @@ import com.mlmvpn.scanner.ui.settings.SettingsSectionHeader
 import com.mlmvpn.scanner.ui.settings.SettingsTextRow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.transform
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -342,8 +341,8 @@ internal fun MaeManageScreen(onBack: () -> Unit, openPicker: Boolean = false) {
 internal fun MaeDiagnosticsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     // At most twice a second: the whole state is read here, and it changes many times a second
-    // while apps are checked.
-    val state by remember { MaeEngine.store.state.conflate().onEach { delay(500) } }.collectAsState(MaeEngine.store.current)
+    // while apps are checked. A StateFlow keeps only the newest value while the collector waits.
+    val state by remember { MaeEngine.store.state.transform { emit(it); delay(500) } }.collectAsState(MaeEngine.store.current)
     val net = remember { MaeEngine.currentNet() }
     val now = System.currentTimeMillis()
 
