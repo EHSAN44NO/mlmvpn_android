@@ -4,6 +4,57 @@ All notable changes to the MLM VPN Android app are documented here. Dates are in
 
 فارسی این فایل در ادامه (پایین همین صفحه) آمده است.
 
+## [1.2.38] — 2026-09-30
+
+### Added
+- **MAE: self-healing.** A route could die under an app and nothing looked. After ~20 minutes idle, Instagram's videos stopped until the user reconnected by hand. MAE now sends one small request through the running tunnel itself: into its own loopback inbound, through the rules and the app's balancer, out of the route the app is using. This runs 8 s after connecting, every 5 minutes with the screen on, and on unlock after 3+ minutes with the screen off. A dead WARP session, or every route dead, heals by reconnecting (at most once in 3 minutes). Anything else fails over live to the next proven route and is re-checked first. The app's row says what happened.
+- **MAE: foreign exits from the user's own Cloudflare panels.** For apps that refuse Iranian addresses, WARP, WARP-in-WARP, WireGuard and MASQUE are no use: they all exit in Iran.
+  - MAE takes configs automatically from the panels on the user's Cloudflare accounts (BPB, EDG, MLM, Netra, then GZG, NVA, NHN), through the same adapters the config arena uses.
+  - Each link goes on a clean IPv6 edge first, with IPv4 as the fallback, gated by the network's measured family verdict.
+  - Discovery proves every variant per app and keeps the fastest.
+  - Links are sealed and read again every 12 h.
+- **MAE: whole-app routing (Android 10+).** A chosen app that is installed is routed by its UID (Xray `process` rules, ahead of the domain rules). All of its traffic takes its route: every API domain, fixed IPs and CDNs, not only the domains the registry knows. Each app also has a QUIC balancer; a route that cannot carry QUIC blocks it, so the app falls back to TCP at once.
+- **MAE: apps that check the phone itself.** TikTok also reads the SIM's country and the time zone, and no route changes those. MAE reads them too (no permission needed), and the app's row says what to change.
+
+### Changed
+- **MAE: TikTok.** Registry v7 marks it `requiresForeign`, so a foreign exit is always probed and required. Its web page answers from Iran, which used to rule a geo restriction out. Its missing API and CDN domains were added.
+- **MAE: `gvt1.com` and `ggpht.com` left the Gemini / Flow bundle.** They sent Play Store downloads and YouTube images through the quota-limited US exit.
+- **MAE: the repair ladder repairs.**
+  - Rung 1 goes abroad at once for a geo-restricted app on a local route, and rung 5 keeps the foreign requirement. Before, rungs 1–2 only rotated local routes, all of them Iranian addresses.
+  - The user's evidence ("country refusal", "didn't open on route X") is kept per app and network for 7 days, so the next routine refresh no longer undoes a repair.
+  - A repair that changes the route reconnects, so the app's open connections move too. Live switching kept them on the route the user had just said does not work.
+  - Cancelling "what's wrong?" no longer uses a rung or marks a route. A 👎 during a routine check is queued, not dropped.
+  - Hosts learned from a registry app's site are applied at last.
+- **MAE: WARP runs one WireGuard session per core.** Three same-key outbounds per core, plus copies in the probe core, knocked each other off. The probe core has its own WARP identity.
+
+### Fixed
+- **MAE: changes that never reached the tunnel.** A rotated WARP endpoint, a redeployed Worker or an edited config waited for the next manual connect. Meanwhile, the DoH path's timestamp forced a reconnect (and a FakeDNS reset) every 6 hours.
+- **MAE: routes locked out until restart.** The circuit breaker could hold a provider that was never probed, and it judged a route by whether a filtered app answered, so direct went "unavailable" after three filtered apps. It is now per route and network, and judges transport health.
+- **MAE: learning without internet.** A network that is not validated, or a captive portal, failed every route and blocked every app. Checks now wait until the network validates.
+- **MAE: ChatGPT, Claude and Gemini on a new network** left over an Iranian address until the first check finished. They now take the foreign exit proven on another network, or wait.
+- **MAE: a fail-open app is never blocked** while any route is alive.
+- **MAE: config routes kept their proofs on the wrong server.** `cfg1..3` were positions in a list that every ping test re-sorts. Ids are now a hash of the config (state schema 2, migrated).
+- **MAE: measurement.**
+  - Direct RTT no longer includes two DNS lookups.
+  - Two families of one route no longer take both throughput slots.
+  - A dual-SIM phone keys mobile networks by the data SIM.
+  - One transient failure no longer switches the live API off for good.
+  - A lost update no longer leaves an app "checking" forever.
+- **MAE and MyVpnService:**
+  - Auto-switch no longer replaces a MAE session with one node.
+  - The watchdog and the Quick Settings tile compile a fresh MAE config for the current network instead of replaying the last one.
+  - A scheduled reconnect no longer restarts a tunnel the user stopped.
+- **MAE screen:**
+  - The engine loads off the main thread.
+  - The manage and diagnostics pages no longer rebuild many times a second during checks.
+  - The app picker no longer converts icons on the main thread.
+  - Routes are named in words.
+  - Onboarding keeps typed sites when adding an app.
+  - Removing asks first.
+
+### Security
+- **The compiled MAE config is no longer stored for the Quick Settings tile.** It carried the WARP key, the Worker's id and the user's configs unsealed, in backed-up preferences. Only the marker `mae` is kept.
+
 ## [1.2.37] — 2026-09-30
 
 ### Added
@@ -555,6 +606,40 @@ Optimized specifically for degraded/censored network conditions (server creation
 ## فارسی
 
 نسخه‌بندی این فایل مطابق `versionName` در [`app/build.gradle`](app/build.gradle) است. برای جزئیات کامل‌تر و به‌روزتر هر نسخه، داخل خود اپ به «درباره ما → لیست تغییرات» مراجعه کنید.
+
+### [1.2.38] — 2026-09-30
+
+**افزوده‌شده:**
+- **خود-ترمیمی موتور تطبیقی.** اگر مسیر یک برنامه وسط کار از کار بیفتد، موتور حالا خودش از داخل تونل متوجه می‌شود. مثلاً اینستاگرام بعد از ۲۰ دقیقه کنار گذاشتن گوشی ویدیو پخش نمی‌کرد.
+  - مسیر را خودش عوض می‌کند، یا در صورت لزوم یک بار دوباره وصل می‌شود.
+  - هر ۵ دقیقه و هر بار باز کردن قفل گوشی بعد از چند دقیقه بررسی می‌کند.
+- **کانفیگ از پنل‌های کلادفلر خودتان برای برنامه‌های تحریمی.**
+  - از BPB، EDG، MLM، نترا و بقیه، اول روی آی‌پی تمیز IPv6 و اگر جواب نداد IPv4؛ سریع‌ترین انتخاب می‌شود.
+  - وارپ، وایرگارد و ماسک آی‌پی ایران می‌دهند، پس برای این برنامه‌ها استفاده نمی‌شوند.
+- **مسیر کل برنامه (اندروید ۱۰ به بالا):** همهٔ ترافیک برنامهٔ انتخاب‌شده از مسیر خودش می‌رود، نه فقط دامنه‌های شناخته‌شده.
+- **تشخیص سیم‌کارت و منطقهٔ زمانی ایران** برای برنامه‌هایی مثل تیک‌تاک که خود گوشی را می‌خوانند، با راهنمای روشن روی ردیف برنامه.
+
+**تغییر:**
+- **نردبان «باز نشد» واقعاً ترمیم می‌کند.**
+  - برای برنامه‌های تحریمی، پلهٔ اول مستقیم سراغ خروجی خارجی می‌رود.
+  - ترمیم ۷ روز ماندگار است و بررسی دوره‌ای آن را برنمی‌گرداند.
+  - اتصال‌های باز برنامه به مسیر تازه منتقل می‌شوند.
+  - انصراف از سؤال هیچ پله‌ای مصرف نمی‌کند.
+- **تیک‌تاک** همیشه از خروجی خارجی می‌رود و دامنه‌های کامل‌تری دارد.
+- دانلودهای پلی‌استور و عکس‌های یوتیوب دیگر از خروجی جمینای نمی‌روند.
+- **وارپ** در هر هسته فقط یک نشست دارد و دیگر با خودش تداخل نمی‌کند.
+
+**رفع‌شده:**
+- تغییر مسیرها (چرخش وارپ، ورکر تازه، ویرایش کانفیگ) حالا به تونلِ روشن می‌رسد. قطع و وصل بی‌دلیلِ هر ۶ ساعت حذف شد.
+- مسیری که فقط برای یک برنامهٔ فیلترشده جواب نداده بود، دیگر برای همه خراب حساب نمی‌شود و تا اجرای دوبارهٔ برنامه قفل نمی‌ماند.
+- بدون اینترنت یا پشت صفحهٔ ورود وای‌فای، چیزی یاد گرفته نمی‌شود.
+- ChatGPT، Claude و جمینای روی شبکهٔ تازه حتی یک لحظه هم با آی‌پی ایران نمی‌روند.
+- «تعویض خودکار سرور» دیگر جلسهٔ موتور تطبیقی را عوض نمی‌کند. کاشی تنظیمات سریع و وصل دوباره بعد از قطعی، کانفیگِ همان شبکه را می‌سازند.
+- صفحه‌ها روان‌تر شدند و اسم مسیرها ساده نوشته می‌شود.
+- در گوشی دوسیم‌کارته، سیم‌کارتِ اینترنت ملاک است.
+
+**امنیت:**
+- کانفیگ کامل موتور تطبیقی (با کلید وارپ و شناسهٔ ورکر) دیگر برای کاشی تنظیمات سریع ذخیره نمی‌شود.
 
 ### [1.2.37] — 2026-09-30
 

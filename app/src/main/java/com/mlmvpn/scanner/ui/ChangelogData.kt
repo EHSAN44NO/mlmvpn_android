@@ -35,6 +35,46 @@ fun changelogVersions(isFa: Boolean): List<ChangelogVersion> =
         if (isFa) {
             listOf(
                 ChangelogVersion(
+                    "نسخه 1.2.38",
+                    listOf(
+                        ChangelogItem(
+                            "مسیر خراب را خودش درست می‌کند",
+                            "اگر مسیر یک برنامه وسط کار از کار بیفتد، موتور تطبیقی حالا خودش متوجه می‌شود. مثلاً اینستاگرام بعد از حدود ۲۰ دقیقه کنار گذاشتن گوشی ویدیو پخش نمی‌کرد تا اتصال را دستی قطع و وصل کنید. هر ۵ دقیقه، و هر بار که بعد از چند دقیقه قفل گوشی را باز می‌کنید، مسیر هر برنامه از داخل خود اتصال امتحان می‌شود. مسیر خراب همان لحظه با مسیر سالم بعدی عوض می‌شود، یا در صورت لزوم موتور خودش یک بار دوباره وصل می‌شود. روی ردیف برنامه هم نوشته می‌شود.",
+                            Icons.Default.Healing
+                        ),
+                        ChangelogItem(
+                            "تیک‌تاک و برنامه‌های تحریمی با کانفیگ‌های کلادفلر خودتان",
+                            "این برنامه‌ها آی‌پی ایران را رد می‌کنند. وارپ، وارپ در وارپ، وایرگارد و ماسک هم همه آی‌پی ایران می‌دهند، پس برایشان کنار گذاشته شدند. موتور حالا کانفیگ‌ها را خودکار از پنل‌های حساب کلادفلر خودتان می‌گیرد (BPB، EDG، MLM، نترا و بقیه). اول روی آی‌پی تمیز IPv6 امتحانشان می‌کند و اگر جواب نداد روی IPv4، و برای هر برنامه سریع‌ترین را انتخاب می‌کند. روی اندروید ۱۰ به بالا، کل ترافیک برنامه از همان مسیر می‌رود، نه فقط دامنه‌های شناخته‌شده‌اش.",
+                            Icons.Default.Public
+                        ),
+                        ChangelogItem(
+                            "«باز نشد» واقعاً درست می‌کند",
+                            "هر 👎 حالا یک راه واقعاً متفاوت است و ماندگار می‌ماند. برای برنامه‌های تحریمی، همان بار اول سراغ خروجی خارجی می‌رود. اتصال‌های باز برنامه به مسیر تازه منتقل می‌شوند، و بررسی دوره‌ای بعدی ترمیم را برنمی‌گرداند. انصراف از سؤال «مشکل چیست؟» دیگر یک مرحله را هدر نمی‌دهد. نتیجهٔ هر کار روی ردیف خود برنامه نوشته می‌شود.",
+                            Icons.Default.ThumbsUpDown
+                        ),
+                        ChangelogItem(
+                            "سیم‌کارت و منطقهٔ زمانی",
+                            "تیک‌تاک کشور سیم‌کارت و منطقهٔ زمانی گوشی را هم می‌خواند، و این را هیچ مسیری درست نمی‌کند. موتور حالا این را تشخیص می‌دهد و روی ردیف برنامه راهنمایی می‌کند: سیم‌کارت ایرانی را موقتاً غیرفعال کنید یا منطقهٔ زمانی را عوض کنید، بعد برنامه را کامل ببندید و دوباره باز کنید.",
+                            Icons.Default.SimCard
+                        ),
+                        ChangelogItem(
+                            "هوشمندتر و دقیق‌تر",
+                            "بدون اینترنت یا پشت صفحهٔ ورود وای‌فای چیزی یاد گرفته نمی‌شود. مسیری که فقط برای یک برنامهٔ فیلترشده جواب نداده، دیگر برای همه خراب حساب نمی‌شود. ChatGPT، Claude و جمینای روی شبکهٔ تازه حتی یک لحظه هم با آی‌پی ایران نمی‌روند. دانلودهای پلی‌استور و عکس‌های یوتیوب دیگر از خروجی جمینای نمی‌روند. در گوشی دوسیم‌کارته هم سیم‌کارتِ اینترنت ملاک است.",
+                            Icons.Default.Speed
+                        ),
+                        ChangelogItem(
+                            "اتصال پایدارتر و امن‌تر",
+                            "تغییر مسیرها (مثل چرخش وارپ یا ورکر تازه) حالا به اتصالِ روشن می‌رسد، و قطع و وصل بی‌دلیلِ هر ۶ ساعت حذف شد. وارپ دیگر با خودش تداخل ندارد. «تعویض خودکار سرور» جلسهٔ موتور تطبیقی را عوض نمی‌کند. کاشی تنظیمات سریع و وصل دوباره بعد از قطعی اینترنت، کانفیگِ همان شبکه را از نو می‌سازند. کلید وارپ و شناسهٔ ورکر هم دیگر برای کاشی ذخیره نمی‌شوند.",
+                            Icons.Default.Sync
+                        ),
+                        ChangelogItem(
+                            "صفحهٔ روان‌تر",
+                            "صفحهٔ موتور تطبیقی دیگر هنگام باز شدن یا وسط بررسی‌ها گیر نمی‌کند، و فهرست برنامه‌ها روان‌تر اسکرول می‌شود. اسم مسیرها ساده نوشته می‌شود: مستقیم، عبور از فیلتر، وارپ، کانفیگ ابری، با پرچم کشورِ خروجی. قبل از حذف یک برنامه هم تأیید گرفته می‌شود.",
+                            Icons.Default.Apps
+                        ),
+                    ),
+                ),
+                ChangelogVersion(
                     "نسخه 1.2.37",
                     listOf(
                         ChangelogItem(
@@ -1587,6 +1627,46 @@ fun changelogVersions(isFa: Boolean): List<ChangelogVersion> =
             )
         } else {
             listOf(
+                ChangelogVersion(
+                    "Version 1.2.38",
+                    listOf(
+                        ChangelogItem(
+                            "It repairs a broken route by itself",
+                            "When an app's route stops working mid-use, the adaptive engine now notices on its own. For example, Instagram's videos would not play after the phone sat idle for about 20 minutes, until you disconnected and reconnected by hand. Every 5 minutes, and whenever you unlock the phone after a few minutes, each app's route is tried from inside the connection itself. A broken route is swapped for the next working one at once, or the engine reconnects once by itself if it has to. The app's row says so.",
+                            Icons.Default.Healing
+                        ),
+                        ChangelogItem(
+                            "TikTok and sanctioned apps through your own Cloudflare configs",
+                            "These apps refuse Iranian addresses, and WARP, WARP-in-WARP, WireGuard and MASQUE all give an Iranian address, so they are set aside for them. The engine now takes configs automatically from the panels on your own Cloudflare account (BPB, EDG, MLM, Netra and the others). It tries them on a clean IPv6 address first and on IPv4 if that does not answer, and picks the fastest for each app. On Android 10 and later, all of the app's traffic takes that route, not only its known domains.",
+                            Icons.Default.Public
+                        ),
+                        ChangelogItem(
+                            "“Didn't open” really fixes things",
+                            "Every 👎 is now a genuinely different approach, and it sticks. For sanctioned apps it goes straight to a foreign exit the first time. The app's open connections move to the new route, and the next routine check does not undo the repair. Cancelling the “what's wrong?” question no longer wastes a step. What happened is written on the app's own row.",
+                            Icons.Default.ThumbsUpDown
+                        ),
+                        ChangelogItem(
+                            "SIM card and time zone",
+                            "TikTok also reads the phone's SIM country and time zone, and no route can change those. The engine now detects this and says on the app's row what to do: disable the Iranian SIM for a while or change the time zone, then close the app completely and open it again.",
+                            Icons.Default.SimCard
+                        ),
+                        ChangelogItem(
+                            "Smarter and more accurate",
+                            "Nothing is learned without internet or behind a Wi-Fi login page. A route that failed only for one filtered app is no longer marked broken for all. ChatGPT, Claude and Gemini never leave over an Iranian address on a new network, not even for a moment. Play Store downloads and YouTube images no longer go through the Gemini exit. On dual-SIM phones, the data SIM is the one that counts.",
+                            Icons.Default.Speed
+                        ),
+                        ChangelogItem(
+                            "A steadier, safer connection",
+                            "Route changes (such as a rotated WARP endpoint or a new Worker) now reach the running connection, and the needless reconnect every 6 hours is gone. WARP no longer interferes with itself. Auto-switch no longer replaces an adaptive-engine session. The Quick Settings tile and the reconnect after a network drop build a fresh config for the current network. The WARP key and the Worker's id are no longer stored for the tile.",
+                            Icons.Default.Sync
+                        ),
+                        ChangelogItem(
+                            "A smoother screen",
+                            "The adaptive engine's screen no longer stalls when it opens or during checks, and the app list scrolls more smoothly. Routes are named in plain words: Direct, Filter bypass, WARP, Cloud config, with the exit's country flag. Removing an app asks first.",
+                            Icons.Default.Apps
+                        ),
+                    ),
+                ),
                 ChangelogVersion(
                     "Version 1.2.37",
                     listOf(
