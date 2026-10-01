@@ -145,6 +145,9 @@ async function ensureSchema(db) {
   ]);
   // CREATE TABLE IF NOT EXISTS does not add columns to a table that already exists.
   try { await db.prepare('ALTER TABLE installs ADD COLUMN last_isp TEXT').run(); } catch (e) { }
+  // Crash reports' own daily allowance; see CRASH_PER_DAY.
+  try { await db.prepare('ALTER TABLE installs ADD COLUMN crash_day TEXT').run(); } catch (e) { }
+  try { await db.prepare('ALTER TABLE installs ADD COLUMN crash_calls INTEGER DEFAULT 0').run(); } catch (e) { }
   schemaReady = true;
 }
 
@@ -223,7 +226,41 @@ function providerOf(host, port) {
 // quickly, and the rate limit means they are not unlimited.
 // -------------------------------------------------------------------------------------------------
 
-async function authenticate(request, db, body) {
+/**
+ * Secrets this isolate has already checked against D1, so a crash report can still be verified on
+ * a day D1 refuses every query -- see `authenticate`. Memory only: never written anywhere, gone
+ * with the isolate, and capped so a busy isolate cannot grow it without bound.
+ */
+const verifiedSecrets = new Map();
+const VERIFIED_SECRETS_MAX = 20000;
+
+function rememberSecret(id, secret) {
+  if (verifiedSecrets.get(id) === secret) return;
+  verifiedSecrets.delete(id);
+  verifiedSecrets.set(id, secret);
+  if (verifiedSecrets.size > VERIFIED_SECRETS_MAX) {
+    verifiedSecrets.delete(verifiedSecrets.keys().next().value);
+  }
+}
+
+/** Crash reports accepted per install while D1 is down, in this isolate, today. */
+const offlineCrashes = new Map();
+
+function takeOfflineCrashSlot(id) {
+  const today = new Date(Date.now()).toISOString().slice(0, 10);
+  const seen = offlineCrashes.get(id);
+  const n = seen && seen.day === today ? seen.n : 0;
+  if (n >= CRASH_PER_DAY) return false;
+  offlineCrashes.set(id, { day: today, n: n + 1 });
+  return true;
+}
+
+/**
+ * `kind` is 'crash' for `/crash` and 'pool' for everything else. They are counted apart: a crash
+ * report used to share the pool's sixty calls a day, so whoever had leaned on Quick Connect that
+ * day -- the people most likely to hit a bug in it -- had their crash report refused with a 429.
+ */
+async function authenticate(request, db, body, kind = 'pool') {
   const id = request.headers.get('X-Install');
   const ts = request.headers.get('X-Ts');
   const sig = request.headers.get('X-Sig');
@@ -236,14 +273,38 @@ async function authenticate(request, db, body) {
     return { ok: false, status: 401, error: 'stale request' };
   }
 
-  const row = await db.prepare('SELECT secret, day, calls, last_isp FROM installs WHERE id = ?')
-    .bind(id).first();
+  let row;
+  try {
+    row = await db.prepare(
+      'SELECT secret, day, calls, last_isp, crash_day, crash_calls FROM installs WHERE id = ?'
+    ).bind(id).first();
+  } catch (e) {
+    // D1 is refusing queries -- on the free plan, typically the account's daily read ceiling,
+    // which this pool reaches at its size. Everything the pool serves needs the database; a crash
+    // report does not, and losing them on exactly the days the service is struggling is what
+    // this guards against. An install this isolate verified earlier is checked against the
+    // secret it proved then: the same signature check, without the read.
+    const known = kind === 'crash' ? verifiedSecrets.get(id) : null;
+    if (!known) return { ok: false, status: 503, error: 'pool database unavailable' };
+    const expected = await hmacHex(known, `${id}.${ts}.${body || ''}`);
+    if (expected !== sig) return { ok: false, status: 401, error: 'bad signature' };
+    if (!takeOfflineCrashSlot(id)) return { ok: false, status: 429, error: 'rate limited' };
+    return { ok: true, id, tick: null, lastIsp: null, offline: true };
+  }
   if (!row) return { ok: false, status: 401, error: 'not enrolled' };
 
   const expected = await hmacHex(row.secret, `${id}.${ts}.${body || ''}`);
   if (expected !== sig) return { ok: false, status: 401, error: 'bad signature' };
+  rememberSecret(id, row.secret);
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = new Date(Date.now()).toISOString().slice(0, 10);
+  if (kind === 'crash') {
+    const crashes = row.crash_day === today ? (row.crash_calls || 0) : 0;
+    if (crashes >= CRASH_PER_DAY) return { ok: false, status: 429, error: 'rate limited' };
+    const tick = db.prepare('UPDATE installs SET crash_day = ?, crash_calls = ? WHERE id = ?')
+      .bind(today, crashes + 1, id);
+    return { ok: true, id, tick, lastIsp: row.last_isp || null };
+  }
   const calls = row.day === today ? (row.calls || 0) : 0;
   if (calls >= RATE_LIMIT_PER_DAY) {
     return { ok: false, status: 429, error: 'rate limited' };
@@ -700,6 +761,10 @@ async function handleStats(request, env, db, url) {
 // users and stay unreproducible for weeks: the artefact that answers it in a minute was sitting on
 // their phones. This is the other end of that pipe.
 //
+// Since build 2 this is the FALLBACK. The app sends to the crash collector first (worker-src/crash,
+// on another account, no database) and comes here only when that does not file the report -- this
+// pool's own D1 and request limits are what used to lose crash reports on its busiest days.
+//
 // It is authenticated like every other endpoint, so a report is tied to an enrolled install and
 // the same rate limit applies -- a crash loop cannot turn one phone into a firehose.
 //
@@ -732,6 +797,63 @@ const CRASH_COMMENT_MS = 60 * 60 * 1000;
 
 /** The GitHub API wants a User-Agent, and refuses the request without one. */
 const GH_UA = 'mlmvpn-pool-worker';
+
+/**
+ * Crash reports one install may send in a day -- counted apart from the pool's own calls (see
+ * `authenticate`). Generous for a person and their crashes; a ceiling for a crash loop.
+ */
+const CRASH_PER_DAY = 30;
+
+/**
+ * The dedup records of this isolate, in front of KV. KV's free plan allows a thousand writes a
+ * day, and once they were gone every report of a known bug found no record, looked its issue up
+ * again and commented on it again -- one comment per report instead of one an hour.
+ */
+const crashRecs = new Map();
+const CRASH_RECS_MAX = 5000;
+
+/**
+ * How the last GitHub calls went, for `/crashes`. Filing happens after the phone has its answer,
+ * so a revoked or expired token (fine-grained tokens expire by design) used to fail where nobody
+ * could see it: the app said "sent", D1 had the row, and no issue ever appeared. Kept in memory
+ * and written to KV only when the state changes or an hour has passed, to spare KV's writes.
+ */
+let githubHealth = null;
+const GH_HEALTH_KEY = 'crash:github';
+
+async function loadGithubHealth(env) {
+  if (githubHealth) return githubHealth;
+  const kv = env && env.POOL;
+  githubHealth = (kv ? await kv.get(GH_HEALTH_KEY, 'json').catch(() => null) : null) || {};
+  return githubHealth;
+}
+
+async function noteGithub(env, res, during) {
+  const h = await loadGithubHealth(env);
+  const now = Date.now();
+  const wasFailing = !!(h.last_error && (!h.last_ok_at || h.last_error.at > h.last_ok_at));
+  let failing;
+  if (res && res.ok) {
+    h.last_ok_at = now;
+    failing = false;
+  } else {
+    let message = res ? await res.clone().text().catch(() => '') : 'no response (network error)';
+    try { message = JSON.parse(message).message || message; } catch (e) { }
+    h.last_error = { at: now, status: res ? res.status : 0, message: String(message).slice(0, 200), during };
+    failing = true;
+  }
+  const kv = env && env.POOL;
+  if (kv && (failing !== wasFailing || now - (h.saved_at || 0) > CRASH_COMMENT_MS)) {
+    h.saved_at = now;
+    await kv.put(GH_HEALTH_KEY, JSON.stringify(h)).catch(() => {});
+  }
+}
+
+/** The build number in an app string like "1.2.37 (2000069)", or 0. */
+function buildOf(app) {
+  const m = String(app || '').match(/\((\d+)\)/);
+  return m ? Number(m[1]) : 0;
+}
 
 async function ghFetch(env, path, init) {
   return fetch('https://api.github.com' + path, {
@@ -778,7 +900,12 @@ async function fileCrashOnGithub(env, info) {
   const now = Date.now();
   const label = 'sig:' + info.sig;
 
-  let rec = kv ? await kv.get(key, 'json').catch(() => null) : null;
+  const build = buildOf(info.app);
+
+  let rec = crashRecs.get(key) || null;
+  if (!rec && kv) rec = await kv.get(key, 'json').catch(() => null);
+  // A record from before builds were tracked: unknown is treated as this one, never as older.
+  if (rec && rec.build === undefined) rec.build = build;
 
   if (!rec) {
     // No record here does not mean no issue there.
@@ -787,10 +914,13 @@ async function fileCrashOnGithub(env, info) {
       `/repos/${env.GH_REPO}/issues?state=all&per_page=1&labels=${encodeURIComponent(label)}`,
       { method: 'GET' },
     ).catch(() => null);
+    await noteGithub(env, found, 'looking up the issue');
     if (found && found.ok) {
       const list = await found.json().catch(() => []);
       if (Array.isArray(list) && list.length > 0) {
-        rec = { issue: list[0].number, count: 0, first: now, last: now, commented: 0 };
+        // Which builds it was seen on before is lost with the record; taking this report's as the
+        // newest keeps a closed issue closed rather than reopening it on a guess.
+        rec = { issue: list[0].number, count: 0, first: now, last: now, commented: 0, build };
       }
     }
   }
@@ -820,28 +950,62 @@ async function fileCrashOnGithub(env, info) {
         body: JSON.stringify({ title, body }),
       }).catch(() => null);
     }
+    await noteGithub(env, res, 'filing the issue');
     if (!res || !res.ok) return;
     const issue = await res.json().catch(() => null);
     if (!issue || !issue.number) return;
-    rec = { issue: issue.number, count: 1, first: now, last: now, commented: now };
+    rec = { issue: issue.number, count: 1, first: now, last: now, commented: now, build };
   } else {
     rec.count = (rec.count || 0) + 1;
     rec.last = now;
     if (now - (rec.commented || 0) > CRASH_COMMENT_MS) {
-      const ok = await ghFetch(env, `/repos/${env.GH_REPO}/issues/${rec.issue}/comments`, {
-        method: 'POST',
-        body: JSON.stringify({
-          body: `Seen again \u2014 ${rec.count} reports so far.\n\n` + facts,
-        }),
-      }).catch(() => null);
-      if (ok && ok.ok) rec.commented = now;
+      // At most once an hour: is the issue still open? A closed one that a NEWER build than any it
+      // was reported from still hits is a fix that did not hold, and a comment on a closed issue
+      // is one nobody reads -- so it is reopened. An older build hitting it is a user who has not
+      // updated yet, and says nothing new.
+      const cur = await ghFetch(env, `/repos/${env.GH_REPO}/issues/${rec.issue}`, { method: 'GET' })
+        .catch(() => null);
+      await noteGithub(env, cur, 'checking the issue');
+      const state = cur && cur.ok ? ((await cur.json().catch(() => null)) || {}).state : null;
+      if (state === 'closed' && build > (rec.build || 0)) {
+        const reopened = await ghFetch(env, `/repos/${env.GH_REPO}/issues/${rec.issue}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ state: 'open' }),
+        }).catch(() => null);
+        await noteGithub(env, reopened, 'reopening the issue');
+        const ok = await ghFetch(env, `/repos/${env.GH_REPO}/issues/${rec.issue}/comments`, {
+          method: 'POST',
+          body: JSON.stringify({
+            body: `Reopened: seen on \`${info.app}\`, newer than every build it was reported ` +
+              `from before it was closed \u2014 ${rec.count} reports so far.\n\n` + facts,
+          }),
+        }).catch(() => null);
+        await noteGithub(env, ok, 'commenting');
+        if (ok && ok.ok) rec.commented = now;
+      } else if (state === 'closed') {
+        rec.commented = now;
+      } else {
+        const ok = await ghFetch(env, `/repos/${env.GH_REPO}/issues/${rec.issue}/comments`, {
+          method: 'POST',
+          body: JSON.stringify({
+            body: `Seen again \u2014 ${rec.count} reports so far.\n\n` + facts,
+          }),
+        }).catch(() => null);
+        await noteGithub(env, ok, 'commenting');
+        if (ok && ok.ok) rec.commented = now;
+      }
     }
   }
+  if (build > (rec.build || 0)) rec.build = build;
 
+  crashRecs.delete(key);
+  crashRecs.set(key, rec);
+  if (crashRecs.size > CRASH_RECS_MAX) crashRecs.delete(crashRecs.keys().next().value);
   if (kv) await kv.put(key, JSON.stringify(rec)).catch(() => {});
 }
 
-async function handleCrash(db, installId, body, env, ctx) {
+async function handleCrash(db, auth, body, env, ctx) {
+  const installId = auth.id;
   let payload;
   try { payload = JSON.parse(body || '{}'); } catch (e) { return jsonResponse({ error: 'bad json' }, 400); }
 
@@ -874,8 +1038,13 @@ async function handleCrash(db, installId, body, env, ctx) {
   // enrolment row and fails first, before this function is ever entered. Fixing that means either
   // paying for D1 or spending fewer row reads -- it cannot be fixed by dropping the auth, which
   // is what stops anyone with a URL from filing issues in a private repository.)
-  let stored = true;
-  try {
+  // The crash allowance is spent whether or not the row goes in; neither may cost the report.
+  if (auth.tick) { try { await auth.tick.run(); } catch (e) { } }
+
+  // Verified without D1 (see `authenticate`): the database is refusing queries, so this is not
+  // the moment to try one.
+  let stored = !auth.offline;
+  if (stored) try {
     await db.prepare(
       `INSERT INTO crashes (id, sig, install, at, app, device, android, summary, body)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -917,35 +1086,49 @@ async function handleCrash(db, installId, body, env, ctx) {
  * question worth answering first -- not which crash happened most often, which any single user in
  * a reconnect loop can win.
  */
-async function handleCrashes(db, url) {
+async function handleCrashes(db, url, env) {
   // Behind the same password as /stats. Stack traces name internal classes and the screens a
   // user walked through before the crash; that is not a public dashboard, and leaving it open
   // would also let anyone measure which of our bugs is biting hardest.
   if (url.searchParams.get('k') !== STATS_PASSWORD) {
     return new Response('unauthorized', { status: 401 });
   }
-  const sig = url.searchParams.get('sig');
-  if (sig) {
-    const row = await db.prepare(
-      `SELECT sig, at, app, device, android, summary, body FROM crashes
-       WHERE sig = ? ORDER BY at DESC LIMIT 1`
-    ).bind(sig).first();
-    if (!row) return jsonResponse({ error: 'not found' }, 404);
-    return jsonResponse(row);
-  }
+  // The other half of the pipeline, first, because it is the half that fails silently: whether
+  // the GitHub secrets are set, and how the last calls with them went.
+  const health = await loadGithubHealth(env);
+  const github = {
+    configured: !!(env && env.GH_TOKEN && env.GH_REPO),
+    repo: (env && env.GH_REPO) || null,
+    last_ok_at: health.last_ok_at || null,
+    last_error: health.last_error || null,
+  };
   const since = Number(url.searchParams.get('days') || 14);
-  const cutoff = Date.now() - since * 86400000;
-  const rows = await db.prepare(
-    `SELECT sig,
-            COUNT(DISTINCT install) AS users,
-            COUNT(*)                AS reports,
-            MAX(at)                 AS last_seen,
-            MAX(app)                AS app,
-            MAX(summary)            AS summary
-     FROM crashes WHERE at > ?
-     GROUP BY sig ORDER BY users DESC, last_seen DESC LIMIT 100`
-  ).bind(cutoff).all();
-  return jsonResponse({ days: since, groups: rows.results || [] });
+  try {
+    const sig = url.searchParams.get('sig');
+    if (sig) {
+      const row = await db.prepare(
+        `SELECT sig, at, app, device, android, summary, body FROM crashes
+         WHERE sig = ? ORDER BY at DESC LIMIT 1`
+      ).bind(sig).first();
+      if (!row) return jsonResponse({ error: 'not found', github }, 404);
+      return jsonResponse(row);
+    }
+    const cutoff = Date.now() - since * 86400000;
+    const rows = await db.prepare(
+      `SELECT sig,
+              COUNT(DISTINCT install) AS users,
+              COUNT(*)                AS reports,
+              MAX(at)                 AS last_seen,
+              MAX(app)                AS app,
+              MAX(summary)            AS summary
+       FROM crashes WHERE at > ?
+       GROUP BY sig ORDER BY users DESC, last_seen DESC LIMIT 100`
+    ).bind(cutoff).all();
+    return jsonResponse({ days: since, groups: rows.results || [], github });
+  } catch (e) {
+    // Most often D1's daily read ceiling. Said plainly, with what is known without D1.
+    return jsonResponse({ days: since, groups: [], github, d1_error: String(e && e.message ? e.message : e) }, 503);
+  }
 }
 
 export default {
@@ -954,7 +1137,14 @@ export default {
     if (!db) return jsonResponse({ error: 'no database bound' }, 500);
 
     const url = new URL(request.url);
-    await ensureSchema(db);
+    try {
+      await ensureSchema(db);
+    } catch (e) {
+      // Outside every route's own handling, this used to be an uncaught exception -- Cloudflare's
+      // error page for every request, `/crash` and `/crashes` included -- whenever D1 refused
+      // queries. The tables exist on any pool that has ever served; each route now meets D1's
+      // state itself, and the next request tries the schema again.
+    }
 
     try {
       if (url.pathname === '/enroll' && request.method === 'POST') {
@@ -971,10 +1161,10 @@ export default {
       // Password-gated like /stats, not install-authenticated: it is opened in a browser by
       // whoever maintains the app, and an install token must not be able to read other people's
       // crashes any more than this password can fetch configs.
-      if (url.pathname === '/crashes') return await handleCrashes(db, url);
+      if (url.pathname === '/crashes') return await handleCrashes(db, url, env);
 
       const body = request.method === 'POST' ? await request.text() : '';
-      const auth = await authenticate(request, db, body);
+      const auth = await authenticate(request, db, body, url.pathname === '/crash' ? 'crash' : 'pool');
       if (!auth.ok) return jsonResponse({ error: auth.error }, auth.status);
 
       if (url.pathname === '/list') return await handleList(request, env, ctx, db, auth.tick, auth.id);
@@ -982,7 +1172,7 @@ export default {
         return await handleReport(request, env, ctx, db, auth.id, body, auth.lastIsp);
       }
       if (url.pathname === '/crash' && request.method === 'POST') {
-        return await handleCrash(db, auth.id, body, env, ctx);
+        return await handleCrash(db, auth, body, env, ctx);
       }
       return jsonResponse({ error: 'not found' }, 404);
     } catch (e) {

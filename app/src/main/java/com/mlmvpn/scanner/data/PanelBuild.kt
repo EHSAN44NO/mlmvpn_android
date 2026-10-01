@@ -92,7 +92,10 @@ object PanelBuild {
     const val RELAY = 1
 
     /** The MLMVPN shared config pool. */
-    const val POOL = 1
+    // 2: crash intake that survives the pool's own limits -- its own daily allowance, a D1-down
+    //    fallback, no error page when the schema check fails, GitHub health in /crashes, and a
+    //    closed issue reopened by a newer build. Now the fallback behind the crash collector.
+    const val POOL = 2
 
     /** Engine keys as the rest of the app spells them. */
     fun current(engine: String): Int = when (engine.uppercase()) {
