@@ -4,6 +4,28 @@ All notable changes to the MLM VPN Android app are documented here. Dates are in
 
 فارسی این فایل در ادامه (پایین همین صفحه) آمده است.
 
+## [1.2.39] — 2026-10-01
+
+### Added
+- **FLUX — MLM FLUX Engine, a new engine of its own.** Three controls: a country (or Automatic), IPv4 / IPv6 / Both, and Connect. FLUX picks the protocol, the node, the Cloudflare edge, the address family, fragmenting and the standby routes itself, on the app's existing Xray core.
+  - **Works where Cloudflare is cut.** On each network FLUX measures, in about 1.5 s, whether Cloudflare's edges are reachable. Where they are not, Cloudflare-fronted nodes are left out of the race entirely, and only direct routes are tried: VLESS REALITY, Trojan/VLESS TLS and Hysteria2 over UDP. Where Cloudflare works, each CDN-fronted node is tried over several edges, and the edges that answer are remembered for that network.
+  - **Its own sources**, separate from Free Configs and Quick Connect: Free-Configs (Cloudflare-fronted, tested from Iran by its publisher) and filtered REALITY, Hysteria2 and Trojan lists. Lists are cached and refreshed in the background with ETag, and a user can add their own subscription.
+  - **Fast first connect.** On a network FLUX has seen, it connects to the route that worked there at once, without racing. Otherwise a two-stage race runs:
+    - stage 1: TCP plus a TLS handshake with each node's own SNI;
+    - stage 2: a real request through every survivor in one probe core, with an explicit node-to-port map.
+
+    The best answer within a 250 ms grace window wins, not merely the first.
+  - **Stable.** The tunnel carries the winner and two standbys on other servers behind one balancer, watched by Xray's burst observatory. A dead primary is replaced in under a second, without restarting the VPN. Health checks run with the screen on and stretch from 1 to 5 minutes while the route is healthy. A failing route is benched by a circuit breaker. A new network gets its own route.
+  - **No leaks.** All DNS is answered inside the tunnel (FakeDNS, with DoH through the tunnel behind it). Servers are dialled by IP. In IPv4 mode the VPN comes up without IPv6, so Android blocks the family instead of letting it out. Plaintext VLESS and VLESS/Trojan with certificate checks off are refused. Self-signed Hysteria2 is tried only when nothing verified works.
+  - **"Connected" means connected.** It is shown only after a real request through the running tunnel succeeded.
+  - **The country is measured, not read from the node's name.** The exit is asked through the route itself, from two independent sources, and the proof expires after 24 h. The country list shows only countries with a proven exit, and marks those not yet checked on the current network.
+  - Memory is per network: the best route on MCI and on Irancell are kept apart, and changing the country forgets nothing.
+  - A hidden diagnostics page opens on a long press of the FLUX title.
+- **MAE can use FLUX.** FLUX's proven routes on the current network join MAE's foreign exits. They are read from FLUX's store only: FLUX never probes or starts a tunnel for MAE.
+
+### Changed
+- The Quick Settings tile reconnects FLUX through FLUX itself, with this network's route. After a network drop, the VPN service asks FLUX for the new network's route instead of replaying the old one.
+
 ## [1.2.38] — 2026-09-30
 
 ### Added
@@ -650,6 +672,23 @@ Optimized specifically for degraded/censored network conditions (server creation
 ## فارسی
 
 نسخه‌بندی این فایل مطابق `versionName` در [`app/build.gradle`](app/build.gradle) است. برای جزئیات کامل‌تر و به‌روزتر هر نسخه، داخل خود اپ به «درباره ما → لیست تغییرات» مراجعه کنید.
+
+### [1.2.39] — 2026-10-01
+
+**افزوده‌شده:**
+- **موتور FLUX، موتوری مستقل.** فقط سه انتخاب: کشور (یا خودکار)، IPv4 / IPv6 / هردو، و دکمهٔ اتصال. پروتکل، سرور، edge کلادفلر، نسخهٔ IP، فرگمنت و مسیرهای پشتیبان را خود FLUX انتخاب می‌کند.
+  - **جایی که کلادفلر قطع است هم کار می‌کند.** FLUX روی هر شبکه در حدود ۱.۵ ثانیه می‌سنجد که کلادفلر در دسترس است یا نه. اگر نباشد، کانفیگ‌های کلادفلری اصلاً امتحان نمی‌شوند و فقط مسیرهای مستقیم امتحان می‌شوند: REALITY، Trojan/VLESS TLS و Hysteria2.
+  - **منابع جدا** از «کانفیگ رایگان» و «اتصال سریع»؛ لینک اشتراک شخصی هم قابل افزودن است.
+  - **اتصال سریع.** روی شبکهٔ آشنا، بدون تست مستقیم به مسیر قبلی وصل می‌شود. بار اول تست دومرحله‌ای انجام می‌دهد و بهترین مسیر انتخاب می‌شود، نه صرفاً اولین جواب.
+  - **پایدار.** یک مسیر اصلی و دو مسیر پشتیبان روی سرورهای دیگر. اگر مسیر اصلی بیفتد، در کمتر از یک ثانیه و بدون قطع VPN جایگزین می‌شود. با عوض شدن شبکه، مسیر مخصوص همان شبکه انتخاب می‌شود.
+  - **بدون نشتی.** تمام DNS داخل تونل است. در حالت IPv4، اندروید IPv6 را کامل می‌بندد. کانفیگ بدون رمزنگاری یا با بررسی گواهیِ خاموش رد می‌شود.
+  - **«متصل» یعنی واقعاً متصل:** فقط بعد از یک درخواست واقعی از داخل تونل نشان داده می‌شود.
+  - **کشور واقعاً اندازه‌گیری می‌شود**، از دو منبع مستقل و از داخل خود مسیر، نه از روی اسم سرور.
+  - صفحهٔ عیب‌یابی با نگه داشتن انگشت روی عنوان FLUX باز می‌شود.
+- **موتور تطبیقی (MAE) هم از مسیرهای اثبات‌شدهٔ FLUX** به‌عنوان خروجی خارجی استفاده می‌کند.
+
+**تغییرکرده:**
+- کاشی تنظیمات سریع، FLUX را با مسیر همین شبکه وصل می‌کند. بعد از قطع اینترنت هم سرویس VPN مسیر شبکهٔ جدید را از FLUX می‌گیرد.
 
 ### [1.2.38] — 2026-09-30
 

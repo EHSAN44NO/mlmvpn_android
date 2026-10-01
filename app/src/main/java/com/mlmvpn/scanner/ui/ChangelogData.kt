@@ -35,6 +35,26 @@ fun changelogVersions(isFa: Boolean): List<ChangelogVersion> =
         if (isFa) {
             listOf(
                 ChangelogVersion(
+                    "نسخه 1.2.39",
+                    listOf(
+                        ChangelogItem(
+                            "موتور جدید FLUX: کشور، نسخهٔ IP، اتصال",
+                            "فقط کشور (یا خودکار) و IPv4/IPv6/هردو را انتخاب کنید و وصل شوید. پروتکل، سرور، edge کلادفلر، فرگمنت و مسیرهای پشتیبان را خود FLUX انتخاب می‌کند. روی شبکه‌ای که قبلاً دیده تقریباً فوری وصل می‌شود. اگر مسیر اصلی بیفتد، در کمتر از یک ثانیه و بدون قطع VPN به مسیر پشتیبان می‌رود. «متصل» فقط بعد از یک درخواست واقعی از داخل تونل نشان داده می‌شود.",
+                            Icons.Default.Bolt
+                        ),
+                        ChangelogItem(
+                            "حتی جایی که کلادفلر قطع است",
+                            "FLUX روی هر شبکه می‌سنجد که کلادفلر باز است یا نه. اگر قطع باشد، کانفیگ‌های کلادفلری اصلاً امتحان نمی‌شوند و فقط مسیرهای مستقیم مثل REALITY و Hysteria2 امتحان می‌شوند. منابع FLUX از «کانفیگ رایگان» و «اتصال سریع» جداست.",
+                            Icons.Default.Public
+                        ),
+                        ChangelogItem(
+                            "بدون نشتی، با کشور واقعی",
+                            "تمام DNS از داخل تونل می‌رود و در حالت IPv4، اندروید IPv6 را کامل می‌بندد. کشور خروجی از دو منبع مستقل و از داخل خود مسیر اندازه‌گیری می‌شود، نه از روی اسم سرور. موتور تطبیقی هم می‌تواند از مسیرهای اثبات‌شدهٔ FLUX استفاده کند.",
+                            Icons.Default.AutoAwesome
+                        ),
+                    )
+                ),
+                ChangelogVersion(
                     "نسخه 1.2.38",
                     listOf(
                         ChangelogItem(
@@ -1672,6 +1692,26 @@ fun changelogVersions(isFa: Boolean): List<ChangelogVersion> =
             )
         } else {
             listOf(
+                ChangelogVersion(
+                    "Version 1.2.39",
+                    listOf(
+                        ChangelogItem(
+                            "New engine: FLUX — country, IP version, connect",
+                            "Pick a country (or Automatic) and IPv4/IPv6/Both, and connect. FLUX chooses the protocol, server, Cloudflare edge, fragmenting and standby routes itself. On a network it has seen, it connects almost at once. A dead route is replaced by a standby in under a second without dropping the VPN. “Connected” is shown only after a real request went through the tunnel.",
+                            Icons.Default.Bolt
+                        ),
+                        ChangelogItem(
+                            "Works even where Cloudflare is cut",
+                            "FLUX checks on each network whether Cloudflare is reachable. Where it is not, Cloudflare-fronted configs are not tried at all, and only direct routes such as REALITY and Hysteria2 are raced. FLUX's sources are its own, separate from Free Configs and Quick Connect.",
+                            Icons.Default.Public
+                        ),
+                        ChangelogItem(
+                            "No leaks, and the real country",
+                            "All DNS goes through the tunnel, and in IPv4 mode Android blocks IPv6 entirely. The exit country is measured through the route itself, from two independent sources, never taken from a server's name. The adaptive engine (MAE) can use FLUX's proven routes too.",
+                            Icons.Default.AutoAwesome
+                        ),
+                    )
+                ),
                 ChangelogVersion(
                     "Version 1.2.38",
                     listOf(

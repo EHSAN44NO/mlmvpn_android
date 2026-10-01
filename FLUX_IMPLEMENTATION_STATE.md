@@ -2,6 +2,9 @@
 
 ## Current milestone
 
+Ships in **1.2.39** (versionCode 71).
+
+
 - **Done:** F0–F9 implemented, plus the fragment part of F10.
 - **Not yet done:** the mux benchmark, and measurement on real devices.
 
