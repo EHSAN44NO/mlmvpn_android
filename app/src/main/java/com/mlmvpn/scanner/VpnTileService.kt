@@ -123,6 +123,10 @@ class VpnTileService : TileService() {
                     is LastEngine.Record.Xray -> if (last.nodeId == LastEngine.MAE_MARKER) {
                         // MAE decides per network: a fresh config for this one, never the last one.
                         startMae()
+                    } else if (last.nodeId == LastEngine.FLUX_MARKER) {
+                        // FLUX connects itself: this network's known route at once, or a race.
+                        withContext(Dispatchers.IO) { TunnelExclusion.releaseForXray(applicationContext) }
+                        com.mlmvpn.scanner.engines.flux.FluxEngine.connectAsync(applicationContext)
                     } else {
                         // An SNI config is in the user's list too, but racing the list would
                         // connect to something else entirely -- and the SNI configs all point at

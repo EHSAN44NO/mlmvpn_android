@@ -43,7 +43,7 @@ private val FEATURE_BAR_HEIGHT = 56.dp
 
 private val SELF_HEADED = setOf(
     "settings", "vpn_settings", "usage", "tutorial", "nodes", "cloud", "scanner", "quick", "game", "sublink", "fixed_ip", "vpngate", "freeconfig", "lan",
-    "configstudio", "github", "store", "openvpn", "mae",
+    "configstudio", "github", "store", "openvpn", "mae", "flux",
     // The five transports. Each draws an iOS navigation bar of its own, and pushes pages under
     // it that carry their own back chevron -- the app chrome on top would be a second one.
 ) + com.mlmvpn.scanner.ui.tunnel.Transport.IDS
@@ -476,6 +476,13 @@ fun AppScreen() {
                         Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "mae") 0.dp else 10000.dp)) {
                             CompositionLocalProvider(LocalTabVisible provides (activeTab == "mae")) {
                                 com.mlmvpn.scanner.ui.mae.MaeScreen(onBack = { goBack() })
+                            }
+                        }
+                    }
+                    if (visitedTabs.contains("flux")) {
+                        Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "flux") 0.dp else 10000.dp)) {
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "flux")) {
+                                com.mlmvpn.scanner.ui.flux.FluxScreen(onBack = { goBack() })
                             }
                         }
                     }

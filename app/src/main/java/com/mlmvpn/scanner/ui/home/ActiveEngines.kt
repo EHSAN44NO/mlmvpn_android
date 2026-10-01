@@ -116,6 +116,7 @@ object ActiveEngines {
             id == com.mlmvpn.scanner.mitm.MitmProfile.NODE_ID -> "fronting"
             id == "GST_EMERGENCY" -> "emergency_2"
             id == com.mlmvpn.scanner.engines.mae.MaeEngine.NODE_ID -> "mae"
+            id == com.mlmvpn.scanner.engines.flux.FluxEngine.NODE_ID -> "flux"
             id.startsWith(com.mlmvpn.scanner.engines.github.GtEngine.NODE_PREFIX) -> "github"
             // The booster's own ids, plus the two DNS-only modes it can run without a tunnel.
             id.startsWith("game_") || id.startsWith("dedicated_dns") ||

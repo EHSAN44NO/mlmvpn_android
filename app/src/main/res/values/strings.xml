@@ -4967,4 +4967,31 @@ After that it builds the combinations itself, measures every one with a real req
     <string name="crash_notice_off">Don\'t send reports</string>
     <string name="settings_crash_auto">Send crash reports automatically</string>
     <string name="settings_crash_auto_desc">When the app closes because of an error, the error and your device model are sent to the developers. Nothing from your configs or your traffic.</string>
+    <!-- FLUX -->
+    <string name="flux_title_short">FLUX</string>
+    <string name="flux_title">MLM FLUX Engine</string>
+    <string name="flux_country">Country</string>
+    <string name="flux_country_auto">Automatic</string>
+    <string name="flux_country_here">Works on this network</string>
+    <string name="flux_country_unchecked">Not checked on this network yet</string>
+    <string name="flux_country_footer">Only countries where FLUX has proven a real exit are listed. The country is measured through the route itself, never taken from a server\'s name.</string>
+    <string name="flux_ip">IP version</string>
+    <string name="flux_ip_both">Both</string>
+    <string name="flux_connect">Connect</string>
+    <string name="flux_disconnect">Disconnect</string>
+    <string name="flux_status_idle">The fastest route is chosen automatically</string>
+    <string name="flux_status_searching">Finding the best route…</string>
+    <string name="flux_status_connected">Connected</string>
+    <string name="flux_fail_offline">No internet connection</string>
+    <string name="flux_fail_no_nodes">Could not get the server lists yet. Check your internet and try again.</string>
+    <string name="flux_fail_nothing">No working route was found on this network right now. Try again in a few minutes.</string>
+    <string name="flux_fail_country">No working route for this country on this network right now.</string>
+    <string name="flux_fail_country_try">Available: %1$s</string>
+    <string name="flux_fail_family">This IP version does not work on this network. Try IPv4 or Both.</string>
+    <string name="flux_fail_vpn">Android did not allow the VPN to start.</string>
+    <string name="flux_diag_title">FLUX diagnostics</string>
+    <string name="flux_diag_subs">Your subscriptions</string>
+    <string name="flux_diag_subs_footer">Extra node lists for FLUX only. FLUX tests every node itself; nothing here is used without passing that test.</string>
+    <string name="flux_diag_add_sub">Add subscription link</string>
+    <string name="flux_diag_sub_invalid">Must be an https:// link</string>
 </resources>

@@ -4959,4 +4959,31 @@
     <string name="crash_notice_off">گزارش نفرست</string>
     <string name="settings_crash_auto">ارسال خودکار گزارش خطا</string>
     <string name="settings_crash_auto_desc">وقتی برنامه به‌خاطر خطا بسته شود، خود خطا و مدل دستگاه برای سازنده فرستاده می‌شود؛ هیچ چیزی از کانفیگ‌ها یا ترافیک شما.</string>
+    <!-- FLUX -->
+    <string name="flux_title_short">FLUX</string>
+    <string name="flux_title">موتور FLUX ام‌ال‌ام</string>
+    <string name="flux_country">کشور</string>
+    <string name="flux_country_auto">خودکار</string>
+    <string name="flux_country_here">روی این شبکه کار می‌کند</string>
+    <string name="flux_country_unchecked">هنوز روی این شبکه بررسی نشده</string>
+    <string name="flux_country_footer">فقط کشورهایی نمایش داده می‌شوند که FLUX خروجی واقعی آن‌ها را اثبات کرده است. کشور از خودِ مسیر اندازه‌گیری می‌شود، نه از نام سرور.</string>
+    <string name="flux_ip">نسخه IP</string>
+    <string name="flux_ip_both">هردو</string>
+    <string name="flux_connect">اتصال</string>
+    <string name="flux_disconnect">قطع اتصال</string>
+    <string name="flux_status_idle">سریع‌ترین مسیر خودکار انتخاب می‌شود</string>
+    <string name="flux_status_searching">در حال پیدا کردن بهترین مسیر…</string>
+    <string name="flux_status_connected">متصل</string>
+    <string name="flux_fail_offline">اینترنت وصل نیست</string>
+    <string name="flux_fail_no_nodes">فهرست سرورها هنوز دریافت نشد. اینترنت را بررسی کنید و دوباره تلاش کنید.</string>
+    <string name="flux_fail_nothing">در حال حاضر هیچ مسیر سالمی روی این شبکه پیدا نشد. چند دقیقه دیگر دوباره تلاش کنید.</string>
+    <string name="flux_fail_country">در حال حاضر برای این کشور روی این شبکه مسیر سالمی پیدا نشد.</string>
+    <string name="flux_fail_country_try">در دسترس: %1$s</string>
+    <string name="flux_fail_family">این نسخه IP روی این شبکه کار نمی‌کند. IPv4 یا «هردو» را امتحان کنید.</string>
+    <string name="flux_fail_vpn">اندروید اجازه راه‌اندازی VPN را نداد.</string>
+    <string name="flux_diag_title">عیب‌یابی FLUX</string>
+    <string name="flux_diag_subs">اشتراک‌های شما</string>
+    <string name="flux_diag_subs_footer">فهرست‌های اضافه فقط برای FLUX. FLUX تک‌تک نودها را خودش آزمایش می‌کند و هیچ نودی بدون قبولی در این آزمون استفاده نمی‌شود.</string>
+    <string name="flux_diag_add_sub">افزودن لینک اشتراک</string>
+    <string name="flux_diag_sub_invalid">باید لینک https:// باشد</string>
 </resources>

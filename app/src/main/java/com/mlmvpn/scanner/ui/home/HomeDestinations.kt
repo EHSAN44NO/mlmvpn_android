@@ -146,6 +146,9 @@ object HomeDestinations {
         HomeApp("geph",              R.string.home_geph,          Icons.Default.Public,        Blue,   imageRes = R.drawable.ic_app_geph),
         HomeApp("quick",             R.string.home_quick,         Icons.Default.RocketLaunch,  Blue),
         HomeApp("mae",               R.string.mae_short,          Icons.Default.AutoAwesome,   Blue, imageRes = R.drawable.ic_app_mae),
+        // «FLUX»: country, IP version, connect -- the rest is the engine's job. Beside MAE, which
+        // can use FLUX's routes as exits of its own.
+        HomeApp("flux",              R.string.flux_title_short,   Icons.Default.Bolt,          Indigo, imageRes = R.drawable.ic_app_flux),
         // A cloud server on the user's own GitHub allowance, reached through a Worker on their own
         // Cloudflare -- the Windows app's «گیت‌هاب تانل», whole. Beside Quick Connect: both are
         // "get me online", and this one is the fast one when the free networks are slow.
@@ -238,7 +241,7 @@ object HomeDestinations {
      */
     val BOARD_DEFAULT: List<String> = listOf(
         "masque", "wireguard", "warp_on_warp", "warp",
-        "psiphon", "tor", "geph", "quick", "mae",
+        "psiphon", "tor", "geph", "quick", "mae", "flux",
         "github", "freeconfig",
         "game", "vpngate", "openvpn", "configstudio",
         "store", "antisanction", "iran", "fronting",
@@ -260,7 +263,7 @@ object HomeDestinations {
     }
 
     fun categoryOf(id: String): Category? = when (id) {
-        "masque", "wireguard", "warp_on_warp", "warp", "psiphon", "tor", "geph", "quick", "mae",
+        "masque", "wireguard", "warp_on_warp", "warp", "psiphon", "tor", "geph", "quick", "mae", "flux",
         "github", "vpngate", "openvpn", "nodes" -> Category.CONNECT
         "freeconfig", "iran", "fronting", "sublink", "configstudio", "cloud" -> Category.CONFIGS
         "fixed_ip", "lan", "usage", "tutorial", "store", "scanner", "settings" -> Category.TOOLS

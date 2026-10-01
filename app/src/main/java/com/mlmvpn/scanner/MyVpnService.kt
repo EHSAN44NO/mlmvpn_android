@@ -207,6 +207,15 @@ class MyVpnService : VpnService() {
                     }
                 }.getOrNull()
                 if (fresh != null) Intent(intentToRestore).putExtra("NODE_URI", fresh) else intentToRestore
+            } else if (intentToRestore.getStringExtra("NODE_ID") == com.mlmvpn.scanner.engines.flux.FluxEngine.NODE_ID) {
+                // FLUX too: the network that came back gets the route FLUX knows for it, when it
+                // knows one; otherwise the old routes, which FLUX then checks and replaces if dead.
+                val fresh = runCatching {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        com.mlmvpn.scanner.engines.flux.FluxEngine.freshConfig(applicationContext)
+                    }
+                }.getOrNull()
+                if (fresh != null) Intent(intentToRestore).putExtra("NODE_URI", fresh) else intentToRestore
             } else intentToRestore
             startService(restore)
         }
@@ -409,7 +418,7 @@ class MyVpnService : VpnService() {
                 val engineOwnsTun = isAmneziaWg || isAetherCfg || isSoftEther
                 var fd = 0
                 if (!isProxyMode && !engineOwnsTun) {
-                    setupVpn(backendDns, mtu, isRawJsonConfig, noIpv6 = isRawJsonConfig && routesByApp(nodeUri))
+                    setupVpn(backendDns, mtu, isRawJsonConfig, noIpv6 = isRawJsonConfig && (routesByApp(nodeUri) || fluxIpv4Only(nodeUri)))
                     fd = vpnInterface?.fd ?: 0
                 }
                 // Surface the TUN state in the in-app GST log so we can tell whether the
@@ -761,7 +770,9 @@ class MyVpnService : VpnService() {
                         // XrayJsonGenerator.applyGoogleFix.
                         // MAE decides Google/Gemini routing itself, per service and per network.
                         val isMae = jsonRemarks == com.mlmvpn.scanner.engines.mae.compile.MaeConfigCompiler.REMARKS
-                        val startConfig = (if (isMae) null else com.mlmvpn.scanner.utils.XrayJsonGenerator.applyGoogleFix(finalConfig))
+                        // FLUX likewise: its routes, DNS and QUIC handling are its own.
+                        val isFlux = com.mlmvpn.scanner.engines.flux.core.compile.FluxConfigCompiler.isFlux(jsonRemarks)
+                        val startConfig = (if (isMae || isFlux) null else com.mlmvpn.scanner.utils.XrayJsonGenerator.applyGoogleFix(finalConfig))
                             ?.also {
                                 com.mlmvpn.scanner.engines.gst.GstLog.i(
                                     "MyVpnService", "Gemini / Google apps fix applied to this config"
@@ -899,6 +910,14 @@ class MyVpnService : VpnService() {
      * test so they cannot disagree: the tun keeps each connection's real destination address
      * (sniffing `routeOnly`) for the owner lookup, and IPv6 stays off (see [setupVpn]'s `noIpv6`).
      */
+    /**
+     * FLUX in IPv4 mode: the TUN gets no IPv6 at all, so Android blocks the family for every app
+     * instead of letting it leave outside the tunnel.
+     */
+    private fun fluxIpv4Only(config: String): Boolean = try {
+        org.json.JSONObject(config).optString("remarks") == com.mlmvpn.scanner.engines.flux.core.compile.FluxConfigCompiler.REMARKS_V4
+    } catch (_: Exception) { false }
+
     private fun routesByApp(config: String): Boolean = try {
         val rules = org.json.JSONObject(config).optJSONObject("routing")?.optJSONArray("rules")
         rules != null && (0 until rules.length()).any { (rules.optJSONObject(it)?.optJSONArray("process")?.length() ?: 0) > 0 }

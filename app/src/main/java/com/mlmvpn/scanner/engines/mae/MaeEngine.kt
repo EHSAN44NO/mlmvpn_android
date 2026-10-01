@@ -711,6 +711,8 @@ object MaeEngine {
         val configs = userConfigRoutes(state, net) + cloudConfigRoutes(state, net)
         addAll(configs)
         usExitRoute(state, net, configs)?.let { add(it) }
+        // FLUX's proven exits on this network, read from its store (FLUX does not probe for MAE).
+        addAll(com.mlmvpn.scanner.engines.flux.FluxRoute.forNet(app, net))
     }
 
     /** [providers] for the screen, which asks on every change: kept a few seconds. */
