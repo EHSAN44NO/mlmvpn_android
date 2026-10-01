@@ -147,6 +147,147 @@ class BoardLayoutRulesTest {
         assertEquals(listOf("usage"), l.folders.getValue("tools").apps)
     }
 
+    // ---------------------------------------------------------------- drag and drop
+
+    private val board = BoardLayout(
+        listOf("masque", "tor", "@tools", "quick"),
+        mapOf("tools" to FolderRecord("Mine", listOf("lan", "usage"))),
+    )
+
+    @Test
+    fun liftingFromTheBoardLeavesTheRestInOrder() {
+        val l = BoardLayoutRules.lift(board, "tor")!!
+        assertEquals(listOf("masque", "@tools", "quick"), l.order)
+        assertEquals(board.folders, l.folders)
+    }
+
+    @Test
+    fun liftingTheLastAppOfAFolderKeepsItUntilSettled() {
+        val one = BoardLayout(listOf("masque", "@tools"), mapOf("tools" to FolderRecord(null, listOf("lan"))))
+        val l = BoardLayoutRules.lift(one, "lan")!!
+        // Still there while the app is in the air: it may be the folder open on screen.
+        assertEquals(listOf("masque", "@tools"), l.order)
+        assertTrue(l.folders.getValue("tools").apps.isEmpty())
+        // And gone the moment anything is put down.
+        val s = BoardLayoutRules.settle(l)
+        assertEquals(listOf("masque"), s.order)
+        assertTrue(s.folders.isEmpty())
+    }
+
+    @Test
+    fun liftingSomethingThatIsNotThereIsRefused() {
+        assertNull(BoardLayoutRules.lift(board, "nope"))
+        assertNull(BoardLayoutRules.lift(board, "@nope"))
+    }
+
+    @Test
+    fun aBoardDropLandsInTheGapTheUserSaw() {
+        // "quick" (last) dragged to the front.
+        val l = BoardLayoutRules.lift(board, "quick")!!
+        val d = BoardLayoutRules.dropOnBoard(l, "quick", 0)!!
+        assertEquals(listOf("quick", "masque", "tor", "@tools"), d.order)
+        // Out of range means the end, never an exception.
+        assertEquals("quick", BoardLayoutRules.dropOnBoard(l, "quick", 99)!!.order.last())
+    }
+
+    @Test
+    fun aFolderMovesOnTheBoardWithItsContents() {
+        val l = BoardLayoutRules.lift(board, "@tools")!!
+        val d = BoardLayoutRules.dropOnBoard(l, "@tools", 0)!!
+        assertEquals(listOf("@tools", "masque", "tor", "quick"), d.order)
+        assertEquals(listOf("lan", "usage"), d.folders.getValue("tools").apps)
+        assertEquals("Mine", d.folders.getValue("tools").title)
+    }
+
+    @Test
+    fun draggingTheLastAppOutOfAFolderRemovesItAndShiftsNothingElse() {
+        val one = BoardLayout(listOf("masque", "@tools", "tor"), mapOf("tools" to FolderRecord(null, listOf("lan"))))
+        val l = BoardLayoutRules.lift(one, "lan")!!
+        // On screen while it was in the air: masque, tor -- the emptied folder already gone.
+        val d = BoardLayoutRules.dropOnBoard(l, "lan", 1)!!
+        assertEquals(listOf("masque", "lan", "tor"), d.order)
+        assertTrue(d.folders.isEmpty())
+    }
+
+    @Test
+    fun anAppDraggedOutOfAFolderCanLandAnywhereOnTheBoard() {
+        val l = BoardLayoutRules.lift(board, "usage")!!
+        val d = BoardLayoutRules.dropOnBoard(l, "usage", 1)!!
+        assertEquals(listOf("masque", "usage", "tor", "@tools", "quick"), d.order)
+        assertEquals(listOf("lan"), d.folders.getValue("tools").apps)
+    }
+
+    @Test
+    fun reorderingInsideAFolderIsALiftAndADropIntoIt() {
+        val l = BoardLayoutRules.lift(board, "usage")!!
+        val d = BoardLayoutRules.dropIntoFolder(l, "usage", "tools", 0)!!
+        assertEquals(listOf("usage", "lan"), d.folders.getValue("tools").apps)
+        assertEquals(board.order, d.order)
+    }
+
+    @Test
+    fun theOnlyAppOfAFolderCanBePutStraightBackIntoIt() {
+        val one = BoardLayout(listOf("masque", "@tools"), mapOf("tools" to FolderRecord("Mine", listOf("lan"))))
+        val l = BoardLayoutRules.lift(one, "lan")!!
+        val d = BoardLayoutRules.dropIntoFolder(l, "lan", "tools", 0)!!
+        assertEquals(one, d)
+    }
+
+    @Test
+    fun droppingOntoAFolderTileAppendsAndOntoAnotherFolderMoves() {
+        val two = BoardLayout(
+            listOf("masque", "@a", "@b"),
+            mapOf("a" to FolderRecord(null, listOf("lan", "usage")), "b" to FolderRecord(null, listOf("tor"))),
+        )
+        val l = BoardLayoutRules.lift(two, "masque")!!
+        assertEquals(listOf("tor", "masque"), BoardLayoutRules.dropIntoFolder(l, "masque", "b")!!.folders.getValue("b").apps)
+        // From one folder into another, the source keeping the rest.
+        val m = BoardLayoutRules.lift(two, "usage")!!
+        val d = BoardLayoutRules.dropIntoFolder(m, "usage", "b", 0)!!
+        assertEquals(listOf("usage", "tor"), d.folders.getValue("b").apps)
+        assertEquals(listOf("lan"), d.folders.getValue("a").apps)
+    }
+
+    @Test
+    fun droppingAnAppOnAnAppAfterLiftingMakesTheFolderWhereTheTargetWas() {
+        val l = BoardLayoutRules.lift(board, "quick")!!
+        val d = BoardLayoutRules.dropOnApp(l, "quick", "tor", "c_connect_k1")!!
+        assertEquals(listOf("masque", "@c_connect_k1", "@tools"), d.order)
+        assertEquals(listOf("tor", "quick"), d.folders.getValue("c_connect_k1").apps)
+        assertNull(d.folders.getValue("c_connect_k1").title)
+    }
+
+    @Test
+    fun theLastAppOfAFolderDroppedOnAnAppLeavesNoEmptyFolderBehind() {
+        val one = BoardLayout(listOf("masque", "@tools", "tor"), mapOf("tools" to FolderRecord(null, listOf("lan"))))
+        val l = BoardLayoutRules.lift(one, "lan")!!
+        val d = BoardLayoutRules.dropOnApp(l, "lan", "tor", "fnew")!!
+        assertEquals(listOf("masque", "@fnew"), d.order)
+        assertEquals(setOf("fnew"), d.folders.keys)
+    }
+
+    @Test
+    fun dropsThatMakeNoSenseAreRefused() {
+        val l = BoardLayoutRules.lift(board, "@tools")!!
+        // A folder never goes into a folder, nor makes one.
+        assertNull(BoardLayoutRules.dropIntoFolder(l, "@tools", "tools"))
+        assertNull(BoardLayoutRules.dropOnApp(l, "@tools", "tor", "k"))
+        val m = BoardLayoutRules.lift(board, "tor")!!
+        assertNull(BoardLayoutRules.dropOnApp(m, "tor", "tor", "k"))
+        assertNull(BoardLayoutRules.dropOnApp(m, "tor", "masque", "tools"))
+        assertNull(BoardLayoutRules.dropOnApp(m, "tor", "masque", "Bad Key!"))
+        // Something not actually in the air cannot be dropped a second time.
+        assertNull(BoardLayoutRules.dropOnBoard(board, "masque", 0))
+    }
+
+    @Test
+    fun removingAFolderPutsItsAppsBackWhereItWas() {
+        val d = BoardLayoutRules.ungroup(board, "tools")!!
+        assertEquals(listOf("masque", "tor", "lan", "usage", "quick"), d.order)
+        assertTrue(d.folders.isEmpty())
+        assertNull(BoardLayoutRules.ungroup(board, "nope"))
+    }
+
     @Test
     fun theFactoryNameIsNotStoredAsText() {
         val base = BoardLayout(listOf("@tools"), mapOf("tools" to FolderRecord("Old", listOf("lan"))))

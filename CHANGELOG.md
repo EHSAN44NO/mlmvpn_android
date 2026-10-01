@@ -4,6 +4,32 @@ All notable changes to the MLM VPN Android app are documented here. Dates are in
 
 فارسی این فایل در ادامه (پایین همین صفحه) آمده است.
 
+## [Unreleased]
+
+### Added
+- **Home screen: folders, the iOS way.**
+  - Hold an app over another until a plate grows behind it, then let go: the two become a folder in the target's place. It opens at once, named after what is in it (Connections, Configs, Tools, Games, Emergency) until it is renamed.
+  - Hold an app over a folder: the folder swells, and letting go adds the app at the end. Keep holding and the folder springs open, so the app can go anywhere inside it.
+  - Drag an app out past an open folder's panel: the folder closes behind it, and the app can land anywhere on the board, onto another app or into another folder. A folder whose last app leaves is removed.
+  - While rearranging, folders wear iOS's minus badge. Removing a folder asks first, then puts its apps back where the folder was.
+  - The name is a text field with a clear button while rearranging. Outside rearranging, holding the name starts renaming.
+  - More than nine apps page sideways inside a folder. Holding an icon at the edge of the board or of a folder turns the page. Right-to-left layouts are mirrored throughout.
+
+### Changed
+- **Home screen: dragging was rebuilt.**
+  - Nothing moves under the finger until it rests. Crossing icons, or pausing on the way to one, no longer shuffles them.
+  - What an icon is held over is decided by the icon's middle, not by the finger.
+  - While rearranging, an icon is carried by the point where it was touched, not the point the finger had reached when the drag began.
+  - A tap on an icon is no longer lost to the board's own "tap empty space to finish" handler.
+
+### Fixed
+- **Battery: heavy drain while connected, worst with the adaptive engine (MAE).**
+  - The VPN service's wake lock was meant to drop after five idle minutes. A connected phone is never idle, so the lock was renewed forever and the CPU never slept. It is now held only during a connect (30 s), and during a real transfer (16 KB/s or more) while the screen is off.
+  - MAE: routine re-checks of networks it has already learned wait for the screen to come on; new networks are still learned at once. Its stats and live-check loops sleep while the screen is off, and the WARP keepalive is 25 s instead of 15 s.
+  - Traffic counters are sampled every 10 s with the screen off (2 s on). Daily usage is written once a minute instead of on every sample.
+  - The other tunnels (MASQUE, WireGuard, WARP, Psiphon, Tor) skip the per-second session write and broadcast while the screen is off. Standalone WARP re-proves its endpoint every 3 minutes instead of every 45 s while the screen is off.
+  - Screens out of sight and a backgrounded app no longer poll. Always-on animations (the Quick Connect orb, the Aether halo, the LAN pulse, the drifting lights) run only while on screen.
+
 ## [1.2.38] — 2026-09-30
 
 ### Added
@@ -617,6 +643,32 @@ Optimized specifically for degraded/censored network conditions (server creation
 ## فارسی
 
 نسخه‌بندی این فایل مطابق `versionName` در [`app/build.gradle`](app/build.gradle) است. برای جزئیات کامل‌تر و به‌روزتر هر نسخه، داخل خود اپ به «درباره ما → لیست تغییرات» مراجعه کنید.
+
+### [منتشرنشده]
+
+**افزوده‌شده:**
+- **پوشه در صفحهٔ اصلی، مثل آیفون.**
+  - یک برنامه را روی برنامهٔ دیگر نگه دارید تا قاب پوشه پشتش ظاهر شود، بعد رها کنید. هر دو در جای برنامهٔ دوم یک پوشه می‌شوند. پوشه همان لحظه باز می‌شود و تا وقتی نامش را عوض نکرده‌اید، نامش از محتوایش می‌آید: اتصال‌ها، کانفیگ‌ها، ابزارها، بازی یا اضطراری.
+  - برنامه را روی یک پوشه نگه دارید تا پوشه کمی بزرگ شود. با رها کردن، برنامه به انتهای پوشه اضافه می‌شود. اگر بیشتر نگه دارید، پوشه باز می‌شود و برنامه را هر جای آن که بخواهید می‌گذارید.
+  - برنامه را از قاب پوشهٔ باز بیرون بکشید تا پوشه پشت سرش بسته شود. بعد برنامه را هر جای صفحه، روی برنامهٔ دیگر یا داخل پوشهٔ دیگری بگذارید. پوشه‌ای که آخرین برنامه‌اش بیرون برود، حذف می‌شود.
+  - در حالت جابه‌جایی، روی پوشه‌ها نشان «−» آیفون هست. حذف پوشه اول تأیید می‌گیرد، بعد برنامه‌هایش را سر جای پوشه برمی‌گرداند.
+  - در حالت جابه‌جایی، نام پوشه یک فیلد متن با دکمهٔ پاک کردن است. بیرون از این حالت، با نگه داشتن نام می‌توانید آن را عوض کنید.
+  - اگر پوشه بیش از نُه برنامه داشته باشد، صفحه‌به‌صفحه ورق می‌خورد. نگه داشتن آیکون در لبهٔ صفحه یا پوشه، صفحه را ورق می‌زند. چیدمان راست‌به‌چپ همه‌جا آینه شده است.
+
+**تغییر:**
+- **کشیدن آیکون‌ها از نو ساخته شد.**
+  - تا انگشت نایستد، چیزی زیرش جابه‌جا نمی‌شود. رد شدن از روی آیکون‌ها یا مکث کوتاه در راه، دیگر آن‌ها را به هم نمی‌ریزد.
+  - این‌که آیکون روی چه چیزی است، از وسط خود آیکون حساب می‌شود، نه از نوک انگشت.
+  - در حالت جابه‌جایی، آیکون از همان نقطه‌ای که لمسش کرده‌اید جابه‌جا می‌شود.
+  - لمس یک آیکون دیگر با لمسِ «جای خالی برای پایان» اشتباه گرفته نمی‌شود.
+
+**رفع اشکال:**
+- **مصرف زیاد باتری هنگام اتصال، به‌خصوص با موتور تطبیقی.**
+  - قفل بیداری سرویس VPN قرار بود بعد از پنج دقیقه بیکاری آزاد شود. اما گوشیِ وصل هیچ‌وقت بیکار نیست، پس قفل مدام تمدید می‌شد و پردازنده هیچ‌وقت نمی‌خوابید. حالا فقط موقع اتصال (۳۰ ثانیه) گرفته می‌شود، و وقتی صفحه خاموش است فقط هنگام انتقال واقعی داده (۱۶ کیلوبایت در ثانیه یا بیشتر).
+  - موتور تطبیقی بررسی‌های دوره‌ای شبکه‌های آشنا را تا روشن شدن صفحه عقب می‌اندازد؛ شبکهٔ تازه همچنان فوراً یاد گرفته می‌شود. حلقه‌های آمار و بررسی زنده با صفحهٔ خاموش می‌خوابند، و keepalive وارپ به‌جای ۱۵ ثانیه ۲۵ ثانیه است.
+  - شمارندهٔ ترافیک با صفحهٔ خاموش هر ۱۰ ثانیه نمونه می‌گیرد (با صفحهٔ روشن هر ۲ ثانیه). مصرف روزانه دقیقه‌ای یک بار ذخیره می‌شود، نه با هر نمونه.
+  - بقیهٔ تونل‌ها (ماسک، وایرگارد، وارپ، سایفون، تور) با صفحهٔ خاموش دیگر هر ثانیه فایل نمی‌نویسند و پیام نمی‌فرستند. وارپِ مستقل با صفحهٔ خاموش به‌جای هر ۴۵ ثانیه، هر ۳ دقیقه مسیرش را می‌سنجد.
+  - صفحه‌هایی که دیده نمی‌شوند و برنامه‌ای که در پس‌زمینه است دیگر چیزی را مدام بررسی نمی‌کنند. انیمیشن‌های همیشگی (گوی اتصال سریع، هالهٔ ایتر، تپش LAN، نورهای شناور) فقط وقتی روی صفحه‌اند اجرا می‌شوند.
 
 ### [1.2.38] — 2026-09-30
 

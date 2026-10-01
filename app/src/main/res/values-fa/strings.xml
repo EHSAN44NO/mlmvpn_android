@@ -4588,7 +4588,16 @@
     <string name="home_openvpn">OpenVPN</string>
     <string name="home_folder_tools">ابزارها</string>
     <string name="home_folder_new">پوشه</string>
-    <string name="home_folder_drag_out_hint">برای بیرون آوردن یک برنامه از پوشه، آن را بیرون از این کادر رها کنید. برای تغییر نام، روی نام بزنید.</string>
+    <string name="home_folder_drag_out_hint">برنامه را از این کادر بیرون بکشید تا هر جای صفحهٔ اصلی که خواستید بگذارید. برای تغییر نام پوشه، روی نام بزنید.</string>
+    <string name="home_folder_connect">اتصال‌ها</string>
+    <string name="home_folder_configs">کانفیگ‌ها</string>
+    <string name="home_folder_games">بازی</string>
+    <string name="home_folder_emergency">اضطراری</string>
+    <string name="home_folder_name">نام پوشه</string>
+    <string name="home_folder_clear_name">پاک کردن نام</string>
+    <string name="home_folder_remove">حذف پوشه</string>
+    <string name="home_folder_remove_title">پوشهٔ «%1$s» حذف شود؟</string>
+    <string name="home_folder_remove_body">برنامه‌هایش به صفحهٔ اصلی برمی‌گردند، همان جایی که پوشه بود.</string>
     <string name="home_geph">گف</string>
     <string name="geph">گف</string>
     <string name="geph_tagline">شبکهٔ خودِ گف: سرورهایی در ده‌ها شهر، از راه پل‌های مبهم‌شده و بروکری که با بستن یک آدرس بسته نمی‌شود.</string>

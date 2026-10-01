@@ -189,4 +189,91 @@ object BoardLayoutRules {
             folders = LinkedHashMap(layout.folders).apply { put(key, record.copy(apps = kept + rest)) },
         )
     }
+
+    // ------------------------------------------------------------------ drag and drop
+    //
+    // A drag is three steps, the way the board shows it: [lift] takes the item out of wherever it
+    // is, the board then shows the rest with a gap that follows the finger, and one of the drops
+    // below puts it back down. Every index a drop takes is an index into what was on screen while
+    // the item was in the air -- the lifted layout, [settle]d -- so the gap the user saw is exactly
+    // where the item lands, wherever it came from.
+
+    /** The folder [appId] is in, or null when it is on the board itself (or nowhere). */
+    fun folderOf(layout: BoardLayout, appId: String): String? =
+        layout.folders.entries.firstOrNull { appId in it.value.apps }?.key
+
+    /**
+     * The board with [id] picked up: an app out of the board or out of its folder, a folder off the
+     * board. A folder left empty is KEPT here -- it may be the one open on screen, and the app may
+     * go straight back into it; [settle] is what removes it. Null when [id] is nowhere.
+     */
+    fun lift(layout: BoardLayout, id: String): BoardLayout? {
+        if (id in layout.order) return layout.copy(order = layout.order.filterNot { it == id })
+        if (isFolderRef(id)) return null
+        val key = folderOf(layout, id) ?: return null
+        val record = layout.folders.getValue(key)
+        return layout.copy(
+            folders = LinkedHashMap(layout.folders).apply { put(key, record.copy(apps = record.apps.filterNot { it == id })) },
+        )
+    }
+
+    /** Drops the folders that hold nothing, and their place on the board with them. */
+    fun settle(layout: BoardLayout): BoardLayout {
+        val empty = layout.folders.filterValues { it.apps.isEmpty() }.keys
+        if (empty.isEmpty()) return layout
+        return BoardLayout(
+            layout.order.filterNot { isFolderRef(it) && folderKey(it) in empty },
+            LinkedHashMap(layout.folders).apply { empty.forEach { remove(it) } },
+        )
+    }
+
+    /** Puts a lifted app or folder on the board, at [index] of the settled board. */
+    fun dropOnBoard(lifted: BoardLayout, id: String, index: Int): BoardLayout? {
+        val s = settle(lifted)
+        if (id in s.order || folderOf(s, id) != null) return null
+        if (isFolderRef(id) && !s.folders.containsKey(folderKey(id))) return null
+        val order = s.order.toMutableList()
+        order.add(index.coerceIn(0, order.size), id)
+        return s.copy(order = order)
+    }
+
+    /** Puts a lifted app into folder [key], at [index] of its apps -- at the end when null. */
+    fun dropIntoFolder(lifted: BoardLayout, appId: String, key: String, index: Int? = null): BoardLayout? {
+        if (isFolderRef(appId)) return null
+        val record = lifted.folders[key] ?: return null
+        if (appId in lifted.order || folderOf(lifted, appId) != null) return null
+        val apps = record.apps.toMutableList()
+        apps.add((index ?: apps.size).coerceIn(0, apps.size), appId)
+        return settle(lifted.copy(folders = LinkedHashMap(lifted.folders).apply { put(key, record.copy(apps = apps)) }))
+    }
+
+    /**
+     * Drops a lifted app onto app [targetId] on the board: a new folder [newKey], holding the target
+     * and then the app, takes the target's place -- the way iOS makes one.
+     */
+    fun dropOnApp(lifted: BoardLayout, appId: String, targetId: String, newKey: String): BoardLayout? {
+        if (isFolderRef(appId) || isFolderRef(targetId) || appId == targetId) return null
+        if (!KEY_RE.matches(newKey) || lifted.folders.containsKey(newKey)) return null
+        if (appId in lifted.order || folderOf(lifted, appId) != null) return null
+        val at = lifted.order.indexOf(targetId)
+        if (at < 0) return null
+        val order = lifted.order.toMutableList()
+        order[at] = folderRef(newKey)
+        val folders = LinkedHashMap(lifted.folders).apply { put(newKey, FolderRecord(null, listOf(targetId, appId))) }
+        return settle(BoardLayout(order, folders))
+    }
+
+    /** Takes folder [key] apart: its apps go back onto the board, in their order, where it was. */
+    fun ungroup(layout: BoardLayout, key: String): BoardLayout? {
+        val record = layout.folders[key] ?: return null
+        val order = layout.order.toMutableList()
+        val at = order.indexOf(folderRef(key))
+        if (at >= 0) {
+            order.removeAt(at)
+            order.addAll(at, record.apps)
+        } else {
+            order.addAll(record.apps)
+        }
+        return BoardLayout(order, LinkedHashMap(layout.folders).apply { remove(key) })
+    }
 }

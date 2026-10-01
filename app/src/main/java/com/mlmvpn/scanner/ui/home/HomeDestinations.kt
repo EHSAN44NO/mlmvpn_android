@@ -245,9 +245,49 @@ object HomeDestinations {
         "@tools", "emergency_2", "emergency_3",
     )
 
+    /**
+     * What a destination is for, which is what a folder made from it is called -- the way iOS
+     * names a new folder after its apps' category instead of "New Folder". The category travels in
+     * the folder's key ([newFolderKey]), so the name follows the app's language until the user
+     * types one of their own, exactly as the factory «ابزارها» does.
+     */
+    enum class Category(val keyPart: String, val titleRes: Int) {
+        CONNECT("connect", R.string.home_folder_connect),
+        CONFIGS("configs", R.string.home_folder_configs),
+        TOOLS("tools", R.string.home_folder_tools),
+        GAMES("games", R.string.home_folder_games),
+        EMERGENCY("emergency", R.string.home_folder_emergency),
+    }
+
+    fun categoryOf(id: String): Category? = when (id) {
+        "masque", "wireguard", "warp_on_warp", "warp", "psiphon", "tor", "geph", "quick", "mae",
+        "github", "vpngate", "openvpn", "nodes" -> Category.CONNECT
+        "freeconfig", "iran", "fronting", "sublink", "configstudio", "cloud" -> Category.CONFIGS
+        "fixed_ip", "lan", "usage", "tutorial", "store", "scanner", "settings" -> Category.TOOLS
+        "game" -> Category.GAMES
+        "emergency_2", "emergency_3", "antisanction" -> Category.EMERGENCY
+        else -> null
+    }
+
+    /**
+     * The key for a folder made by dropping [draggedId] onto [targetId]: their shared category, or
+     * the target's -- the app that was there first is the one the folder grows out of.
+     */
+    fun newFolderKey(targetId: String, draggedId: String, now: Long = System.currentTimeMillis()): String {
+        val target = categoryOf(targetId)
+        val dragged = categoryOf(draggedId)
+        val category = if (target != null && target == dragged) target else target ?: dragged
+        val stamp = now.toString(36)
+        return if (category != null) "c_${category.keyPart}_$stamp" else "f$stamp"
+    }
+
     /** The name a folder shows while the user has not given it one of their own. */
-    fun folderTitleRes(key: String): Int =
-        if (key == "tools") R.string.home_folder_tools else R.string.home_folder_new
+    fun folderTitleRes(key: String): Int = when {
+        key == "tools" -> R.string.home_folder_tools
+        key.startsWith("c_") ->
+            Category.entries.firstOrNull { key.startsWith("c_${it.keyPart}_") }?.titleRes ?: R.string.home_folder_new
+        else -> R.string.home_folder_new
+    }
 
     fun gridById(id: String): HomeApp? = GRID_DEFAULT.firstOrNull { it.id == id }
 }

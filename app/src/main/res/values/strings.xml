@@ -4596,7 +4596,16 @@ After that it builds the combinations itself, measures every one with a real req
     <string name="home_openvpn">OpenVPN</string>
     <string name="home_folder_tools">Tools</string>
     <string name="home_folder_new">Folder</string>
-    <string name="home_folder_drag_out_hint">Drag an app outside this box to take it out of the folder. Tap the name to rename it.</string>
+    <string name="home_folder_drag_out_hint">Drag an app out of this box to put it anywhere on the Home Screen. Tap the name to rename the folder.</string>
+    <string name="home_folder_connect">Connections</string>
+    <string name="home_folder_configs">Configs</string>
+    <string name="home_folder_games">Games</string>
+    <string name="home_folder_emergency">Emergency</string>
+    <string name="home_folder_name">Folder name</string>
+    <string name="home_folder_clear_name">Clear name</string>
+    <string name="home_folder_remove">Remove Folder</string>
+    <string name="home_folder_remove_title">Remove “%1$s”?</string>
+    <string name="home_folder_remove_body">Its apps go back to the Home Screen, where the folder was.</string>
     <string name="home_geph">Geph</string>
     <string name="geph">Geph</string>
     <string name="geph_tagline">Geph\'s own network: servers in a dozen countries, reached through obfuscated bridges and a broker no single address can block.</string>

@@ -1,16 +1,19 @@
 package com.mlmvpn.scanner.ui.home
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.runtime.collectAsState
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,25 +21,27 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.absoluteOffset
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.layout.union
-import androidx.compose.foundation.layout.only
-import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.displayCutout
-import androidx.compose.foundation.layout.WindowInsetsSides
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.Icon
@@ -45,26 +50,40 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -72,6 +91,10 @@ import androidx.compose.ui.zIndex
 import com.mlmvpn.scanner.R
 import com.mlmvpn.scanner.ui.LocalSystemBottomPadding
 import com.mlmvpn.scanner.ui.LocalSystemTopPadding
+import com.mlmvpn.scanner.ui.settings.IosAlert
+import com.mlmvpn.scanner.ui.settings.IosAlertAction
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 /**
  * How the board is divided, for the space it actually has.
@@ -124,6 +147,13 @@ private fun boardShapeFor(width: Dp, height: Dp, items: Int): BoardShape {
     return BoardShape(columns = columns, rows = minOf(fit, needed).coerceAtLeast(2))
 }
 
+/** How icons slide aside and back: quick, and settling without a wobble, as on iOS. */
+private val SlotSpring = spring<Offset>(dampingRatio = 0.82f, stiffness = 420f)
+
+/** A folder opening out of its tile, and closing back into it. */
+private val FolderOpenSpring = spring<Float>(dampingRatio = 0.86f, stiffness = 340f)
+private val FolderCloseSpring = spring<Float>(dampingRatio = 1f, stiffness = 520f)
+
 /**
  * The app's front door: a wallpaper, a grid of icons, and a dock.
  *
@@ -131,6 +161,12 @@ private fun boardShapeFor(width: Dp, height: Dp, items: Int): BoardShape {
  * hamburger drawer that hid twelve more features behind it. Everything the drawer held is an
  * icon here, so nothing in the app is more than two taps away and nothing is invisible until you
  * go looking for it.
+ *
+ * Icons gather into folders the way they do on iOS: hold one over another and a folder grows
+ * behind it; let go and the two are a folder, opened at once with a name taken from what they are.
+ * Hold one over a folder and it springs open to take it wherever it is wanted inside; drag one out
+ * of an open folder and it closes behind it, leaving the icon to land anywhere on the board. See
+ * [HomeDrag] for how one drag crosses all of that.
  *
  * The backdrop is NOT drawn here. It is painted at the activity root, behind the system bars, so
  * it runs edge to edge with no cut line under the status icons; this screen is transparent and
@@ -147,12 +183,20 @@ fun HomeScreen(
     onOpenUpdate: () -> Unit = {},
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var order by remember { mutableStateOf(HomeLayoutStore.load(context)) }
     var editMode by remember { mutableStateOf(false) }
-    // The folder open over the board, by key. What it shows is read back out of `order`, so a
-    // change made inside it -- a new name, a member dragged out -- is the board's own state and
-    // the two can never disagree.
-    var openFolder by remember { mutableStateOf<String?>(null) }
+
+    // The folder open over the board: [openKey] while it is open, [shownKey] for as long as it is
+    // on screen at all, the closing animation included. What it shows is read back out of `order`,
+    // so a change made inside it -- a new name, a member moved -- is the board's own state and the
+    // two can never disagree.
+    var openKey by remember { mutableStateOf<String?>(null) }
+    var shownKey by remember { mutableStateOf<String?>(null) }
+    val folderProgress = remember { Animatable(0f) }
+    var removing by remember { mutableStateOf<BoardItem.Folder?>(null) }
+
+    val drag = remember { HomeDrag(scope) }
 
     fun commit(items: List<BoardItem>) {
         order = items
@@ -161,112 +205,202 @@ fun HomeScreen(
     fun commitLayout(layout: BoardLayout?) {
         if (layout != null) commit(HomeLayoutStore.toItems(layout))
     }
-
-    // Leaving edit mode is what back does first, before it would ever offer to exit the app. An
-    // open folder answers back itself (it closes, or leaves its own rearranging first).
-    BackHandler(enabled = editMode && openFolder == null) { editMode = false }
-
-    Box(modifier = Modifier.fillMaxSize()) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(
-                top = LocalSystemTopPadding.current,
-                bottom = LocalSystemBottomPadding.current,
-            )
-            // The sides matter only in landscape, and there they matter a lot: the display cutout
-            // sits on one edge and the navigation bar on the other, so padding top and bottom
-            // alone left the board pushed towards one side -- the icons were centred in the
-            // window and visibly off-centre on the screen. `displayCutout` and `navigationBars`
-            // rather than `systemBars`, because the status bar is a top inset already applied
-            // above and taking it twice would add a margin nothing is behind.
-            .windowInsetsPadding(
-                WindowInsets.displayCutout
-                    .union(WindowInsets.navigationBars)
-                    .only(WindowInsetsSides.Horizontal)
-            )
-    ) {
-        // A newer release is announced the iOS way: a red badge on the Settings icon (see
-        // AppIconCell) and a row at the top of Settings -- not a glyph in this strip.
-        HomeStatusStrip(
-            isRunning = isRunning,
-            showTraffic = showTraffic,
-            trafficDown = trafficDown,
-            trafficUp = trafficUp,
-            editMode = editMode,
-            onDone = { editMode = false },
-        )
-
-        IconGrid(
-            order = order,
-            editMode = editMode,
-            onEnterEditMode = { editMode = true },
-            onExitEditMode = { editMode = false },
-            onReorder = { reordered -> commit(reordered) },
-            onMerge = { draggedId, targetId ->
-                commitLayout(
-                    BoardLayoutRules.merge(
-                        HomeLayoutStore.toLayout(order),
-                        draggedId,
-                        targetId,
-                        newKey = "f" + System.currentTimeMillis().toString(36),
-                    )
-                )
-            },
-            onOpen = { item ->
-                when (item) {
-                    // A folder opens in edit mode too -- that is where it is renamed and emptied.
-                    is BoardItem.Folder -> openFolder = item.key
-                    is BoardItem.App -> if (!editMode) onOpen(item.app)
-                }
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .padding(horizontal = 8.dp),
-        )
-
-        // Centred, because the dock no longer fills the width it is given -- see GlassDock. On a
-        // phone this changes nothing (the bar is wider than the screen); on anything larger it is
-        // what keeps the dock under the middle of the board instead of pinned to one edge.
-        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            GlassDock(
-                apps = HomeDestinations.DOCK,
-                tileSize = 56.dp,
-                onOpen = { if (!editMode) onOpen(it) },
-                modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 6.dp, bottom = 10.dp),
-            )
+    fun openFolder(key: String) {
+        openKey = key
+        shownKey = key
+        scope.launch { folderProgress.animateTo(1f, FolderOpenSpring) }
+    }
+    fun closeFolder() {
+        if (openKey == null) return
+        openKey = null
+        scope.launch {
+            folderProgress.animateTo(0f, FolderCloseSpring)
+            if (openKey == null) shownKey = null
         }
     }
 
-    val folder = order.firstOrNull { it is BoardItem.Folder && it.key == openFolder } as BoardItem.Folder?
-    if (folder != null) {
-        val factoryTitle = stringResource(HomeDestinations.folderTitleRes(folder.key))
-        FolderOverlay(
-            folder = folder,
-            startEditing = editMode,
-            liveEngines = ActiveEngines.ids(),
-            onOpenApp = { app ->
-                openFolder = null
-                onOpen(app)
-            },
-            onClose = { openFolder = null },
-            onRename = { title ->
-                commitLayout(
-                    BoardLayoutRules.rename(HomeLayoutStore.toLayout(order), folder.key, title, factoryTitle)
+    // Wired on every composition, so the drag always acts on the board as it is now.
+    drag.committed = { HomeLayoutStore.toLayout(order) }
+    drag.commit = { commitLayout(it) }
+    drag.openFolderKey = { openKey }
+    drag.springOpen = { openFolder(it) }
+    drag.closeFolder = { closeFolder() }
+    drag.onFolderMade = { openFolder(it) }
+    drag.haptics = LocalHapticFeedback.current
+    drag.stillSlopPx = with(LocalDensity.current) { 4.dp.toPx() }
+
+    // Leaving edit mode is what back does first, before it would ever offer to exit the app. An
+    // open folder answers back itself (it closes, or leaves its own renaming first).
+    BackHandler(enabled = editMode && openKey == null) { editMode = false }
+
+    val liveEngines = ActiveEngines.ids()
+    val progress: State<Float> = folderProgress.asState()
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .onGloballyPositioned { drag.root = it }
+            .homeDragTracker(drag),
+    ) {
+        // While a folder is open the wallpaper behind everything goes to frosted glass, as on iOS.
+        // Behind the board rather than over it, so the icons still show through, blurred.
+        if (shownKey != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { alpha = progress.value }
+                    .frostedGlass(RectangleShape, overWallpaper = true, underScrim = false),
+            )
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                // The board softens behind an open folder. Read in the layer, so the opening costs a
+                // redraw a frame and no recomposition; below Android 12 the scrim alone does it.
+                .graphicsLayer {
+                    val p = progress.value
+                    renderEffect = if (p > 0.01f) BlurEffect(p * 28f, p * 28f, TileMode.Decal) else null
+                }
+                .padding(
+                    top = LocalSystemTopPadding.current,
+                    bottom = LocalSystemBottomPadding.current,
                 )
-            },
-            onReorder = { apps ->
-                commitLayout(
-                    BoardLayoutRules.reorderInside(HomeLayoutStore.toLayout(order), folder.key, apps.map { it.id })
+                // The sides matter only in landscape, and there they matter a lot: the display cutout
+                // sits on one edge and the navigation bar on the other, so padding top and bottom
+                // alone left the board pushed towards one side -- the icons were centred in the
+                // window and visibly off-centre on the screen. `displayCutout` and `navigationBars`
+                // rather than `systemBars`, because the status bar is a top inset already applied
+                // above and taking it twice would add a margin nothing is behind.
+                .windowInsetsPadding(
+                    WindowInsets.displayCutout
+                        .union(WindowInsets.navigationBars)
+                        .only(WindowInsetsSides.Horizontal)
                 )
-            },
-            onMoveOut = { app ->
-                commitLayout(BoardLayoutRules.moveOut(HomeLayoutStore.toLayout(order), folder.key, app.id))
-            },
+        ) {
+            // A newer release is announced the iOS way: a red badge on the Settings icon (see
+            // AppIconCell) and a row at the top of Settings -- not a glyph in this strip.
+            HomeStatusStrip(
+                isRunning = isRunning,
+                showTraffic = showTraffic,
+                trafficDown = trafficDown,
+                trafficUp = trafficUp,
+                editMode = editMode,
+                onDone = { editMode = false },
+            )
+
+            BoardGrid(
+                // While something is in the air the board shows the rest, with a gap where it would
+                // land; otherwise exactly what is saved.
+                items = if (drag.active) drag.boardItems else order,
+                gap = if (drag.active) drag.boardGap else null,
+                drag = drag,
+                editMode = editMode,
+                liveEngines = liveEngines,
+                shownFolder = shownKey,
+                folderProgress = progress,
+                onEnterEditMode = { editMode = true },
+                onExitEditMode = { editMode = false },
+                onOpen = { item ->
+                    when (item) {
+                        // A folder opens in edit mode too -- that is where it is renamed and rearranged.
+                        is BoardItem.Folder -> openFolder(item.key)
+                        is BoardItem.App -> if (!editMode) onOpen(item.app)
+                    }
+                },
+                onRemoveFolder = { removing = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .padding(horizontal = 8.dp),
+            )
+
+            // Centred, because the dock no longer fills the width it is given -- see GlassDock. On a
+            // phone this changes nothing (the bar is wider than the screen); on anything larger it is
+            // what keeps the dock under the middle of the board instead of pinned to one edge.
+            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                GlassDock(
+                    apps = HomeDestinations.DOCK,
+                    tileSize = 56.dp,
+                    onOpen = { if (!editMode) onOpen(it) },
+                    modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 6.dp, bottom = 10.dp),
+                )
+            }
+        }
+
+        val key = shownKey
+        val folder = order.firstOrNull { it is BoardItem.Folder && it.key == key } as BoardItem.Folder?
+        if (key != null && folder == null && !drag.active) {
+            // The folder is gone from under its own panel -- its last app left it. Nothing to show.
+            LaunchedEffect(key) { closeFolder(); shownKey = null }
+        }
+        if (folder != null) {
+            val factoryTitle = stringResource(HomeDestinations.folderTitleRes(folder.key))
+            FolderOverlay(
+                folder = folder,
+                apps = drag.folderApps(folder.key) ?: folder.apps,
+                gap = if (drag.active) drag.folderGap else null,
+                open = openKey == folder.key,
+                progress = progress,
+                origin = { folderTileRect(drag, order, folder.key) },
+                editMode = editMode,
+                drag = drag,
+                liveEngines = liveEngines,
+                onEnterEditMode = { editMode = true },
+                onExitEditMode = { editMode = false },
+                onOpenApp = { app ->
+                    closeFolder()
+                    onOpen(app)
+                },
+                onClose = { closeFolder() },
+                onRename = { title ->
+                    commitLayout(
+                        BoardLayoutRules.rename(HomeLayoutStore.toLayout(order), folder.key, title, factoryTitle)
+                    )
+                },
+            )
+        }
+
+        DragLayer(drag) { item, tilePx ->
+            val size = with(LocalDensity.current) { tilePx.toDp() }
+            when (item) {
+                is BoardItem.App -> AppIconTile(app = item.app, size = size, connected = item.id in liveEngines)
+                is BoardItem.Folder -> FolderTile(folder = item, tileSize = size, connected = item.apps.any { it.id in liveEngines })
+            }
+        }
+    }
+
+    removing?.let { f ->
+        val title = folderTitle(f)
+        IosAlert(
+            title = stringResource(R.string.home_folder_remove_title, title),
+            message = stringResource(R.string.home_folder_remove_body),
+            actions = listOf(
+                IosAlertAction(stringResource(R.string.common_cancel), onClick = { removing = null }),
+                IosAlertAction(
+                    stringResource(R.string.home_folder_remove),
+                    onClick = {
+                        removing = null
+                        commitLayout(BoardLayoutRules.ungroup(HomeLayoutStore.toLayout(order), f.key))
+                    },
+                    destructive = true,
+                ),
+            ),
+            onDismiss = { removing = null },
         )
     }
-    }
+}
+
+/** Where folder [key]'s tile is on the board right now, for its panel to open out of. */
+private fun folderTileRect(drag: HomeDrag, order: List<BoardItem>, key: String): Rect? {
+    val g = drag.boardGeometry ?: return null
+    val ref = BoardLayoutRules.folderRef(key)
+    val items = if (drag.active) drag.boardItems else order
+    val gap = if (drag.active) drag.boardGap else null
+    val index = items.indexOfFirst { it.id == ref }.takeIf { it >= 0 } ?: return null
+    val visual = if (gap != null && index >= gap) index + 1 else index
+    if (visual / g.perPage != g.page) return null
+    return g.tileRect(visual % g.perPage)
 }
 
 /**
@@ -349,41 +483,40 @@ private fun HomeStatusStrip(
 }
 
 /**
- * A 4 x 6 board, built as six Rows of four weighted cells.
+ * The board: pages of icons, each placed by slot and slid to its slot when the slot changes.
  *
- * The first version placed every icon by absolute pixel offset inside a Box. That is the usual
- * way to build a draggable grid, and it is also how icons went missing: cell position, drag delta
- * and a per-item settle animation all fed one coordinate, so any of them being wrong put an icon
- * somewhere invisible with nothing on screen to say which. Real Rows cannot do that -- an icon is
- * in a cell or the cell is empty -- and they get right-to-left for free, which the manual version
- * had to mirror by hand and got backwards.
- *
- * Only the DRAGGED icon is displaced, and with `graphicsLayer { translationX }` rather than a
- * layout offset: translation is raw and is never mirrored by layout direction, which is exactly
- * what following a finger needs.
+ * The first version placed every icon by absolute pixel offset with the drag delta, the drop
+ * target and a settle animation all feeding one coordinate, and icons went missing when any of
+ * them was wrong; the version after it used Rows, which cannot lose an icon but cannot animate one
+ * from one cell to another either -- the board jumped on every move. Here a slot is the ONLY input
+ * to an icon's position: the dragged icon is not on the board at all (it flies in [DragLayer]), and
+ * every other icon's slot comes from its index and the gap, so the worst a mistake can do is put
+ * one in the wrong cell, visibly, never off the board.
  */
-@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun IconGrid(
-    order: List<BoardItem>,
+private fun BoardGrid(
+    items: List<BoardItem>,
+    gap: Int?,
+    drag: HomeDrag,
     editMode: Boolean,
+    liveEngines: Set<String>,
+    shownFolder: String?,
+    folderProgress: State<Float>,
     onEnterEditMode: () -> Unit,
     onExitEditMode: () -> Unit,
-    onReorder: (List<BoardItem>) -> Unit,
-    /** An app held over another tile long enough: into that folder, or a new one with that app. */
-    onMerge: (draggedId: String, targetId: String) -> Unit,
     onOpen: (BoardItem) -> Unit,
+    onRemoveFolder: (BoardItem.Folder) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     BoxWithConstraints(modifier = modifier) {
         val density = LocalDensity.current
         val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
-        // Read once for the whole board rather than per cell: twenty-odd AppIconCells would
-        // otherwise each subscribe to the same four engine flows.
-        val liveEngines = ActiveEngines.ids()
+        val scope = rememberCoroutineScope()
 
-        val shape = boardShapeFor(maxWidth, maxHeight, order.size)
-        val pageCount = shape.pageCount(order.size)
+        val slots = items.size + if (gap != null) 1 else 0
+        val shape = boardShapeFor(maxWidth, maxHeight, slots)
+        val pageCount = shape.pageCount(slots)
         // Declared here rather than hoisted, because its page count is a function of the measured
         // shape: a rotation changes how many icons fit and therefore how many pages exist.
         val pagerState = rememberPagerState(pageCount = { pageCount })
@@ -391,10 +524,11 @@ private fun IconGrid(
         // page of a taller board leaves `page` past the end of a shorter one, and a pager index
         // that no longer exists draws an empty board with no way back.
         val page = pagerState.currentPage.coerceIn(0, pageCount - 1)
-        val pageStart = page * shape.perPage
 
+        // The pager leaves the page dots their own strip below it.
+        val dotsHeight = if (pageCount > 1) 15.dp else 0.dp
         val cellW = maxWidth / shape.columns
-        val cellH = maxHeight / shape.rows
+        val cellH = (maxHeight - dotsHeight) / shape.rows
         // 26dp covers the 6dp gap and the 11sp caption, so a tile can never push its own label
         // out of the cell on a short screen.
         // The ceiling rises with the cell. 64dp is right on a phone and far too small on a
@@ -408,64 +542,40 @@ private fun IconGrid(
         // ceiling stops a large setting from pushing a tile over its own caption.
         val tileSize = (baseTile * (Appearance.iconScale / 100f))
             .coerceAtMost(minOf(cellH - 20.dp, cellW - 4.dp))
+        val tilePx = with(density) { tileSize.toPx() }
 
-        val cellWpx = with(density) { cellW.toPx() }
-        val cellHpx = with(density) { cellH.toPx() }
+        // Measured from a real cell: the tile and its caption sit centred together in the cell.
+        val contentHeight = remember { mutableFloatStateOf(0f) }
+        var pagerCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
 
-        var draggingId by remember { mutableStateOf<String?>(null) }
+        fun publish() {
+            val root = drag.root ?: return
+            val c = pagerCoords?.takeIf { it.isAttached } ?: return
+            val bounds = root.localBoundingBoxOf(c, clipBounds = false)
+            val cellHpx = bounds.height / shape.rows
+            val content = contentHeight.floatValue.takeIf { it > 0f } ?: (tilePx + with(density) { 22.dp.toPx() })
+            drag.boardGeometry = GridGeometry(
+                bounds = bounds,
+                columns = shape.columns,
+                rows = shape.rows,
+                page = pagerState.currentPage.coerceIn(0, pageCount - 1),
+                pageCount = pageCount,
+                tilePx = tilePx,
+                tileTopPx = ((cellHpx - content) / 2f).coerceAtLeast(0f),
+                rtl = rtl,
+            )
+        }
+        LaunchedEffect(pagerState.currentPage, pageCount, shape, tilePx, rtl, contentHeight.floatValue) { publish() }
+        drag.flipBoard = { step ->
+            val to = (pagerState.currentPage + step).coerceIn(0, pageCount - 1)
+            scope.launch { pagerState.animateScrollToPage(to) }
+        }
 
-        // Where the icon WILL land. Tracked continuously while the finger moves, applied only
-        // when it lifts.
-        //
-        // The first version reordered the list live, on every cell the finger crossed. Two things
-        // were wrong with that. It looked like the icon jumping out from under the finger, which
-        // is not what dragging should feel like; and because each swap moved the item's own home
-        // cell, the offset had to be corrected against a moving origin, so the error compounded
-        // and a long drag -- bottom row to top row -- drifted until it stopped tracking at all.
-        // Deciding here and committing on release makes the arithmetic one subtraction from a
-        // fixed start, so any distance works.
-        val dropTarget = remember { mutableStateOf(-1) }
-
-        /**
-         * The cell the drag started from, or -1 when nothing is being dragged.
-         *
-         * Together with [dropTarget] this is enough for every OTHER icon to work out whether it
-         * has to step aside, and by how much, without the list itself changing. That is the whole
-         * trick: the gap opens visually while the order underneath stays exactly as it was until
-         * the finger lifts. Both are read inside the graphics layer only, so opening the gap
-         * costs a redraw and no recomposition.
-         */
-        val dragFrom = remember { mutableStateOf(-1) }
-
-        // Deliberately a State read ONLY inside graphicsLayer, never in the composition body.
-        // Reading it here would recompose all 24 cells on every touch move, and rebuilding a
-        // node's modifier chain under an in-flight gesture is what dropped icons mid-drag while
-        // the finger was still down. Read inside the layer, a move costs one redraw and no
-        // recomposition at all.
-        val dragDelta = remember { mutableStateOf(Offset.Zero) }
-
-        // Holding an app over the MIDDLE of another tile offers a folder, the way iOS does:
-        // [hoverCell] is the tile under the finger's centre zone and when it got there; after
-        // [MERGE_DWELL_MS] it becomes [mergeTarget], the board stops making room (the gap closes,
-        // so the tile slides back under the finger) and a plate is drawn behind it. Lifting then
-        // drops the app INTO it. Moving on before the dwell is an ordinary reorder, so passing
-        // over icons on the way somewhere never makes a folder by accident. All three are read
-        // only in layers and in the dwell loop, never in the composition body.
-        val hoverCell = remember { mutableStateOf(-1) }
-        val hoverSince = remember { mutableStateOf(0L) }
-        val mergeTarget = remember { mutableStateOf(-1) }
-        val mergeRadiusPx = minOf(cellWpx, cellHpx) * 0.26f
-
-        // A State for the same reason: animateFloat changes every frame, and reading it in the
-        // composition body would recompose the whole board at 60fps.
+        // Only while rearranging: an infinite transition left in composition never stops asking for
+        // frames, which pins the whole app at 60fps forever -- the failure documented in
+        // AppScreen's emergency vignette, where it destabilised the GPU RenderThread.
         val jiggle: State<Float> = if (editMode) {
-            // CRITICAL: this transition exists ONLY while edit mode is on. An infiniteRepeatable
-            // left in the composition never stops requesting frames, which pins the whole app at
-            // 60fps forever -- the failure documented in AppScreen's emergency vignette, where it
-            // destabilised the GPU RenderThread and aborted swapBuffers. Declaring it inside the
-            // branch removes it from the slot table the moment edit mode ends.
-            val transition = rememberInfiniteTransition(label = "HomeJiggle")
-            transition.animateFloat(
+            rememberInfiniteTransition(label = "HomeJiggle").animateFloat(
                 initialValue = -1.7f,
                 targetValue = 1.7f,
                 animationSpec = infiniteRepeatable(
@@ -478,258 +588,69 @@ private fun IconGrid(
             remember { mutableStateOf(0f) }
         }
 
-        // Read through these inside the gesture handlers, never through the parameters directly.
-        // A drag reorders the list, and if `order` were a pointerInput key the modifier would be
-        // torn down and rebuilt on the first swap, cancelling the gesture.
-        val liveOrder by rememberUpdatedState(order)
-        val liveOnReorder by rememberUpdatedState(onReorder)
-        val liveOnMerge by rememberUpdatedState(onMerge)
-        val liveOnOpen by rememberUpdatedState(onOpen)
-        val liveOnEnterEditMode by rememberUpdatedState(onEnterEditMode)
+        val liveEditMode by rememberUpdatedState(editMode)
         val liveOnExitEditMode by rememberUpdatedState(onExitEditMode)
-
-        // Both of these speak GLOBAL indices into `order` and page-local pixels, because that
-        // is what their two callers each already have: the drag arithmetic works in list indices,
-        // and the pointer works in coordinates inside the page it is on. Doing the conversion
-        // here keeps `pageStart` out of the drag code entirely.
-
-        /** Which cell a point falls in, given in VISUAL pixels from this page's left edge. */
-        fun indexAt(x: Float, y: Float, count: Int): Int {
-            if (cellWpx <= 0f || cellHpx <= 0f) return pageStart
-            val visualCol = (x / cellWpx).toInt().coerceIn(0, shape.columns - 1)
-            val col = if (rtl) shape.columns - 1 - visualCol else visualCol
-            val row = (y / cellHpx).toInt().coerceIn(0, shape.rows - 1)
-            val local = row * shape.columns + col
-            // Bounded by the page as well as by the list: without the first bound a drag towards
-            // the empty cells at the end of a part-filled page would report an index belonging to
-            // the NEXT page, and the icon would vanish from the board on release.
-            return (pageStart + local).coerceIn(pageStart, minOf(pageStart + shape.perPage, count) - 1)
-        }
-
-        /** The centre of the cell holding global `index`, in that same visual pixel space. */
-        fun centreOf(index: Int): Offset {
-            val local = index - pageStart
-            val row = local / shape.columns
-            val col = local % shape.columns
-            val visualCol = if (rtl) shape.columns - 1 - col else col
-            return Offset((visualCol + 0.5f) * cellWpx, (row + 0.5f) * cellHpx)
-        }
-
-        // Runs only while something is being dragged: keyed on the id, it returns at once when
-        // the drag ends, so there is no loop left ticking on an idle board.
-        LaunchedEffect(draggingId) {
-            if (draggingId == null) return@LaunchedEffect
-            while (true) {
-                kotlinx.coroutines.delay(60)
-                val cell = hoverCell.value
-                if (cell >= 0 && mergeTarget.value != cell &&
-                    android.os.SystemClock.uptimeMillis() - hoverSince.value >= MERGE_DWELL_MS
-                ) {
-                    mergeTarget.value = cell
-                    dropTarget.value = dragFrom.value
-                }
-            }
-        }
 
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 // A tap anywhere the icons are not finishes rearranging, the same as the "Done"
-                // button. Only the empty space reaches this: an icon's own tap detector consumes
-                // the press, so the parent never sees it.
-                .then(
-                    if (editMode) {
-                        Modifier.pointerInput(Unit) {
-                            detectTapGestures { liveOnExitEditMode() }
-                        }
-                    } else {
-                        Modifier
-                    }
-                )
+                // button. Only the empty space reaches this: an icon's own gestures take the press.
+                .pointerInput(Unit) {
+                    detectTapGestures { if (liveEditMode) liveOnExitEditMode() }
+                }
         ) {
             HorizontalPager(
                 state = pagerState,
-                modifier = Modifier.fillMaxWidth().weight(1f),
-                // Swiping is off while rearranging: in edit mode a horizontal drag IS the gesture
-                // that moves an icon, and letting the pager claim it would turn every attempt to
-                // move one sideways into a page turn.
-                userScrollEnabled = !editMode && pageCount > 1,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .onGloballyPositioned {
+                        pagerCoords = it
+                        publish()
+                    },
+                // A drag turns pages itself, by holding at the edge; the pager must not take it.
+                userScrollEnabled = pageCount > 1 && !drag.active,
             ) { pageIndex ->
-            val pageOffset = pageIndex * shape.perPage
-            Column(modifier = Modifier.fillMaxSize()) {
-            repeat(shape.rows) { row ->
-                Row(modifier = Modifier.fillMaxWidth().weight(1f)) {
-                    repeat(shape.columns) { col ->
-                        val index = pageOffset + row * shape.columns + col
-                        val item = order.getOrNull(index)
-                        if (item == null) {
-                            Spacer(modifier = Modifier.weight(1f).fillMaxSize())
-                        } else {
-                            val isDragging = draggingId == item.id
-                            Box(
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = AbsoluteAlignment.TopLeft) {
+                    val cellWpx = with(density) { cellW.toPx() }
+                    val cellHpx = with(density) { cellH.toPx() }
+                    val first = pageIndex * shape.perPage
+                    items.forEachIndexed { index, item ->
+                        val visual = if (gap != null && index >= gap) index + 1 else index
+                        if (visual < first || visual >= first + shape.perPage) return@forEachIndexed
+                        val slot = visual - first
+                        val row = slot / shape.columns
+                        val col = slot % shape.columns
+                        val visualCol = if (rtl) shape.columns - 1 - col else col
+                        key(item.id) {
+                            val position = rememberSlotPosition(Offset(visualCol * cellWpx, row * cellHpx))
+                            BoardCell(
+                                item = item,
+                                drag = drag,
+                                fromFolder = null,
+                                tileSize = tileSize,
+                                tilePx = tilePx,
+                                editMode = editMode,
+                                liveEditMode = { liveEditMode },
+                                jiggle = jiggle,
+                                jigglePhase = if (visual % 2 == 0) 1f else -1f,
+                                connected = when (item) {
+                                    is BoardItem.App -> item.id in liveEngines
+                                    is BoardItem.Folder -> item.apps.any { it.id in liveEngines }
+                                },
+                                hiddenBy = if (item is BoardItem.Folder && item.key == shownFolder) folderProgress else null,
+                                contentHeight = contentHeight,
+                                onTap = { onOpen(item) },
+                                onEnterEditMode = onEnterEditMode,
+                                onRemove = (item as? BoardItem.Folder)?.let { f -> { onRemoveFolder(f) } },
                                 modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxSize()
-                                    .zIndex(if (isDragging) 1f else 0f)
-                                    // Shows where the icon will land. Read inside the draw lambda,
-                                    // so a new target costs one redraw and no recomposition -- the
-                                    // same discipline the drag offset uses.
-                                    .drawBehind {
-                                        if (mergeTarget.value == index && !isDragging) {
-                                            // The folder plate: brighter and larger than the
-                                            // landing mark, so "into this" never reads as "here".
-                                            val r = size.minDimension * 0.24f
-                                            drawRoundRect(
-                                                color = Color.White.copy(alpha = 0.24f),
-                                                cornerRadius = CornerRadius(r, r),
-                                            )
-                                        } else if (dropTarget.value == index && !isDragging &&
-                                            mergeTarget.value < 0
-                                        ) {
-                                            val r = size.minDimension * 0.22f
-                                            drawRoundRect(
-                                                color = Color.White.copy(alpha = 0.10f),
-                                                cornerRadius = CornerRadius(r, r),
-                                            )
-                                        }
-                                    }
-                                    .graphicsLayer {
-                                        if (isDragging) {
-                                            translationX = dragDelta.value.x
-                                            translationY = dragDelta.value.y
-                                            scaleX = 1.12f
-                                            scaleY = 1.12f
-                                            alpha = 0.92f
-                                        } else if (mergeTarget.value == index) {
-                                            // Swells a little: this is where it will go INTO.
-                                            scaleX = 1.08f
-                                            scaleY = 1.08f
-                                        } else {
-                                            // Step aside so a gap opens where the icon will land.
-                                            // Everything between the cell it left and the cell it
-                                            // is over shuffles one place towards the vacancy --
-                                            // the same shuffle the list will perform for real on
-                                            // release, previewed here in the layer.
-                                            val from = dragFrom.value
-                                            val to = dropTarget.value
-                                            if (from >= 0 && to >= 0) {
-                                                val shifted = when {
-                                                    from < to && index > from && index <= to ->
-                                                        index - 1
-                                                    from > to && index >= to && index < from ->
-                                                        index + 1
-                                                    else -> index
-                                                }
-                                                if (shifted != index) {
-                                                    val step = centreOf(shifted) - centreOf(index)
-                                                    translationX = step.x
-                                                    translationY = step.y
-                                                }
-                                            }
-                                        }
-                                        // Alternating phase so the board looks alive rather than
-                                        // metronomic.
-                                        rotationZ =
-                                            if (index % 2 == 0) jiggle.value else -jiggle.value
-                                    }
-                                    // Added beside the tap detector rather than instead of it:
-                                    // a DeX window and a tablet with a keyboard have both a
-                                    // pointer and a focus ring, and a phone simply never takes
-                                    // focus because nothing moves it there.
-                                    .tvFocusable(onPress = { liveOnOpen(item) })
-                                    .pointerInput(item.id) {
-                                        detectTapGestures { liveOnOpen(item) }
-                                    }
-                                    .pointerInput(item.id, cellWpx, cellHpx, rtl) {
-                                        detectDragGesturesAfterLongPress(
-                                            onDragStart = {
-                                                liveOnEnterEditMode()
-                                                draggingId = item.id
-                                                dragDelta.value = Offset.Zero
-                                                val start =
-                                                    liveOrder.indexOfFirst { it.id == item.id }
-                                                dragFrom.value = start
-                                                dropTarget.value = start
-                                                hoverCell.value = -1
-                                                mergeTarget.value = -1
-                                            },
-                                            onDrag = { change, delta ->
-                                                change.consume()
-                                                dragDelta.value += delta
-
-                                                val ordered = liveOrder
-                                                val from = ordered.indexOfFirst { it.id == item.id }
-                                                if (from >= 0) {
-                                                    // `from` does not move during the drag, so
-                                                    // this stays exact however far the finger
-                                                    // travels.
-                                                    val here = centreOf(from) + dragDelta.value
-                                                    val target = indexAt(here.x, here.y, ordered.size)
-                                                    // Only an app goes into a folder; a folder is
-                                                    // never put inside another.
-                                                    val nearCentre = ordered.getOrNull(from) is BoardItem.App &&
-                                                        target != from &&
-                                                        (here - centreOf(target)).getDistance() < mergeRadiusPx
-                                                    val candidate = if (nearCentre) target else -1
-                                                    if (candidate != hoverCell.value) {
-                                                        hoverCell.value = candidate
-                                                        hoverSince.value = android.os.SystemClock.uptimeMillis()
-                                                        mergeTarget.value = -1
-                                                    }
-                                                    dropTarget.value =
-                                                        if (mergeTarget.value >= 0) from else target
-                                                }
-                                            },
-                                            onDragEnd = {
-                                                val ordered = liveOrder
-                                                val from = ordered.indexOfFirst { it.id == item.id }
-                                                val target = dropTarget.value
-                                                val into = mergeTarget.value
-                                                if (from >= 0 && into >= 0 && into != from) {
-                                                    ordered.getOrNull(into)?.let { liveOnMerge(item.id, it.id) }
-                                                } else if (from >= 0 && target >= 0 && target != from) {
-                                                    val moved = ordered.toMutableList()
-                                                    moved.add(target, moved.removeAt(from))
-                                                    liveOnReorder(moved)
-                                                }
-                                                draggingId = null
-                                                dragDelta.value = Offset.Zero
-                                                dropTarget.value = -1
-                                                dragFrom.value = -1
-                                                hoverCell.value = -1
-                                                mergeTarget.value = -1
-                                            },
-                                            onDragCancel = {
-                                                // Cancelled rather than dropped: put it back.
-                                                draggingId = null
-                                                dragDelta.value = Offset.Zero
-                                                dropTarget.value = -1
-                                                dragFrom.value = -1
-                                                hoverCell.value = -1
-                                                mergeTarget.value = -1
-                                            },
-                                        )
-                                    },
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                when (item) {
-                                    is BoardItem.App -> AppIconCell(
-                                        app = item.app,
-                                        tileSize = tileSize,
-                                        connected = item.id in liveEngines,
-                                    )
-                                    is BoardItem.Folder -> FolderIconCell(
-                                        folder = item,
-                                        tileSize = tileSize,
-                                        connected = item.apps.any { it.id in liveEngines },
-                                    )
-                                }
-                            }
+                                    .absoluteOffset { position.value.toIntOffset() }
+                                    .size(cellW, cellH),
+                            )
                         }
                     }
                 }
-            }
-            }
             }
 
             if (pageCount > 1) PageDots(count = pageCount, current = page)
@@ -737,8 +658,165 @@ private fun IconGrid(
     }
 }
 
-/** How long an app has to be held over a tile before the board offers a folder. */
-private const val MERGE_DWELL_MS = 420L
+/** Where an icon is, slid there from wherever it last was. */
+@Composable
+internal fun rememberSlotPosition(target: Offset): State<Offset> {
+    val anim = remember { Animatable(target, Offset.VectorConverter) }
+    LaunchedEffect(target) {
+        if (anim.value != target) anim.animateTo(target, SlotSpring)
+    }
+    return anim.asState()
+}
+
+internal fun Offset.toIntOffset(): IntOffset = IntOffset(x.roundToInt(), y.roundToInt())
+
+/**
+ * One cell of the board or of an open folder: its tile and caption, and everything a cell does
+ * -- open on a tap, start a drag, jiggle while rearranging, show the plate a folder grows from.
+ */
+@Composable
+internal fun BoardCell(
+    item: BoardItem,
+    drag: HomeDrag,
+    fromFolder: String?,
+    tileSize: Dp,
+    tilePx: Float,
+    editMode: Boolean,
+    liveEditMode: () -> Boolean,
+    jiggle: State<Float>,
+    jigglePhase: Float,
+    connected: Boolean,
+    /** For the folder whose panel is open: its tile fades as the panel grows out of it. */
+    hiddenBy: State<Float>?,
+    contentHeight: androidx.compose.runtime.MutableFloatState,
+    onTap: () -> Unit,
+    onEnterEditMode: () -> Unit,
+    /** Folders only: the edit-mode badge that takes the folder apart. */
+    onRemove: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    var coords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    // The gestures live as long as the cell; these keep what they act on current.
+    val currentItem by rememberUpdatedState(item)
+    val currentTilePx by rememberUpdatedState(tilePx)
+    val currentOnTap by rememberUpdatedState(onTap)
+    val currentOnEnterEditMode by rememberUpdatedState(onEnterEditMode)
+    val landing = drag.landingId == item.id
+    val target = drag.onto == item.id
+    // The plate a new folder grows from, behind an app held over; a folder held over swells.
+    val plate by animateFloatAsState(if (target) 1f else 0f, spring(dampingRatio = 0.8f, stiffness = 520f), label = "plate")
+
+    Box(
+        modifier = modifier
+            .zIndex(if (target) 1f else 0f)
+            .onGloballyPositioned { coords = it }
+            .homeItemGestures(
+                key = item.id,
+                drag = drag,
+                item = { currentItem },
+                fromFolder = fromFolder,
+                tilePx = { currentTilePx },
+                editMode = liveEditMode,
+                coordinates = { coords },
+                tileTopLeftInRoot = {
+                    val root = drag.root
+                    val own = coords
+                    if (root == null || own == null || !own.isAttached) null else {
+                        val cell = root.localBoundingBoxOf(own, clipBounds = false)
+                        val top = ((cell.height - contentHeight.floatValue) / 2f).coerceAtLeast(0f)
+                        Offset(cell.left + (cell.width - currentTilePx) / 2f, cell.top + top)
+                    }
+                },
+                onTap = { currentOnTap() },
+                onEnterEditMode = { currentOnEnterEditMode() },
+            )
+            .tvFocusable(onPress = onTap)
+            .graphicsLayer {
+                alpha = when {
+                    landing -> 0f
+                    hiddenBy != null -> 1f - hiddenBy.value
+                    else -> 1f
+                }
+                rotationZ = jiggle.value * jigglePhase
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier.onSizeChanged { contentHeight.floatValue = it.height.toFloat() },
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Box(modifier = Modifier.size(tileSize)) {
+                when (item) {
+                    is BoardItem.App -> {
+                        if (plate > 0.01f) {
+                            Box(
+                                modifier = Modifier
+                                    .size(tileSize)
+                                    .graphicsLayer {
+                                        val s = 1f + 0.26f * plate
+                                        scaleX = s
+                                        scaleY = s
+                                        alpha = plate
+                                    }
+                                    .frostedGlass(FolderShape, overWallpaper = true, underScrim = false),
+                            )
+                        }
+                        AppIconTile(app = item.app, size = tileSize, connected = connected)
+                    }
+                    is BoardItem.Folder -> FolderTile(
+                        folder = item,
+                        tileSize = tileSize,
+                        connected = connected,
+                        modifier = Modifier.graphicsLayer {
+                            val s = 1f + 0.12f * plate
+                            scaleX = s
+                            scaleY = s
+                        },
+                    )
+                }
+                if (editMode && onRemove != null) {
+                    RemoveBadge(size = tileSize, onClick = onRemove)
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            TileCaption(
+                when (item) {
+                    is BoardItem.App -> stringResource(item.app.labelRes)
+                    is BoardItem.Folder -> folderTitle(item)
+                }
+            )
+        }
+    }
+}
+
+/**
+ * iOS's minus badge, top-left of an icon while the board is being rearranged. Only folders wear
+ * it here -- the destinations are the app itself and cannot be removed -- and on a folder it takes
+ * the folder apart, its apps going back onto the board.
+ */
+@Composable
+private fun RemoveBadge(size: Dp, onClick: () -> Unit) {
+    val d = (size * 0.34f).coerceIn(18.dp, 24.dp)
+    val description = stringResource(R.string.home_folder_remove)
+    // Physical top-left in both directions, like iOS.
+    val corner = if (LocalLayoutDirection.current == LayoutDirection.Rtl) Alignment.TopEnd else Alignment.TopStart
+    Box(modifier = Modifier.size(size)) {
+        Box(
+            modifier = Modifier
+                .align(corner)
+                .absoluteOffset(x = -(d * 0.32f), y = -(d * 0.32f))
+                .size(d)
+                .shadow(elevation = 2.dp, shape = CircleShape, clip = false)
+                .clip(CircleShape)
+                .background(Color(0xFF8E8E93).copy(alpha = 0.96f))
+                .semantics { contentDescription = description }
+                .pointerInput(Unit) { detectTapGestures { onClick() } },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Default.Remove, contentDescription = null, tint = Color.White, modifier = Modifier.size(d * 0.72f))
+        }
+    }
+}
 
 /**
  * The row of dots under a board that has more than one page.
@@ -747,9 +825,9 @@ private const val MERGE_DWELL_MS = 420L
  * is an invitation to try, and the thing it invites does nothing.
  */
 @Composable
-private fun PageDots(count: Int, current: Int) {
+internal fun PageDots(count: Int, current: Int, modifier: Modifier = Modifier) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 2.dp),
+        modifier = modifier.fillMaxWidth().padding(top = 4.dp, bottom = 4.dp),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
