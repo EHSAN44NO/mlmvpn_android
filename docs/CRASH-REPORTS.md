@@ -75,7 +75,7 @@ node scripts/deploy-crash-worker.mjs <credentials.txt> <secrets.json>
 - `credentials.txt`: line 1 the Cloudflare e-mail, line 2 the Global API Key. Use an account that
   does **not** run the Quick Connect pool. Worker requests (100k a day on the free plan) and D1
   reads are counted per account, and the pool's traffic is what used to take crash reporting down.
-  The game-crowd account is a good home.
+  The collector runs on its own account (`mlm-770adbce.workers.dev`, set up 2026-10-01), used for nothing else.
 - `secrets.json`: created by the first run. Fill in `ghToken` (a fine-grained token with
   **Issues: Read and write** on `mlmvpn/crashes` and nothing else) and run the script again. Keep
   this file out of git.

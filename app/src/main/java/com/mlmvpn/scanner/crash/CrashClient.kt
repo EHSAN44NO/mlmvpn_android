@@ -36,7 +36,7 @@ object CrashClient {
      * The crash collector, on a Cloudflare account the pool does not use.
      * scripts/deploy-crash-worker.mjs deploys it and rewrites this line when the address differs.
      */
-    const val ENDPOINT = "https://mlm-crash-3d91c7.ehsan44noven.workers.dev"
+    const val ENDPOINT = "https://mlm-crash-3d91c7.mlm-770adbce.workers.dev"
 
     private val dohDns = object : okhttp3.Dns {
         override fun lookup(hostname: String): List<java.net.InetAddress> {
