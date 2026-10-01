@@ -120,6 +120,7 @@ fun routeName(context: Context, routeId: String?, family: FamilyPolicy? = null, 
         routeId == WorkerRoute.ID -> context.getString(R.string.mae_route_worker)
         routeId == UsExitRoute.ID -> context.getString(R.string.mae_route_usexit)
         routeId.startsWith(UserConfigRoute.CLOUD_PREFIX) -> context.getString(R.string.mae_route_cloud)
+        com.mlmvpn.scanner.engines.flux.FluxRoute.isFluxRoute(routeId) -> context.getString(R.string.flux_title_short)
         routeId.startsWith(UserConfigRoute.PREFIX) -> context.getString(R.string.mae_route_config)
         else -> routeId
     }

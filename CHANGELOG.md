@@ -4,6 +4,62 @@ All notable changes to the MLM VPN Android app are documented here. Dates are in
 
 فارسی این فایل در ادامه (پایین همین صفحه) آمده است.
 
+## [1.2.41] — 2026-10-01
+
+### Fixed
+- **FLUX: IPv6 mode said IPv6 did not work, on a network where it does.** The Cloudflare check sampled random addresses across whole IPv6 /32s, most of them unrouted, so it judged Cloudflare-over-IPv6 cut and left every CDN-fronted node out. It now uses the 16 /48 prefixes the app measured serving from Iran (`CfFamily.V6_PREFIXES`). Verdicts taken with the old sampler are measured again once.
+- **FLUX: servers whose names Iran's resolver poisons.** Such names resolve to the block page, which over IPv6 is `2001:4188:2:600::/64`. These answers are now recognised, and the name is resolved through DoH by IP instead, which also brings in the IPv6 addresses an IPv6 race needs.
+- **FLUX: an honest IPv6 message.** "This network has no IPv6" is shown only when it has none. Otherwise the message is "no server answered over IPv6 right now".
+- **FLUX: "FLUX" was shown twice on its page.**
+
+### Changed
+- **FLUX: country and IP version can be changed while connected.** The tunnel moves to a route for the new choice.
+- **FLUX: more countries in the list.**
+  - Countries claimed by node names are listed and marked "not verified yet". Choosing one races those nodes first, and FLUX still accepts only an exit measured in that country.
+  - After a Wi-Fi connect, FLUX measures where up to 24 untried nodes exit, at most once in 6 h per network, so verified countries accumulate.
+  - When the country sources disagree, a fourth one (ifconfig.co) breaks the tie.
+
+## [1.2.40] — 2026-10-01
+
+### Fixed
+- **FLUX: "no working route" although the race had found one.** With a single winning route, the tunnel config carried a `leastLoad` balancer without the burst observatory it depends on, and the core refused to start ("not all dependencies are resolved"). A single route now goes out directly. With standbys, the balancer and the observatory always come together. If the core still refuses the full config, FLUX retries at once with the primary route alone.
+- **FLUX: one bad node no longer sinks a whole race.** This core has removed `allowInsecure`, so one self-signed Hysteria2 node made the probe core refuse to start, and every candidate in that round was lost. Self-signed links are now rejected like the others. If the probe core still refuses a batch, the candidates that do build are found and raced.
+- **FLUX: no 15-second wait on a failed start.** FLUX moves on as soon as the VPN service gives up.
+
+### Changed
+- **FLUX: up to three rounds per connect, each on fresh candidates.** A round that finds nothing, or whose winner fails inside the tunnel, moves on to nodes not tried yet instead of measuring the same ones again.
+- **FLUX: detailed logcat under the `FLUX` tag** (`adb logcat -s FLUX`), with no credentials. It covers:
+  - each source and what it yielded;
+  - the network verdict, per Cloudflare edge;
+  - every candidate's stage-1 and stage-2 result with its reason;
+  - the race ranking;
+  - the tunnel start and the service's answer;
+  - every canary and health check;
+  - network changes;
+  - the final failure reason.
+
+## [1.2.39] — 2026-10-01
+
+### Added
+- **FLUX — MLM FLUX Engine, a new engine of its own.** Three controls: a country (or Automatic), IPv4 / IPv6 / Both, and Connect. FLUX picks the protocol, the node, the Cloudflare edge, the address family, fragmenting and the standby routes itself, on the app's existing Xray core.
+  - **Works where Cloudflare is cut.** On each network FLUX measures, in about 1.5 s, whether Cloudflare's edges are reachable. Where they are not, Cloudflare-fronted nodes are left out of the race entirely, and only direct routes are tried: VLESS REALITY, Trojan/VLESS TLS and Hysteria2 over UDP. Where Cloudflare works, each CDN-fronted node is tried over several edges, and the edges that answer are remembered for that network.
+  - **Its own sources**, separate from Free Configs and Quick Connect: Free-Configs (Cloudflare-fronted, tested from Iran by its publisher) and filtered REALITY, Hysteria2 and Trojan lists. Lists are cached and refreshed in the background with ETag, and a user can add their own subscription.
+  - **Fast first connect.** On a network FLUX has seen, it connects to the route that worked there at once, without racing. Otherwise a two-stage race runs:
+    - stage 1: TCP plus a TLS handshake with each node's own SNI;
+    - stage 2: a real request through every survivor in one probe core, with an explicit node-to-port map.
+
+    The best answer within a 250 ms grace window wins, not merely the first.
+  - **Stable.** The tunnel carries the winner and two standbys on other servers behind one balancer, watched by Xray's burst observatory. A dead primary is replaced in under a second, without restarting the VPN. Health checks run with the screen on and stretch from 1 to 5 minutes while the route is healthy. A failing route is benched by a circuit breaker. A new network gets its own route.
+  - **No leaks.** All DNS is answered inside the tunnel (FakeDNS, with DoH through the tunnel behind it). Servers are dialled by IP. In IPv4 mode the VPN comes up without IPv6, so Android blocks the family instead of letting it out. Plaintext VLESS and VLESS/Trojan with certificate checks off are refused. Self-signed Hysteria2 is tried only when nothing verified works.
+  - **"Connected" means connected.** It is shown only after a real request through the running tunnel succeeded.
+  - **The country is measured, not read from the node's name.** The exit is asked through the route itself, from two independent sources, and the proof expires after 24 h. The country list shows only countries with a proven exit, and marks those not yet checked on the current network.
+  - Memory is per network: the best route on MCI and on Irancell are kept apart, and changing the country forgets nothing.
+  - A hidden diagnostics page opens on a long press of the FLUX title.
+- **MAE can use FLUX.** FLUX's proven routes on the current network join MAE's foreign exits. They are read from FLUX's store only: FLUX never probes or starts a tunnel for MAE.
+
+### Changed
+- The Quick Settings tile reconnects FLUX through FLUX itself, with this network's route. After a network drop, the VPN service asks FLUX for the new network's route instead of replaying the old one.
+
 ## [1.2.38] — 2026-09-30
 
 ### Added
@@ -650,6 +706,48 @@ Optimized specifically for degraded/censored network conditions (server creation
 ## فارسی
 
 نسخه‌بندی این فایل مطابق `versionName` در [`app/build.gradle`](app/build.gradle) است. برای جزئیات کامل‌تر و به‌روزتر هر نسخه، داخل خود اپ به «درباره ما → لیست تغییرات» مراجعه کنید.
+
+### [1.2.41] — 2026-10-01
+
+**رفع‌شده:**
+- **FLUX: حالت IPv6 روی شبکه‌ای که IPv6 دارد، می‌گفت کار نمی‌کند.** بررسی کلادفلر آدرس‌های تصادفی و بی‌مقصد IPv6 را تست می‌کرد و کلادفلرِ IPv6 را قطع فرض می‌کرد. حالا از ۱۶ رنجی استفاده می‌کند که برنامه قبلاً در ایران سالم اندازه گرفته است.
+- **FLUX: سرورهایی که اسمشان مسموم می‌شود.** آدرس صفحهٔ فیلتر (از جمله `2001:4188:2:600::/64`) شناخته می‌شود و اسم سرور از طریق DoH دوباره resolve می‌شود.
+- **FLUX: پیام درست برای IPv6.** «این شبکه IPv6 ندارد» فقط وقتی نمایش داده می‌شود که واقعاً نداشته باشد. در غیر این صورت پیام این است: «هیچ سروری از طریق IPv6 جواب نداد».
+- **FLUX: عنوان FLUX دو بار نمایش داده می‌شد.**
+
+**تغییرکرده:**
+- **FLUX: کشور و نسخهٔ IP در حالت متصل هم قابل تغییرند** و اتصال به مسیر مناسب انتخاب جدید می‌رود.
+- **FLUX: کشورهای بیشتر.**
+  - کشورهایی که در اسم نودها آمده‌اند با برچسب «هنوز تأیید نشده» نمایش داده می‌شوند. FLUX فقط خروجیِ واقعاً اندازه‌گیری‌شده در آن کشور را قبول می‌کند.
+  - بعد از اتصال روی Wi-Fi، FLUX کشور خروجی حداکثر ۲۴ نود تست‌نشده را می‌سنجد، حداکثر هر ۶ ساعت یک بار برای هر شبکه، تا لیست کشورها پر شود.
+
+### [1.2.40] — 2026-10-01
+
+**رفع‌شده:**
+- **FLUX: «مسیر سالمی پیدا نشد» در حالی که مسیر پیدا شده بود.** وقتی فقط یک مسیر برنده بود، تنظیمات تونل بالانسری داشت که هستهٔ Xray بدون observatory اجرایش نمی‌کرد. حالا یک مسیر مستقیم استفاده می‌شود. اگر هسته باز هم تنظیمات کامل را نپذیرد، FLUX فوراً فقط با مسیر اصلی دوباره امتحان می‌کند.
+- **FLUX: یک نود خراب دیگر کل تست را از کار نمی‌اندازد.** این نسخه از Xray گزینهٔ `allowInsecure` را حذف کرده است. یک نود Hysteria2 با گواهی خودامضا باعث می‌شد هستهٔ تست اصلاً بالا نیاید و همهٔ نودهای آن دور از دست بروند. نودهای خودامضا حالا رد می‌شوند و نودهای خراب جدا کنار گذاشته می‌شوند.
+- **FLUX: دیگر بعد از شکست اجرای تونل ۱۵ ثانیه منتظر نمی‌ماند.**
+
+**تغییرکرده:**
+- **FLUX: تا سه دور تست، هر بار روی نودهای تازه.**
+- **FLUX: لاگ دقیق در logcat با تگ `FLUX`، بدون هیچ رمز یا UUID.** شامل منابع، وضعیت کلادفلر، نتیجه و علت هر نود، رتبه‌بندی، اجرای تونل و بررسی‌های سلامت.
+
+### [1.2.39] — 2026-10-01
+
+**افزوده‌شده:**
+- **موتور FLUX، موتوری مستقل.** فقط سه انتخاب: کشور (یا خودکار)، IPv4 / IPv6 / هردو، و دکمهٔ اتصال. پروتکل، سرور، edge کلادفلر، نسخهٔ IP، فرگمنت و مسیرهای پشتیبان را خود FLUX انتخاب می‌کند.
+  - **جایی که کلادفلر قطع است هم کار می‌کند.** FLUX روی هر شبکه در حدود ۱.۵ ثانیه می‌سنجد که کلادفلر در دسترس است یا نه. اگر نباشد، کانفیگ‌های کلادفلری اصلاً امتحان نمی‌شوند و فقط مسیرهای مستقیم امتحان می‌شوند: REALITY، Trojan/VLESS TLS و Hysteria2.
+  - **منابع جدا** از «کانفیگ رایگان» و «اتصال سریع»؛ لینک اشتراک شخصی هم قابل افزودن است.
+  - **اتصال سریع.** روی شبکهٔ آشنا، بدون تست مستقیم به مسیر قبلی وصل می‌شود. بار اول تست دومرحله‌ای انجام می‌دهد و بهترین مسیر انتخاب می‌شود، نه صرفاً اولین جواب.
+  - **پایدار.** یک مسیر اصلی و دو مسیر پشتیبان روی سرورهای دیگر. اگر مسیر اصلی بیفتد، در کمتر از یک ثانیه و بدون قطع VPN جایگزین می‌شود. با عوض شدن شبکه، مسیر مخصوص همان شبکه انتخاب می‌شود.
+  - **بدون نشتی.** تمام DNS داخل تونل است. در حالت IPv4، اندروید IPv6 را کامل می‌بندد. کانفیگ بدون رمزنگاری یا با بررسی گواهیِ خاموش رد می‌شود.
+  - **«متصل» یعنی واقعاً متصل:** فقط بعد از یک درخواست واقعی از داخل تونل نشان داده می‌شود.
+  - **کشور واقعاً اندازه‌گیری می‌شود**، از دو منبع مستقل و از داخل خود مسیر، نه از روی اسم سرور.
+  - صفحهٔ عیب‌یابی با نگه داشتن انگشت روی عنوان FLUX باز می‌شود.
+- **موتور تطبیقی (MAE) هم از مسیرهای اثبات‌شدهٔ FLUX** به‌عنوان خروجی خارجی استفاده می‌کند.
+
+**تغییرکرده:**
+- کاشی تنظیمات سریع، FLUX را با مسیر همین شبکه وصل می‌کند. بعد از قطع اینترنت هم سرویس VPN مسیر شبکهٔ جدید را از FLUX می‌گیرد.
 
 ### [1.2.38] — 2026-09-30
 

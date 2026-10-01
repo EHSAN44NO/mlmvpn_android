@@ -55,13 +55,19 @@ object LastEngine {
      */
     const val MAE_MARKER = "mae"
 
-    private fun isMae(nodeId: String?) = nodeId == MAE_MARKER
+    /**
+     * FLUX likewise, by name: its config is chosen per network from public nodes, and the tile
+     * asks FLUX for this network's route instead of replaying another network's.
+     */
+    const val FLUX_MARKER = "flux"
+
+    private fun isMae(nodeId: String?) = nodeId == MAE_MARKER || nodeId == FLUX_MARKER
 
     fun recordXray(context: Context, uri: String?, nodeId: String?) {
         if (uri.isNullOrBlank()) return
         prefs(context).edit()
             .putString(KEY_KIND, KIND_XRAY)
-            .putString(KEY_URI, if (isMae(nodeId)) MAE_MARKER else uri)
+            .putString(KEY_URI, if (isMae(nodeId)) nodeId else uri)
             .putString(KEY_NODE_ID, nodeId)
             .apply()
     }
@@ -82,8 +88,8 @@ object LastEngine {
                 ?.let { uri ->
                     val nodeId = p.getString(KEY_NODE_ID, null)
                     // A record from before the marker still holds a whole MAE config: dropped here.
-                    if (isMae(nodeId) && uri != MAE_MARKER) p.edit().putString(KEY_URI, MAE_MARKER).apply()
-                    Record.Xray(if (isMae(nodeId)) MAE_MARKER else uri, nodeId)
+                    if (isMae(nodeId) && uri != nodeId) p.edit().putString(KEY_URI, nodeId).apply()
+                    Record.Xray(if (isMae(nodeId)) nodeId!! else uri, nodeId)
                 }
 
             KIND_TUNNEL -> p.getString(KEY_TRANSPORT, null)

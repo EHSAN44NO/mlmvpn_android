@@ -265,6 +265,15 @@ object XrayJsonGenerator {
     }
 
     /**
+     * The QUIC refusal outbound for a config built elsewhere (FLUX's compiler), or null when the
+     * switch is off or the responder is not open. Pair it with [addQuicRefusalPolicyTo].
+     */
+    fun quicRefusalOutbound(): JSONObject? = quicRefusal()
+
+    /** The refusal outbound's policy level, written into a config built elsewhere. */
+    fun addQuicRefusalPolicyTo(json: JSONObject) = addQuicRefusalPolicy(json)
+
+    /**
      * A policy level that lets each refused flow go a few seconds after its answer.
      *
      * The default keeps an idle UDP flow for 300 s, and every refused attempt is a flow of its own: a
