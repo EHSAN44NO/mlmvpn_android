@@ -3181,7 +3181,7 @@ The per-app list in Advanced VPN is the other way round and is often the better 
     <string name="proxy_warn_turned_off">Proxy Mode is off. Reconnect for it to take effect.</string>
     <string name="crash_offer_sending">Sending…</string>
     <string name="crash_offer_sent">Report sent. Thank you — this is what makes the bug findable.</string>
-    <string name="crash_offer_send_failed">Could not reach the server. Choose an app to send it with instead.</string>
+    <string name="crash_offer_send_failed">The server could not be reached. The report will be sent automatically when it can be — or pick an app to send it with now.</string>
     <!-- Cloudflare verification diagnostics -->
     <string name="cloud_diag_wrong_prompt">Is this wrong? Send a report</string>
     <string name="cloud_diag_sending">Sending report…</string>
@@ -4961,4 +4961,10 @@ After that it builds the combinations itself, measures every one with a real req
     <string name="mae_app_enabled_footer">When off, this app goes the default way like other traffic; what was learned about it is kept.</string>
     <string name="mae_route_footer">Automatic lets MAE pick the best route and switch when it stops working.</string>
     <string name="mae_remove_app">Remove from MAE</string>
+    <string name="crash_notice_title">The app closed unexpectedly</string>
+    <string name="crash_notice_body">A report of what went wrong is being sent so it can be fixed: the error and your device model, nothing from your configs or your traffic. You can turn this off in Settings → Crash report.</string>
+    <string name="crash_notice_ok">OK</string>
+    <string name="crash_notice_off">Don\'t send reports</string>
+    <string name="settings_crash_auto">Send crash reports automatically</string>
+    <string name="settings_crash_auto_desc">When the app closes because of an error, the error and your device model are sent to the developers. Nothing from your configs or your traffic.</string>
 </resources>

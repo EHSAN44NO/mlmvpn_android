@@ -3173,7 +3173,7 @@
     <string name="proxy_warn_turned_off">حالت پروکسی خاموش شد. برای اعمال، دوباره وصل شوید.</string>
     <string name="crash_offer_sending">در حال ارسال…</string>
     <string name="crash_offer_sent">گزارش ارسال شد. ممنون — همین است که باگ را قابل پیدا کردن می‌کند.</string>
-    <string name="crash_offer_send_failed">سرور در دسترس نبود. یک برنامه برای فرستادنش انتخاب کنید.</string>
+    <string name="crash_offer_send_failed">سرور در دسترس نبود. گزارش هر وقت ممکن شد خودکار فرستاده می‌شود — یا همین حالا با یک برنامه بفرستید.</string>
     <!-- Cloudflare verification diagnostics -->
     <string name="cloud_diag_wrong_prompt">این پیام اشتباه است؟ ارسال گزارش</string>
     <string name="cloud_diag_sending">در حال ارسال گزارش…</string>
@@ -4953,4 +4953,10 @@
     <string name="mae_app_enabled_footer">وقتی خاموش باشد، این برنامه مثل بقیهٔ ترافیک از مسیر پیش‌فرض می‌رود و آنچه دربارهٔ آن یاد گرفته شده حفظ می‌شود.</string>
     <string name="mae_route_footer">«خودکار» یعنی موتور تطبیقی بهترین مسیر را خودش انتخاب می‌کند و اگر از کار افتاد عوضش می‌کند.</string>
     <string name="mae_remove_app">حذف از موتور تطبیقی</string>
+    <string name="crash_notice_title">برنامه ناگهانی بسته شد</string>
+    <string name="crash_notice_body">گزارشی از آنچه پیش آمد برای رفع مشکل فرستاده می‌شود: فقط خطا و مدل دستگاه شما، هیچ چیزی از کانفیگ‌ها یا ترافیک شما. می‌توانید این کار را در تنظیمات ← گزارش خطا خاموش کنید.</string>
+    <string name="crash_notice_ok">باشه</string>
+    <string name="crash_notice_off">گزارش نفرست</string>
+    <string name="settings_crash_auto">ارسال خودکار گزارش خطا</string>
+    <string name="settings_crash_auto_desc">وقتی برنامه به‌خاطر خطا بسته شود، خود خطا و مدل دستگاه برای سازنده فرستاده می‌شود؛ هیچ چیزی از کانفیگ‌ها یا ترافیک شما.</string>
 </resources>

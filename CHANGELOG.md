@@ -7,6 +7,12 @@ All notable changes to the MLM VPN Android app are documented here. Dates are in
 ## [Unreleased]
 
 ### Added
+- **Crash reports that reach the developers, every time.**
+  - Every kind of failure is reported. Java crashes send their stack and breadcrumbs. Native crashes send the signal, the library, the abort message and the readable part of the tombstone. ANRs send the thread dump. Each also carries the app version and the last thing the app was doing, which Android keeps with its record of the death.
+  - Reports are sent automatically from an outbox, by a system job scheduled before the crashing process dies. The job retries with backoff until the report is filed, across reboots, whether or not the app is opened again.
+  - Automatic sending is on unless the user turns it off (Settings → Crash report). The first time a report is sent, the user is told once. Reports carry the error, the breadcrumbs, the device model and the app version, and nothing from configs or traffic.
+  - Reports go to a crash collector of their own (`worker-src/crash`): a Worker with no database, on a different Cloudflare account from the Quick Connect pool, that files straight into the private GitHub repository. The pool's `/crash` remains the fallback. One issue per bug; at most one comment an hour, with that report in full; a closed issue reopens when a newer build hits it.
+  - `/health` on the collector, and a `github` block in the pool's `/crashes`, show whether GitHub filing works. An expired token used to fail without a trace.
 - **Home screen: folders, the iOS way.**
   - Hold an app over another until a plate grows behind it, then let go: the two become a folder in the target's place. It opens at once, named after what is in it (Connections, Configs, Tools, Games, Emergency) until it is renamed.
   - Hold an app over a folder: the folder swells, and letting go adds the app at the end. Keep holding and the folder springs open, so the app can go anywhere inside it.
@@ -23,6 +29,10 @@ All notable changes to the MLM VPN Android app are documented here. Dates are in
   - A tap on an icon is no longer lost to the board's own "tap empty space to finish" handler.
 
 ### Fixed
+- **Crash reports lost on the pool's busiest days.**
+  - Crash reports shared Quick Connect's 60 calls a day, so a heavy user's report was refused (429). They now have their own allowance.
+  - On days the pool's D1 ran out of reads, every report was refused, and a failed schema check put Cloudflare's error page in front of every route. Reports from installs the Worker has already verified are now accepted; anything else gets a 503 that the app retries later.
+  - With KV out of writes, every report of a known bug commented on its issue again. Each Worker isolate now keeps the dedup records in memory, in front of KV.
 - **Crash reports that arrived without the crash.**
   - The text a user shares (Settings → Crash report, and the fallback when sending fails) took the newest three files on the phone. An exit history was written on every launch, so those three were nearly always exit histories: the report said a crash had happened and left out its stack. Stacks now come first.
   - Exit histories are written only when a run ended badly (a crash, an ANR, a kill for resource use), once per exit and only by the main process. Swipes from Recents, updates and the tunnel process's designed exit are not recorded.
@@ -652,6 +662,12 @@ Optimized specifically for degraded/censored network conditions (server creation
 ### [منتشرنشده]
 
 **افزوده‌شده:**
+- **گزارش کرش که همیشه به سازنده می‌رسد.**
+  - هر نوع خطا گزارش می‌شود: کرش جاوا با متن خطا و مسیر کاربر، کرش بومی با سیگنال و کتابخانه و پیام خطا، و هنگ کردن (ANR) با وضعیت رشته‌ها. همهٔ این گزارش‌ها نسخهٔ برنامه و آخرین کاری را که برنامه انجام می‌داد هم دارند.
+  - گزارش خودکار و از صف ارسال فرستاده می‌شود؛ کاری سیستمی که پیش از بسته شدن برنامه زمان‌بندی می‌شود، تا ثبت شدن گزارش با فاصله‌های بیشتر دوباره تلاش می‌کند، حتی بعد از خاموش و روشن شدن گوشی و حتی اگر برنامه دوباره باز نشود.
+  - ارسال خودکار روشن است مگر کاربر خاموشش کند (تنظیمات ← گزارش خطا)، و بار اول یک بار به کاربر گفته می‌شود. در گزارش خطا و مسیر کاربر و مدل دستگاه و نسخه هست، نه هیچ چیزی از کانفیگ‌ها یا ترافیک.
+  - گزارش‌ها به یک ورکر مخصوص کرش می‌روند (`worker-src/crash`): بدون پایگاه داده، روی حسابی جدا از حساب استخر اتصال سریع، که مستقیم در مخزن خصوصی گیت‌هاب ثبت می‌کند. `/crash` استخر راه جایگزین است. برای هر باگ یک issue؛ حداکثر ساعتی یک نظر همراه کامل همان گزارش؛ و issue بسته‌ای که نسخهٔ جدیدتر دوباره به آن بخورد باز می‌شود.
+  - `/health` ورکر کرش و بخش `github` در `/crashes` استخر نشان می‌دهند ثبت در گیت‌هاب کار می‌کند یا نه؛ توکنِ منقضی قبلاً بی‌صدا خراب می‌شد.
 - **پوشه در صفحهٔ اصلی، مثل آیفون.**
   - یک برنامه را روی برنامهٔ دیگر نگه دارید تا قاب پوشه پشتش ظاهر شود، بعد رها کنید. هر دو در جای برنامهٔ دوم یک پوشه می‌شوند. پوشه همان لحظه باز می‌شود و تا وقتی نامش را عوض نکرده‌اید، نامش از محتوایش می‌آید: اتصال‌ها، کانفیگ‌ها، ابزارها، بازی یا اضطراری.
   - برنامه را روی یک پوشه نگه دارید تا پوشه کمی بزرگ شود. با رها کردن، برنامه به انتهای پوشه اضافه می‌شود. اگر بیشتر نگه دارید، پوشه باز می‌شود و برنامه را هر جای آن که بخواهید می‌گذارید.
@@ -668,6 +684,10 @@ Optimized specifically for degraded/censored network conditions (server creation
   - لمس یک آیکون دیگر با لمسِ «جای خالی برای پایان» اشتباه گرفته نمی‌شود.
 
 **رفع اشکال:**
+- **گزارش‌هایی که در شلوغ‌ترین روزهای استخر گم می‌شد.**
+  - گزارش کرش با ۶۰ درخواست روزانهٔ اتصال سریع شریک بود، پس گزارش کاربرِ پرمصرف رد می‌شد (۴۲۹). حالا سهم جدای خودش را دارد.
+  - روزهایی که D1 استخر به سقف خواندن روزانه می‌رسید، همهٔ گزارش‌ها رد می‌شد، و بررسی ساختار پایگاه داده صفحهٔ خطای کلادفلر را جلوی همهٔ مسیرها می‌آورد. حالا گزارشِ نصب‌هایی که ورکر قبلاً تأییدشان کرده پذیرفته می‌شود و بقیه ۵۰۳ می‌گیرند تا برنامه بعداً دوباره بفرستد.
+  - وقتی سقف نوشتن KV پر می‌شد، هر گزارشِ یک باگ شناخته‌شده دوباره زیر issue نظر می‌گذاشت. حالا هر نمونهٔ ورکر سوابق را در حافظه هم نگه می‌دارد.
 - **گزارش‌های کرشی که خودِ کرش در آن‌ها نبود.**
   - متنی که کاربر می‌فرستاد (تنظیمات ← گزارش کرش، یا وقتی ارسال خودکار نشد) سه فایل آخر گوشی بود. با هر بار باز شدن برنامه یک «تاریخچهٔ خروج» نوشته می‌شد، پس آن سه فایل تقریباً همیشه همین تاریخچه‌ها بودند: گزارش می‌گفت کرش شده، ولی متن خطا در آن نبود. حالا متن خطا اول می‌آید.
   - تاریخچهٔ خروج فقط وقتی نوشته می‌شود که اجرا بد تمام شده باشد (کرش، هنگ کردن، بسته شدن به‌خاطر مصرف منابع)، هر خروج یک بار و فقط در فرایند اصلی. بستن از فهرست برنامه‌های اخیر، آپدیت و خروج عادی فرایند تونل ثبت نمی‌شود.

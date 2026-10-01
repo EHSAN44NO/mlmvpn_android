@@ -721,6 +721,21 @@ fun SettingsScreen(
                     },
                 )
                 Separator()
+                // On unless turned off: a crash of any kind -- Java, native, an ANR -- is sent to the
+                // crash collector as it happens. Off, the launch after a crash asks instead.
+                var crashAutoSend by remember { mutableStateOf(com.mlmvpn.scanner.CrashReporter.autoSend()) }
+                SettingsToggle(
+                    title = stringResource(R.string.settings_crash_auto),
+                    subtitle = stringResource(R.string.settings_crash_auto_desc),
+                    checked = crashAutoSend,
+                    onCheckedChange = {
+                        crashAutoSend = it
+                        com.mlmvpn.scanner.CrashReporter.setAutoSend(it)
+                    },
+                    icon = Icons.Default.Warning,
+                    tint = Ios.Orange,
+                )
+                Separator()
                 // Last in the group, and last on purpose: the three rows above it are things a
                 // user comes to Settings to DO -- read the version back to us, install an update,
                 // send a crash. This one is reading. It is also the row the changelog hangs off,

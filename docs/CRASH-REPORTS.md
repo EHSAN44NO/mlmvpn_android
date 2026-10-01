@@ -1,147 +1,134 @@
 # Crash reports: where they go and how to read them
 
-> **Read this before touching `handleCrash`, `fileCrashOnGithub`, `CrashReporter` or
-> `MlmPoolClient.reportCrash`.** The pipeline crosses an app, a Worker, a D1 database, a KV
-> namespace and a second GitHub repository, and no one file explains it.
+> **Read this before touching `CrashReporter`, `crash/CrashClient`, `crash/CrashUploadJob`,
+> `worker-src/crash/worker.js`, or `handleCrash` in `mlmvpn_pool_worker.js`.** The pipeline
+> crosses the app, two Workers on two Cloudflare accounts, KV, D1 and a private GitHub repository,
+> and no one file explains it.
 
 ## The one-line answer
 
-A crash becomes a **GitHub issue in the private repo `mlmvpn/crashes`**, one issue per distinct
-crash signature. Read them there. The D1 dashboard at `/crashes` is the second copy and the one
-that counts distinct users.
+Every crash becomes a **GitHub issue in the private repo `mlmvpn/crashes`**, one issue per distinct
+crash signature. Read them there: <https://github.com/mlmvpn/crashes/issues>.
+
+## What gets reported
+
+| Failure | How it is caught | Report |
+| --- | --- | --- |
+| JVM crash (uncaught exception, any process) | `CrashReporter`'s uncaught-exception handler | the stack and the last 40 breadcrumbs |
+| Native crash (SIGSEGV, SIGABRT, fdsan, FORTIFY, Rust panic) | the next launch reads `ApplicationExitInfo` | signal, library, abort message, the readable part of the tombstone |
+| ANR | the next launch reads `ApplicationExitInfo` | the system's description and the thread dump |
+| JVM crash whose handler could not write; start-up timeout; killed for resource use | the next launch reads `ApplicationExitInfo` | what the system recorded |
+
+Native crashes and ANRs also carry the **process state summary**: `CrashReporter.note` hands the
+system a line with the app version and the last breadcrumb ("openTab home -> mae"), and the
+system returns it with the record of the death. Breadcrumbs are otherwise lost with the process.
 
 ## The whole path
 
 | # | Where | What happens |
 | --- | --- | --- |
-| 1 | `CrashReporter.install()` — [`CrashReporter.kt`](../app/src/main/java/com/mlmvpn/scanner/CrashReporter.kt) | An uncaught Kotlin/Java throwable is written to `files/crashlogs/` **and** logcat under tag `MLMCrash`. The file is the point: the process dies immediately after, so anything held in memory is gone. |
-| 2 | `AppScreen.kt` | On the **next launch**, on the **home screen only**, one dialog offers to send it. Offered once per crash — `markOffered` records it by timestamp, so a burst from one crash prompts once. |
-| 3 | `CrashReporter.upload()` → `MlmPoolClient.reportCrash()` | `POST /crash` to the pool Worker, signed with the install's enrolment secret. Resolves through DoH, because Iranian operators poison `*.workers.dev` and a crash reporter that cannot reach its own server is one in name only. |
-| 4 | `handleCrash()` — [`mlmvpn_pool_worker.js`](../app/src/main/assets/mlmvpn_pool_worker.js) | Recomputes the signature server-side (a hostile client must not be able to split one bug into many), writes one D1 row per `(install, signature)`, then files on GitHub via `ctx.waitUntil` so the phone is not made to wait. |
-| 5 | `fileCrashOnGithub()` | One issue per signature in `GH_REPO`, deduped through the `POOL` KV namespace under `crash:<sig>`, falling back to a label search when KV has no record. Repeat occurrences add a **comment**, at most one per signature per hour. |
+| 1 | `CrashReporter` | The report is written to `files/crashlogs/crash-*.txt` (redacted by `SecretRedactor`) and a marker is put in `crashlogs/outbox/`. A JVM crash schedules `CrashUploadJob` before the process dies. |
+| 2 | `CrashUploadJob` (JobScheduler) | Runs as soon as there is a network, whether or not the app is opened again. Sends up to five reports per run. Until every report is filed it asks to be rescheduled, with exponential backoff, across reboots. |
+| 3 | `CrashClient.send` | `POST /v1/crash` to the **crash collector** (`worker-src/crash`). If the collector does not file it, the report goes to the pool's `POST /crash` instead. Only a 2xx from one of them counts as delivered; anything else leaves the report in the outbox. Both resolve through DoH and `WorkerRoute`, because operators poison `*.workers.dev`. |
+| 4 | the collector | Checks the app key and the per-install, per-address and new-issue limits, then **files on GitHub before answering**. One issue per signature, at most one comment an hour with the report in full, and a closed issue is reopened when a newer build hits it. |
+| 5 | the pool, as fallback | Stores a D1 row and files on GitHub through the same token. See `handleCrash`. |
 
-## Reading the reports
+Both Workers compute the same signature (sha256 of the summary line: the exception and the first
+`com.mlmvpn` frame, or a native or ANR report's `error:` headline). A bug therefore stays one issue
+whichever route its reports took.
 
-**Primary — GitHub.** <https://github.com/mlmvpn/crashes/issues>
+## The user's choice
 
-That repository's README explains the issue format. In short: the title is the exception plus the
-first `com.mlmvpn` frame, `sig:xxxxxxxx` is the dedup key, and the full stack (with the last 40
-screens the user visited) is in the collapsed `stack` block.
+Sending is **automatic unless the user turns it off** (Settings → Crash report → "Send crash
+reports automatically"). The first time a report is sent automatically, the next launch shows a
+one-time notice saying so, with a button that turns it off.
 
-**Secondary — the D1 dashboard.** Ordered by **distinct installs**, which is the question worth
-asking first; GitHub cannot answer it.
+With it off, the old flow applies. The launch after a crash asks; Send queues the reports and
+delivers them. If that fails, the share sheet opens, and the job keeps trying.
 
-```
-https://mlm-pool-7f3a2c.ehsan2novenic2.workers.dev/crashes?k=<STATS_PASSWORD>&days=14
-https://mlm-pool-7f3a2c.ehsan2novenic2.workers.dev/crashes?k=<STATS_PASSWORD>&sig=<signature>
-```
+Turning it off also withdraws anything queued but not yet sent. The setting is a file
+(`crashlogs/.manual-send`), so every process of the app reads it the same way.
 
-`STATS_PASSWORD` is a literal near the top of `mlmvpn_pool_worker.js`.
+Reports contain the error, the breadcrumbs (screens and actions), the device model and the app
+version. They contain nothing from configs or traffic, and they pass through `SecretRedactor`
+before they are written, shared or sent.
 
 ## On the phone
 
-`files/crashlogs/` holds three kinds of file, pruned by kind:
-
 | File | Written by | Kept |
 | --- | --- | --- |
-| `crash-*.txt` | the uncaught-exception handler: the stack and the last 40 breadcrumbs | newest 20 |
-| `lastexit-*.txt` | the next launch (main process only), from `ApplicationExitInfo`, and only when a run ended badly: a crash of either kind, an ANR, a kill for resource use, or an unasked nonzero exit outside `:tun` | newest 5 |
+| `crash-*.txt` | every report above | newest 20 |
+| `lastexit-*.txt` | the main process at launch, only when a run ended badly | newest 5 |
 | `exit-*.txt` | the shutdown hook, on every deliberate exit | newest 5 |
+| `outbox/<name>` | a report waiting to be delivered (given up after 30 days) | until delivered |
+| `sent/<name>` | a report that was delivered, so it is never sent twice | as long as the report |
 
-What a user shares (Settings → Crash report, and the fallback when sending fails) is up to three
-stacks first, then the newest exit history and shutdown note. Sending from the launch dialog uploads
-every stack since the last offer (up to three), not only the newest.
+Settings → Crash report shares up to three reports, then the newest exit history and shutdown
+note. That is the manual route, for example to Telegram.
 
-This replaced a scheme that wrote an exit history on **every** launch and shared the newest three
-files of any kind. The text users sent then said that a JVM crash had happened and left out the
-stack, and pruning to thirty files of any kind deleted the stacks first.
-
-## What does NOT produce a report
-
-- **Native crashes** (SIGSEGV, SIGABRT, fdsan, FORTIFY). Nothing in-process can catch them. What
-  `CrashReporter` contributes there is a marker in logcat naming the last screen and action, so the
-  line before the `F/libc` abort is not guesswork. The backtrace exists only in logcat and the
-  tombstone.
-- **A user who dismisses the dialog.** Sending is deliberate and one-shot. There is no silent
-  upload, and adding one would be a different decision about the user's data, not a bug fix.
-- **A phone that never enrolled with the pool.** `MlmPoolClient.identity()` returns null and
-  `reportCrash` refuses before any network call.
-
-## The failure that keeps happening
-
-D1 on the free plan has an **account-wide daily row-read ceiling**. When it is exhausted:
-
-```
-D1_ERROR: Your account has exceeded D1's free tier daily row read limit
-```
-
-…and it takes down more than the dashboard. `authenticate()` reads the enrolment row on **every**
-request, so once reads are gone, `/crash` rejects incoming reports too, `/list` stops serving the
-Quick Connect pool, and the day's crashes are lost. The GitHub half was written to survive exactly
-this and cannot, because auth fails before `handleCrash` is entered.
-
-Two real fixes, in order of effort: **pay for D1** (the ceiling disappears), or **spend fewer row
-reads** (`/list` is the suspect — it runs per client, all day, at pool scale).
-
-What *has* been fixed: the D1 insert inside `handleCrash` is wrapped, so a write failure no longer
-throws out of the handler and skips the GitHub filing. The response carries `stored: true|false`
-so a hand-run test can tell the two stores apart.
-
-## Configuration
-
-| Secret on `mlm-pool-7f3a2c` | Value |
-| --- | --- |
-| `GH_REPO` | `mlmvpn/crashes` |
-| `GH_TOKEN` | Fine-grained PAT, **that repository only**, `Issues: Read and write`. Nothing else. |
+## Deploying the collector
 
 ```bash
-npx wrangler secret put GH_REPO  --name mlm-pool-7f3a2c
-npx wrangler secret put GH_TOKEN --name mlm-pool-7f3a2c
-npx wrangler secret list --name mlm-pool-7f3a2c
+node scripts/deploy-crash-worker.mjs <credentials.txt> <secrets.json>
 ```
 
-Without both, `fileCrashOnGithub` returns on its first line and says nothing. That silence is by
-design — a crash report must not fail because a bug tracker is misconfigured — which also means
-**a missing secret looks exactly like a working system from the app's side.** Check the secret list,
-not the app.
+- `credentials.txt`: line 1 the Cloudflare e-mail, line 2 the Global API Key. Use an account that
+  does **not** run the Quick Connect pool. Worker requests (100k a day on the free plan) and D1
+  reads are counted per account, and the pool's traffic is what used to take crash reporting down.
+  The game-crowd account is a good home.
+- `secrets.json`: created by the first run. Fill in `ghToken` (a fine-grained token with
+  **Issues: Read and write** on `mlmvpn/crashes` and nothing else) and run the script again. Keep
+  this file out of git.
 
-The repository must stay **private**: a stack trace names internal classes and the screens the user
-walked through to get there.
+Before uploading, the script checks that the token reaches the repository and that the repository
+is **private**. After uploading, it reads `/health`. If the address it got differs from
+`CrashClient.ENDPOINT`, it rewrites that constant; commit that change and build.
 
-## Deploying a change to the Worker
+## Checking it
 
-`mlmvpn_pool_worker.js` is hand-maintained (unlike `mlm_worker.js`, which is generated from
-`worker-src/studio/`). It is uploaded by `CloudManager.kt` — search for `mlmvpn_pool_worker.js` —
-so a change ships by redeploying the pool from the app, or with wrangler against
-`mlm-pool-7f3a2c`.
+- **Collector:** `https://<collector>/health?k=<adminToken from secrets.json>` shows whether the
+  GitHub secrets are set, the time of the last successful GitHub call, and the last GitHub error
+  with its status.
+- **Token expiry.** Fine-grained tokens expire. When one does, `/health` shows `401 Bad
+  credentials`, and reports wait on the phones (the collector answers 502). Replace the token in
+  `secrets.json`, redeploy, and the waiting reports arrive on the phones' next retries.
+- **Pool:** `https://mlm-pool-7f3a2c.ehsan2novenic2.workers.dev/crashes?k=<STATS_PASSWORD>&days=14`
+  lists the D1 copy by distinct installs. It also has a `github` block with the same health fields,
+  and a `d1_error` instead of failing when D1 is out of reads. `STATS_PASSWORD` is a literal near
+  the top of `mlmvpn_pool_worker.js`.
 
-## Testing it end to end
+## Tests
 
-1. Confirm the secrets are set (`wrangler secret list`).
-2. Confirm D1 is not read-limited: `curl '<worker>/crashes?k=<STATS_PASSWORD>&days=1'` must return
-   JSON, not `D1_ERROR`.
-3. **Server half, on its own.** Enrol a throwaway install and post a signed report. This proves
-   the Worker and the GitHub filing without touching a phone:
+```bash
+node scripts/test-crash-worker.mjs        # the collector, offline: GitHub and KV are mocked
+node scripts/test-pool-crash-worker.mjs   # the pool's crash path, offline, against real SQL
+node scripts/test-crash-report.js         # the deployed pool, for real: files a test issue
+```
 
-   ```bash
-   node scripts/test-crash-report.js
-   ```
+`CrashTextTest` covers the headlines and signatures: one bug must be one issue, and two bugs must
+not share one.
 
-   Signing is `HMAC-SHA256(secret, "<install-id>.<ts>.<body>")` as hex, in `X-Install` / `X-Ts` /
-   `X-Sig`. The timestamp window is five minutes.
+To exercise the app half on a debug build, plant a report and let the normal flow pick it up:
 
-4. **App half, on a debug build.** There is deliberately no crash button in the app, so plant the
-   artefact a crash would have left and let the normal flow pick it up:
+```bash
+adb shell "run-as com.mlmvpn.scanner sh -c 'cat > files/crashlogs/crash-test.txt'" < report.txt
+adb shell "run-as com.mlmvpn.scanner sh -c 'mkdir -p files/crashlogs/outbox && touch files/crashlogs/outbox/crash-test.txt'"
+adb shell cmd jobscheduler run -f com.mlmvpn.scanner 817758   # CrashUploadJob (0x0C7A5E)
+```
 
-   ```bash
-   adb shell "run-as com.mlmvpn.scanner sh -c 'cat > files/crashlogs/crash-test.txt'" < report.txt
-   adb shell "run-as com.mlmvpn.scanner rm -f shared_prefs/crash_diag.xml"   # re-arm the offer
-   adb shell am force-stop com.mlmvpn.scanner
-   adb shell monkey -p com.mlmvpn.scanner 1
-   ```
+## What the pool learned the hard way
 
-   The offer appears on the home screen on that launch. Tapping send runs exactly the path a real
-   crash runs — same file, same signature, same endpoint.
+These limits are why the collector exists.
 
-5. A new issue should appear in `mlmvpn/crashes` within seconds. A repeat of the same signature
-   adds a comment instead, and only after an hour has passed.
+- **D1's daily read ceiling.** It is account-wide on the free plan, and the pool reaches it. When it
+  does, `authenticate()` cannot read the enrolment row. The pool now verifies a crash report from
+  an install that the same isolate has already seen against the secret in memory. Anything else
+  gets a 503, and the app retries later. The schema check no longer throws Cloudflare's error page
+  for every route.
+- **The shared rate limit.** Crash reports used to share Quick Connect's 60 calls a day, so a heavy
+  user's crash got a 429. They now have their own 30 a day (`crash_day` and `crash_calls` in
+  `installs`).
+- **KV's daily write ceiling.** When KV was out of writes, every report of a known bug commented
+  again. Each isolate now keeps the dedup records in memory, in front of KV.
+- **Silent GitHub failures.** Filing ran after the response, so a bad token showed up nowhere. Its
+  health is now recorded and shown in `/crashes`.

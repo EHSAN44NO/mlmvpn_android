@@ -645,12 +645,49 @@ fun AppScreen() {
     var crashOffer by remember {
         mutableStateOf<Boolean>(com.mlmvpn.scanner.CrashReporter.unreportedCrash(context) != null)
     }
+    // With automatic sending on (the default) nothing is asked: the report left with the crash.
+    // The first time, the user is told so, once, and offered the switch right there.
+    var crashNotice by remember { mutableStateOf(com.mlmvpn.scanner.CrashReporter.noticeDue(context)) }
     // One at a time. Both of these fire on the same launch often enough -- a crash while Proxy
     // Mode is on is exactly the kind of session that produces both -- and stacked dialogs read
     // as a broken app rather than two pieces of information.
     var crashSending by remember { mutableStateOf(false) }
     val crashScope = rememberCoroutineScope()
-    if (crashOffer && !proxyWarn && activeTab == homeTab) {
+    if (crashNotice && !proxyWarn && activeTab == homeTab) {
+        AlertDialog(
+            onDismissRequest = {
+                com.mlmvpn.scanner.CrashReporter.markNoticeShown(context)
+                crashNotice = false
+            },
+            containerColor = surfaceColor,
+            icon = { Icon(Icons.Default.Warning, contentDescription = null, tint = TextMuted) },
+            title = {
+                Text(S(R.string.crash_notice_title), color = textColor, fontWeight = FontWeight.Bold)
+            },
+            text = { Text(S(R.string.crash_notice_body), color = mutedColor) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        com.mlmvpn.scanner.CrashReporter.markNoticeShown(context)
+                        crashNotice = false
+                    },
+                    colors = iosButtonColors(primaryColor),
+                    border = iosButtonBorder(primaryColor),
+                ) { Text(S(R.string.crash_notice_ok)) }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        com.mlmvpn.scanner.CrashReporter.setAutoSend(false)
+                        com.mlmvpn.scanner.CrashReporter.markNoticeShown(context)
+                        crashNotice = false
+                    },
+                ) { Text(S(R.string.crash_notice_off), color = mutedColor) }
+            },
+        )
+    }
+
+    if (crashOffer && !crashNotice && !proxyWarn && activeTab == homeTab) {
         AlertDialog(
             onDismissRequest = {
                 com.mlmvpn.scanner.CrashReporter.markOffered(context)

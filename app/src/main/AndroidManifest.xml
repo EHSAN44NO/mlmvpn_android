@@ -214,6 +214,15 @@
             android:exported="false"
             android:process=":tun" />
 
+        <!-- Delivers crash reports from the outbox (crashlogs/outbox) once there is a network,
+             retried with the scheduler's backoff. Scheduled by the crash handler just before the
+             process dies, so a report leaves whether or not the app is opened again. See
+             CrashReporter and docs/CRASH-REPORTS.md. -->
+        <service
+            android:name=".crash.CrashUploadJob"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+
         <!-- Quick Settings tile: one-tap toggle that connects to the fastest recent server. -->
         <service
             android:name=".VpnTileService"
