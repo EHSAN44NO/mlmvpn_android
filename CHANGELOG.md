@@ -23,6 +23,11 @@ All notable changes to the MLM VPN Android app are documented here. Dates are in
   - A tap on an icon is no longer lost to the board's own "tap empty space to finish" handler.
 
 ### Fixed
+- **Crash reports that arrived without the crash.**
+  - The text a user shares (Settings → Crash report, and the fallback when sending fails) took the newest three files on the phone. An exit history was written on every launch, so those three were nearly always exit histories: the report said a crash had happened and left out its stack. Stacks now come first.
+  - Exit histories are written only when a run ended badly (a crash, an ANR, a kill for resource use), once per exit and only by the main process. Swipes from Recents, updates and the tunnel process's designed exit are not recorded.
+  - Old files are pruned by kind, so crash stacks are no longer deleted to make room for notes. Settings counts only real reports.
+  - Sending uploads every crash since the last offer (up to three), not only the newest. An ANR or native-crash trace is capped and made readable.
 - **Battery: heavy drain while connected, worst with the adaptive engine (MAE).**
   - The VPN service's wake lock was meant to drop after five idle minutes. A connected phone is never idle, so the lock was renewed forever and the CPU never slept. It is now held only during a connect (30 s), and during a real transfer (16 KB/s or more) while the screen is off.
   - MAE: routine re-checks of networks it has already learned wait for the screen to come on; new networks are still learned at once. Its stats and live-check loops sleep while the screen is off, and the WARP keepalive is 25 s instead of 15 s.
@@ -663,6 +668,11 @@ Optimized specifically for degraded/censored network conditions (server creation
   - لمس یک آیکون دیگر با لمسِ «جای خالی برای پایان» اشتباه گرفته نمی‌شود.
 
 **رفع اشکال:**
+- **گزارش‌های کرشی که خودِ کرش در آن‌ها نبود.**
+  - متنی که کاربر می‌فرستاد (تنظیمات ← گزارش کرش، یا وقتی ارسال خودکار نشد) سه فایل آخر گوشی بود. با هر بار باز شدن برنامه یک «تاریخچهٔ خروج» نوشته می‌شد، پس آن سه فایل تقریباً همیشه همین تاریخچه‌ها بودند: گزارش می‌گفت کرش شده، ولی متن خطا در آن نبود. حالا متن خطا اول می‌آید.
+  - تاریخچهٔ خروج فقط وقتی نوشته می‌شود که اجرا بد تمام شده باشد (کرش، هنگ کردن، بسته شدن به‌خاطر مصرف منابع)، هر خروج یک بار و فقط در فرایند اصلی. بستن از فهرست برنامه‌های اخیر، آپدیت و خروج عادی فرایند تونل ثبت نمی‌شود.
+  - فایل‌های قدیمی بر اساس نوع پاک می‌شوند، پس متن کرش دیگر برای جا باز کردن پاک نمی‌شود. تنظیمات فقط گزارش‌های واقعی را می‌شمارد.
+  - ارسال، همهٔ کرش‌های بعد از آخرین پیشنهاد (تا سه مورد) را می‌فرستد، نه فقط آخری را. ردِ هنگ کردن یا کرش بومی کوتاه و خوانا می‌شود.
 - **مصرف زیاد باتری هنگام اتصال، به‌خصوص با موتور تطبیقی.**
   - قفل بیداری سرویس VPN قرار بود بعد از پنج دقیقه بیکاری آزاد شود. اما گوشیِ وصل هیچ‌وقت بیکار نیست، پس قفل مدام تمدید می‌شد و پردازنده هیچ‌وقت نمی‌خوابید. حالا فقط موقع اتصال (۳۰ ثانیه) گرفته می‌شود، و وقتی صفحه خاموش است فقط هنگام انتقال واقعی داده (۱۶ کیلوبایت در ثانیه یا بیشتر).
   - موتور تطبیقی بررسی‌های دوره‌ای شبکه‌های آشنا را تا روشن شدن صفحه عقب می‌اندازد؛ شبکهٔ تازه همچنان فوراً یاد گرفته می‌شود. حلقه‌های آمار و بررسی زنده با صفحهٔ خاموش می‌خوابند، و keepalive وارپ به‌جای ۱۵ ثانیه ۲۵ ثانیه است.

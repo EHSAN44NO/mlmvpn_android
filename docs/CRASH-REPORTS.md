@@ -38,6 +38,24 @@ https://mlm-pool-7f3a2c.ehsan2novenic2.workers.dev/crashes?k=<STATS_PASSWORD>&si
 
 `STATS_PASSWORD` is a literal near the top of `mlmvpn_pool_worker.js`.
 
+## On the phone
+
+`files/crashlogs/` holds three kinds of file, pruned by kind:
+
+| File | Written by | Kept |
+| --- | --- | --- |
+| `crash-*.txt` | the uncaught-exception handler: the stack and the last 40 breadcrumbs | newest 20 |
+| `lastexit-*.txt` | the next launch (main process only), from `ApplicationExitInfo`, and only when a run ended badly: a crash of either kind, an ANR, a kill for resource use, or an unasked nonzero exit outside `:tun` | newest 5 |
+| `exit-*.txt` | the shutdown hook, on every deliberate exit | newest 5 |
+
+What a user shares (Settings → Crash report, and the fallback when sending fails) is up to three
+stacks first, then the newest exit history and shutdown note. Sending from the launch dialog uploads
+every stack since the last offer (up to three), not only the newest.
+
+This replaced a scheme that wrote an exit history on **every** launch and shared the newest three
+files of any kind. The text users sent then said that a JVM crash had happened and left out the
+stack, and pruning to thirty files of any kind deleted the stacks first.
+
 ## What does NOT produce a report
 
 - **Native crashes** (SIGSEGV, SIGABRT, fdsan, FORTIFY). Nothing in-process can catch them. What

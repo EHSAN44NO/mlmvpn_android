@@ -700,7 +700,7 @@ fun SettingsScreen(
                 // why "the app crashes when I open V2Ray" could be reported by several users and
                 // still be unreproducible: the one artefact that would have answered it in a
                 // minute was sitting on their phones with no way out.
-                val reportCount = remember { com.mlmvpn.scanner.CrashReporter.reports().size }
+                val reportCount = remember { com.mlmvpn.scanner.CrashReporter.reportCount() }
                 SettingsRow(
                     title = stringResource(R.string.settings_crash_report),
                     subtitle = if (reportCount > 0) {
