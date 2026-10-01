@@ -162,7 +162,13 @@ class WarpRoute(
                 .put("peers", JSONArray().put(JSONObject()
                     .put("publicKey", peerPublicKey)
                     .put("endpoint", endpoint)
-                    .put("keepAlive", 15)
+                    // Keeps the carrier's UDP mapping open between an app's own packets. Each one
+                    // switches the phone's radio on, so this is a battery cost paid all session:
+                    // 25 s, WireGuard's own recommendation for a peer behind NAT and what the app's
+                    // standalone WARP engine has always used on the same networks (CfWarpEngine),
+                    // rather than 15 s -- with a radio that stays up ~10 s after each packet, 15 s
+                    // kept it on about two thirds of the time.
+                    .put("keepAlive", KEEPALIVE_S)
                     .put("allowedIPs", JSONArray().put("0.0.0.0/0").put("::/0")))))
             .put("streamSettings", JSONObject().put("finalmask", JSONObject().put("udp", JSONArray().put(
                 JSONObject().put("type", "noise").put("settings", JSONObject().put("noise", JSONArray()
@@ -173,6 +179,7 @@ class WarpRoute(
     companion object {
         const val ID = "warp"
         const val TAG = "mae-wgd"
+        const val KEEPALIVE_S = 25
         /** Tried in order, one per network until one carries traffic (MCI: all of these did). */
         val ENDPOINTS = listOf("162.159.192.1:2408", "162.159.192.1:500", "188.114.97.1:4500", "[2606:4700:d0::a29f:c001]:2408", "162.159.195.1:1701")
     }

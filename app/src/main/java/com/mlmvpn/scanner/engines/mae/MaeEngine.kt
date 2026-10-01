@@ -72,6 +72,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -117,6 +118,8 @@ object MaeEngine {
     private const val REFRESH_EVERY_MS = 15 * 60_000L
     /** The live check runs this often while the screen is on. */
     private const val CANARY_EVERY_MS = 5 * 60_000L
+    /** Xray's per-route counters are read this often while the screen is on. */
+    private const val STATS_EVERY_MS = 30_000L
     /** Unlocking after this long with the screen off runs the live check at once. */
     private const val WAKE_CHECK_AFTER_MS = 3 * 60_000L
     /** A heal by reconnecting costs every app a blip: at most this often. */
@@ -218,7 +221,11 @@ object MaeEngine {
             .map { (s, t, n) -> views(s, t, n) }
             .distinctUntilChanged()
             .flowOn(Dispatchers.Default)
-            .stateIn(scope, SharingStarted.Eagerly, emptyList())
+            // Only while the screen is looking. Eagerly, every change to the state -- dozens a
+            // second while an app is checked, in the background too -- rebuilt every row, reading
+            // the network and the SIM for each, for a list nobody was showing. The last rows are
+            // kept, so coming back shows them at once while they are brought up to date.
+            .stateIn(scope, SharingStarted.WhileSubscribed(5_000), emptyList())
     }
 
     private data class Job2(val serviceId: String, val incident: Boolean)
@@ -233,6 +240,12 @@ object MaeEngine {
     private val incidentPending = Collections.synchronizedSet(HashSet<String>())
     /** Apps whose check waits for the network to have internet. */
     private val deferred = Collections.synchronizedSet(HashSet<String>())
+    /** Apps whose routine re-check waits for the screen to come on; see [discover]. */
+    private val waitingForScreen = Collections.synchronizedSet(HashSet<String>())
+    /** When stale decisions were last swept for while connected ([REFRESH_EVERY_MS]). */
+    @Volatile private var lastRefreshAt = 0L
+    /** Elapsed realtime of the last passive stats read; 0 = none yet this session. */
+    @Volatile private var lastStatsAt = 0L
 
     private var worker: Job? = null
     private var statsJob: Job? = null
@@ -261,9 +274,11 @@ object MaeEngine {
         }
         adoptKnownApps()
         prune()
+        com.mlmvpn.scanner.utils.ScreenState.watch(app)
         worker = scope.launch { runQueue() }
         netFlow.value = currentNet()
         observeSession()
+        observeScreen()
         _ready.value = true
         // Whatever went stale while the app was closed is re-checked in the background, so the
         // list is current before the user taps Connect.
@@ -930,13 +945,17 @@ object MaeEngine {
     }
 
     private suspend fun runQueue() {
+        suspend fun next(): Job2 = select {
+            urgent.onReceive { it }
+            soon.onReceive { it }
+            queue.onReceive { it }
+        }
         while (scope.isActive) {
+            // The 60 s timeout only exists to put the probe core down once the queue is quiet.
+            // With no core running there is nothing to put down, so the loop sleeps until there
+            // is work instead of waking every minute for the life of the process.
             val job = urgent.tryReceive().getOrNull() ?: soon.tryReceive().getOrNull() ?: queue.tryReceive().getOrNull()
-                ?: withTimeoutOrNull(60_000) { select<Job2> {
-                    urgent.onReceive { it }
-                    soon.onReceive { it }
-                    queue.onReceive { it }
-                } }
+                ?: if (probeCore != null) withTimeoutOrNull(60_000) { next() } else next()
             if (job == null) { stopProbeCore(); continue }
             if (!job.incident) queued.remove(job.serviceId)
             runCatching { discover(job) }.onFailure {
@@ -1014,6 +1033,19 @@ object MaeEngine {
         val now = System.currentTimeMillis()
         val key = MaeState.sk(def.id, net)
         if (!job.incident && !PolicyEngine.isStale(state0.policies[key], now) && state0.diagnoses.containsKey(key)) return
+        // A routine re-check of a decision this network already has waits for the screen. It is a
+        // second Xray core, a few dozen connections and up to two megabytes of download per app,
+        // and it used to run every few hours per app around the clock -- in the pocket, all night,
+        // for decisions nobody was about to use. The app keeps its route meanwhile; the check runs
+        // the moment the screen comes on. An app this network has never seen is still learned at
+        // once, screen or not: it has no route of its own until then.
+        if (!job.incident && state0.diagnoses.containsKey(key) && !com.mlmvpn.scanner.utils.ScreenState.isOn(app)) {
+            waitingForScreen += def.id
+            // "Check all" marks every row as checking up front; the phone locked right after it
+            // must not leave them spinning until the screen comes back.
+            finish(job)
+            return
+        }
         // No internet here (a Wi-Fi login page, a dead minute): nothing is learned from that --
         // every route would "fail" and every app would be blocked. Checked again once it is back.
         if (!online()) {
@@ -1366,13 +1398,21 @@ object MaeEngine {
         registerScreen()
         refreshStale()
         statsJob?.cancel()
+        lastStatsAt = 0L
         statsJob = scope.launch {
             spikeLiveApi()
-            var lastRefresh = System.currentTimeMillis()
+            lastRefreshAt = System.currentTimeMillis()
             while (isActive && isConnected()) {
+                // Both jobs of this loop are for a phone in use. With the screen off it does not
+                // tick at all: it waits for the screen, and the re-check it may owe is made then
+                // (see [observeScreen]).
+                if (!com.mlmvpn.scanner.utils.ScreenState.isOn(app)) {
+                    com.mlmvpn.scanner.utils.ScreenState.on.first { it }
+                    continue
+                }
                 samplePassiveStats()
-                if (System.currentTimeMillis() - lastRefresh >= REFRESH_EVERY_MS) { refreshStale(); lastRefresh = System.currentTimeMillis() }
-                delay(30_000)
+                if (System.currentTimeMillis() - lastRefreshAt >= REFRESH_EVERY_MS) { refreshStale(); lastRefreshAt = System.currentTimeMillis() }
+                delay(STATS_EVERY_MS)
             }
         }
         healthJob?.cancel()
@@ -1382,6 +1422,13 @@ object MaeEngine {
             // ago, and a check of a tunnel still warming up moved apps that were fine.
             if (System.currentTimeMillis() - selfReconnectAt > 60_000) runCanary("connected")
             while (isActive && isConnected()) {
+                // The periodic check is for the screen being on; unlocking after a while runs its
+                // own (see [registerScreen]). With the screen off this waits instead of waking
+                // every five minutes to find it still off.
+                if (!screenOn()) {
+                    com.mlmvpn.scanner.utils.ScreenState.on.first { it }
+                    continue
+                }
                 delay(CANARY_EVERY_MS)
                 if (screenOn()) runCanary("periodic")
             }
@@ -1403,6 +1450,25 @@ object MaeEngine {
     }
 
     private fun screenOn(): Boolean = runCatching { (app.getSystemService(Context.POWER_SERVICE) as PowerManager).isInteractive }.getOrDefault(true)
+
+    /**
+     * The screen came on: the routine checks that waited for it run now, and so does the sweep for
+     * stale decisions if one fell due while it was off. Whether MAE is connected or not -- a check
+     * is about the network, and the list is what the user is about to look at.
+     */
+    private fun observeScreen() {
+        scope.launch {
+            com.mlmvpn.scanner.utils.ScreenState.on.collect { on ->
+                if (!on) return@collect
+                val ids = synchronized(waitingForScreen) { waitingForScreen.toList().also { waitingForScreen.clear() } }
+                ids.forEach { enqueue(it) }
+                if (isConnected() && System.currentTimeMillis() - lastRefreshAt >= REFRESH_EVERY_MS) {
+                    lastRefreshAt = System.currentTimeMillis()
+                    refreshStale()
+                }
+            }
+        }
+    }
 
     /**
      * The moment that matters most is the user coming back: unlocking after a while with the
@@ -1660,13 +1726,19 @@ object MaeEngine {
         val net = currentNet()
         val state = store.current
         val providers = providers(state, net)
-        val windowSecs = 30.0
+        // The window is what really passed: sampling stops while the screen is off, and the first
+        // read after it covers the whole gap. Spread over minutes the bytes say nothing about what
+        // a route can carry, so that read only resets the counters.
+        val now = android.os.SystemClock.elapsedRealtime()
+        val windowSecs = (now - lastStatsAt).coerceAtLeast(1L) / 1000.0
+        val meaningful = lastStatsAt != 0L && windowSecs <= STATS_EVERY_MS * 1.5 / 1000.0
+        lastStatsAt = now
         for (p in providers) {
             val bytes = p.families.map { p.tag(it) }.distinct().sumOf { tag ->
                 runCatching { ctl.queryStats(tag, "downlink") + ctl.queryStats(tag, "uplink") }.getOrDefault(0L)
             }
             if (bytes > 0) Log.i(TAG, "passive: ${p.id} moved $bytes bytes in ${windowSecs.toInt()} s")
-            if (bytes < 2_000_000) continue
+            if (!meaningful || bytes < 2_000_000) continue
             val bps = bytes / windowSecs
             store.update { s ->
                 var metrics = s.metrics

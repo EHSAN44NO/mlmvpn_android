@@ -104,8 +104,8 @@ fun GephSessionsScreen(onBack: () -> Unit, backLabel: String) {
     var logs by remember { mutableStateOf(GephEngine.logs()) }
     var fullLog by remember { mutableStateOf<List<String>?>(null) }
 
-    // Refresh while the page is open: the sessions change as the engine re-dials.
-    LaunchedEffect(Unit) {
+    // Refresh while the page is open and on screen: the sessions change as the engine re-dials.
+    com.mlmvpn.scanner.ui.LaunchedWhileVisible(Unit) {
         while (true) {
             withContext(Dispatchers.IO) {
                 GephEngine.sample(withConn = true)

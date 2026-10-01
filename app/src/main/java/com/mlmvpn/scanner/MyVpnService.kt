@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
 
@@ -118,6 +119,7 @@ class MyVpnService : VpnService() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        com.mlmvpn.scanner.utils.ScreenState.watch(this)
         registerNetworkWatchdog()
         // If the update check on app launch failed silently (GitHub filtered/unreachable before
         // any tunnel was up), retry it once real connectivity exists -- whichever engine got us
@@ -178,6 +180,10 @@ class MyVpnService : VpnService() {
     private fun triggerReconnect() {
         val intentToRestore = lastConnectIntent ?: return
         if (reconnectJob?.isActive == true) return
+        // The network usually comes back with the screen off. Without the CPU held for the
+        // teardown, the wait and the new connect, the phone can sleep halfway through and leave the
+        // tunnel down until something else wakes it.
+        acquireWakeLock(CONNECT_LOCK_MS)
         reconnectJob = serviceScope.launch {
             val stopIntent = Intent(this@MyVpnService, MyVpnService::class.java).apply {
                 action = "STOP"
@@ -277,7 +283,8 @@ class MyVpnService : VpnService() {
             // acquires would need an equal run of releases to actually let the CPU sleep --
             // i.e. the idle release would silently never take effect.
             wakeLock?.setReferenceCounted(false)
-            acquireWakeLock()
+            // For the connect only: the traffic monitor lets go as soon as the tunnel is up.
+            acquireWakeLock(CONNECT_LOCK_MS)
         } catch (e: Exception) {
             Log.e("MyVpnService", "Failed to acquire WakeLock", e)
         }
@@ -1143,21 +1150,56 @@ class MyVpnService : VpnService() {
         wakeLock = null
     }
 
-    // Battery: the tunnel used to hold an unbounded PARTIAL_WAKE_LOCK for the entire session,
-    // so the CPU could never enter deep sleep / Doze for as long as the VPN was connected --
-    // including all night with the phone idle in a pocket and not a byte moving. The lock is
-    // now held only while traffic is actually flowing, and dropped after IDLE_RELEASE_MS of
-    // silence; an incoming packet wakes the process through the tun fd regardless of the lock,
-    // and the traffic monitor re-acquires on the next tick that sees movement. The timeout on
-    // acquire() is a backstop so an abnormally-killed service can't strand the lock held.
-    private val WAKELOCK_TIMEOUT_MS = 10 * 60 * 1000L
-    private val IDLE_RELEASE_MS = 5 * 60 * 1000L
+    // Battery: when the CPU is kept awake.
+    //
+    // The tunnel first held an unbounded PARTIAL_WAKE_LOCK for the entire session. Then it held
+    // one "while traffic flows", dropped after five minutes without a single byte -- which a
+    // connected phone never has: every app's push connection, MAE's WARP keepalive and the
+    // system's own checks move a few hundred bytes every few seconds, so the lock was renewed
+    // forever and the CPU still never slept. With the CPU awake, every timer in the process --
+    // the cores' keepalives, every polling loop -- ran on schedule all night, and so did the radio
+    // they kept switching on. That was the battery report.
+    //
+    // A wake lock does nothing while the screen is on (the display already keeps the CPU up), and
+    // an incoming packet wakes the device through the network driver whether or not one is held.
+    // What it can still be for is a transfer in progress with the screen off, by an app that holds
+    // no lock of its own -- so that, and nothing else, is what keeps it: a sustained rate above
+    // [BUSY_BYTES_PER_SEC], held [BUSY_LINGER_MS] past the last busy sample. Keepalives and push
+    // traffic never come near it. Connecting holds it briefly too ([CONNECT_LOCK_MS]), so a connect
+    // started as the screen goes off finishes. Every acquire has a timeout, so a service that dies
+    // abnormally cannot strand the lock.
+    private val CONNECT_LOCK_MS = 30_000L
+    private val BUSY_LOCK_MS = 60_000L
+    private val BUSY_LINGER_MS = 30_000L
+    private val BUSY_BYTES_PER_SEC = 16 * 1024L
+    /** The live meter is on screen: one sample every two seconds, as it always was. */
+    private val SAMPLE_SCREEN_ON_MS = 2_000L
+    /** Nobody is looking: a sample every ten seconds is plenty for usage and for the lock. */
+    private val SAMPLE_SCREEN_OFF_MS = 10_000L
+    /** The session counters reach disk this often; the screen reads them from memory. */
+    private val SESSION_PERSIST_MS = 60_000L
 
-    private fun acquireWakeLock() {
+    /** Elapsed-realtime deadline of the current busy stretch; see [updateWakeLock]. */
+    private var busyUntil = 0L
+
+    private fun acquireWakeLock(timeoutMs: Long) {
         try {
-            wakeLock?.acquire(WAKELOCK_TIMEOUT_MS)
+            wakeLock?.acquire(timeoutMs)
         } catch (e: Exception) {
             Log.w("MyVpnService", "Could not acquire WakeLock", e)
+        }
+    }
+
+    /**
+     * One decision per traffic sample: hold the CPU only while the screen is off and a real
+     * transfer is running (see the note above [CONNECT_LOCK_MS]).
+     */
+    private fun updateWakeLock(screenOn: Boolean, bytes: Long, elapsedMs: Long, now: Long) {
+        if (bytes * 1000 / elapsedMs.coerceAtLeast(1) >= BUSY_BYTES_PER_SEC) busyUntil = now + BUSY_LINGER_MS
+        if (!screenOn && now < busyUntil) {
+            acquireWakeLock(BUSY_LOCK_MS)
+        } else if (wakeLock?.isHeld == true) {
+            releaseWakeLock()
         }
     }
 
@@ -1178,6 +1220,7 @@ class MyVpnService : VpnService() {
                 .putLong("session_rx", 0L)
                 .putLong("session_tx", 0L)
                 .apply()
+            com.mlmvpn.scanner.data.SessionTraffic.reset()
 
             // Don't start counting until the tunnel is actually up.
             //
@@ -1201,11 +1244,18 @@ class MyVpnService : VpnService() {
 
             var sessionRx = 0L
             var sessionTx = 0L
-            var lastTrafficAt = System.currentTimeMillis()
+            var lastSampleAt = android.os.SystemClock.elapsedRealtime()
+            var lastPersistAt = lastSampleAt
+            val screen = com.mlmvpn.scanner.utils.ScreenState
 
             try {
                 while (true) {
-                    kotlinx.coroutines.delay(2000)
+                    // Every two seconds while the meter can be seen, every ten while it cannot --
+                    // and at once when the screen comes back, so the meter is never stale there.
+                    val screenWasOn = screen.isOn(this@MyVpnService)
+                    kotlinx.coroutines.withTimeoutOrNull(if (screenWasOn) SAMPLE_SCREEN_ON_MS else SAMPLE_SCREEN_OFF_MS) {
+                        screen.on.first { it != screenWasOn }
+                    }
 
                     val currentRx = android.net.TrafficStats.getUidRxBytes(android.os.Process.myUid()).coerceAtLeast(0L)
                     val currentTx = android.net.TrafficStats.getUidTxBytes(android.os.Process.myUid()).coerceAtLeast(0L)
@@ -1224,30 +1274,32 @@ class MyVpnService : VpnService() {
                         txDelta = totalTxDelta / 2
                     }
 
-                    // Only touch storage when something actually moved. This loop runs every
-                    // 2s for the whole session, so the unconditional write it used to do was
-                    // ~43k pointless disk writes a day on an idle tunnel.
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    val elapsed = now - lastSampleAt
+                    lastSampleAt = now
+
+                    // Only touch anything when something actually moved. The live meter reads the
+                    // counters from memory; the preference file behind it is written once a minute
+                    // (it used to be on every sample -- a whole file to flash every two seconds,
+                    // all day), and the daily usage batches its own writes the same way.
                     if (rxDelta > 0L || txDelta > 0L) {
                         sessionRx += rxDelta
                         sessionTx += txDelta
-                        sessionPrefs.edit()
-                            .putLong("session_rx", sessionRx)
-                            .putLong("session_tx", sessionTx)
-                            .apply()
+                        com.mlmvpn.scanner.data.SessionTraffic.publish(sessionRx, sessionTx)
+                        if (now - lastPersistAt >= SESSION_PERSIST_MS) {
+                            lastPersistAt = now
+                            sessionPrefs.edit()
+                                .putLong("session_rx", sessionRx)
+                                .putLong("session_tx", sessionTx)
+                                .apply()
+                        }
 
                         val defaultPrefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(this@MyVpnService)
                         if (defaultPrefs.getBoolean("enable_usage_tracking", true)) {
                             trafficManager.addTraffic(rxDelta, txDelta)
                         }
-
-                        lastTrafficAt = System.currentTimeMillis()
-                        if (wakeLock?.isHeld != true) acquireWakeLock()
-                    } else if (wakeLock?.isHeld == true &&
-                        System.currentTimeMillis() - lastTrafficAt > IDLE_RELEASE_MS) {
-                        // Tunnel is up but nothing is using it -- let the device sleep.
-                        Log.d("MyVpnService", "Tunnel idle; releasing WakeLock so the CPU can sleep")
-                        releaseWakeLock()
                     }
+                    updateWakeLock(screen.on.value, rxDelta + txDelta, elapsed, now)
 
                     lastRx = currentRx
                     lastTx = currentTx
@@ -1273,6 +1325,8 @@ class MyVpnService : VpnService() {
                     
                     sessionRx += rxDelta
                     sessionTx += txDelta
+                    // Not published to the live meter: this runs after the session, sometimes after
+                    // the next one has already zeroed it, and the screen clears it on disconnect.
                     sessionPrefs.edit()
                         .putLong("session_rx", sessionRx)
                         .putLong("session_tx", sessionTx)
@@ -1281,6 +1335,8 @@ class MyVpnService : VpnService() {
                     if (defaultPrefs.getBoolean("enable_usage_tracking", true)) {
                         trafficManager.addTraffic(rxDelta, txDelta)
                     }
+                    // The session is over: whatever the daily usage was still holding goes to disk.
+                    trafficManager.flush()
                 }
             }
         }

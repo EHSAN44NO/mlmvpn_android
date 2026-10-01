@@ -25,6 +25,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
+import com.mlmvpn.scanner.ui.collectWhileVisible
 import com.mlmvpn.scanner.ui.settings.SettingsFooter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -226,7 +227,9 @@ private fun MaeContent(onBack: () -> Unit) {
     }
 
     val testing by MaeEngine.testingFlow.collectAsState()
-    val views by MaeEngine.viewsFlow.collectAsState()
+    // Collected only while this page is on screen: the rows are worked out by the engine for
+    // whoever is subscribed, and a parked tab or a backgrounded app used to keep that going.
+    val views by MaeEngine.viewsFlow.collectWhileVisible()
     val connected = ours && phase == MyVpnService.Phase.CONNECTED
     val connecting = ours && phase == MyVpnService.Phase.CONNECTING
     // Set on the tap, cleared when the tunnel's state moves: building the config takes a moment,

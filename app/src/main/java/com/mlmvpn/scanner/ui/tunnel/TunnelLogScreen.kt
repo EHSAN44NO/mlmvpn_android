@@ -62,7 +62,7 @@ fun TunnelLogScreen(onBack: () -> Unit) {
     var confirmClear by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
-    LaunchedEffect(Unit) {
+    com.mlmvpn.scanner.ui.LaunchedWhileVisible(Unit) {
         while (true) {
             val next = ConnectionLog.snapshot()
             if (next.size != lines.size) {

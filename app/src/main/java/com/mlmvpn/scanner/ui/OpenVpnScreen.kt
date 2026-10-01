@@ -295,7 +295,8 @@ private fun MainPage(
 private fun LiveGroup(connection: OpenVpnConnection, fa: Boolean) {
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
     var rates by remember { mutableStateOf(0L to 0L) }
-    LaunchedEffect(Unit) {
+    // Only while on screen; the rates are worked out from the counters, so pausing loses nothing.
+    com.mlmvpn.scanner.ui.LaunchedWhileVisible(Unit) {
         var lastRx = OpenVpnRuntime.connection.value.received
         var lastTx = OpenVpnRuntime.connection.value.sent
         var lastAt = System.currentTimeMillis()

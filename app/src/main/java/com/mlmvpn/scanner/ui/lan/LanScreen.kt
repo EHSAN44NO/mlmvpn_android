@@ -91,6 +91,7 @@ import com.mlmvpn.scanner.utils.NetworkSettings
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.activity.compose.BackHandler
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 // =================================================================================================
@@ -188,6 +189,11 @@ fun LanScreen(
     // human speed, and the interface walk behind `address` is the same one the connect path runs
     // once per connect. Polling is the right shape here -- there is no callback for "a laptop
     // opened a socket to our proxy".
+    //
+    // Not paused out of sight, unlike the other polled pages: this loop is also what keeps the
+    // relay and the setup server in step with the tunnel (below). Out of sight it only slows to
+    // every ten seconds, and it is back at two the moment the page is shown.
+    val onScreen = com.mlmvpn.scanner.ui.rememberOnScreen()
     LaunchedEffect(Unit) {
         while (true) {
             // Off the main thread: LanShare.status walks every network interface (a netlink
@@ -214,7 +220,10 @@ fun LanScreen(
                     LanClients.snapshot(LanSetupServer.seenClients())
                 },
             )
-            delay(2_000)
+            val wasOnScreen = onScreen.value
+            kotlinx.coroutines.withTimeoutOrNull(if (wasOnScreen) 2_000L else 10_000L) {
+                androidx.compose.runtime.snapshotFlow { onScreen.value }.first { it != wasOnScreen }
+            }
         }
     }
 
@@ -530,17 +539,23 @@ private fun LanStateCard(
  */
 @Composable
 private fun StateGlyph(tint: Color, pulsing: Boolean) {
-    val transition = rememberInfiniteTransition(label = "lan-pulse")
-    val alpha by transition.animateFloat(
-        initialValue = 1f,
-        targetValue = 0.45f,
-        animationSpec = infiniteRepeatable(tween(1400), RepeatMode.Reverse),
-        label = "lan-pulse-alpha",
-    )
+    // Composed only while it pulses, and only on screen: an infinite transition asks for every
+    // frame for as long as it exists, read or not -- parked in a hidden tab included.
+    val onScreen by com.mlmvpn.scanner.ui.rememberOnScreen()
+    val alpha = if (pulsing && onScreen) {
+        rememberInfiniteTransition(label = "lan-pulse").animateFloat(
+            initialValue = 1f,
+            targetValue = 0.45f,
+            animationSpec = infiniteRepeatable(tween(1400), RepeatMode.Reverse),
+            label = "lan-pulse-alpha",
+        ).value
+    } else {
+        1f
+    }
     Box(
         modifier = Modifier
             .size(44.dp)
-            .alpha(if (pulsing) alpha else 1f)
+            .alpha(alpha)
             .background(tint.copy(alpha = 0.18f), CircleShape),
         contentAlignment = Alignment.Center,
     ) {

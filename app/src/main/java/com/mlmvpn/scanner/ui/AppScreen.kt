@@ -185,17 +185,20 @@ fun AppScreen() {
         }
     }
 
-    val sessionPrefs = remember { context.getSharedPreferences("vpn_session_traffic", android.content.Context.MODE_PRIVATE) }
+    // The live meter, pushed from memory by whichever tunnel service is running. It used to be a
+    // preference-file read every second -- with the app in the background too, for as long as the
+    // tunnel kept the process alive. Now nothing runs unless the app is in front.
     LaunchedEffect(isRunning, showRealtimeTraffic) {
-        if (isRunning && showRealtimeTraffic) {
-            while(true) {
-                trafficDown = sessionPrefs.getLong("session_rx", 0L) / 1048576f
-                trafficUp = sessionPrefs.getLong("session_tx", 0L) / 1048576f
-                kotlinx.coroutines.delay(1000)
-            }
-        } else {
+        if (!(isRunning && showRealtimeTraffic)) {
             trafficDown = 0f
             trafficUp = 0f
+        }
+    }
+    LaunchedWhileVisible(isRunning, showRealtimeTraffic) {
+        if (!(isRunning && showRealtimeTraffic)) return@LaunchedWhileVisible
+        com.mlmvpn.scanner.data.SessionTraffic.totals.collect { t ->
+            trafficDown = t.rx / 1048576f
+            trafficUp = t.tx / 1048576f
         }
     }
 
@@ -288,31 +291,39 @@ fun AppScreen() {
                         // navigation bar now, like Settings and the transports, so the app chrome
                         // above it would be a second bar.
                         Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "nodes") 0.dp else 10000.dp)) {
-                            NodesTab(onBack = { goBack() })
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "nodes")) {
+                                NodesTab(onBack = { goBack() })
+                            }
                         }
                     }
                     if (visitedTabs.contains("cloud")) {
                         Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "cloud") 0.dp else 10000.dp)) {
-                            CloudTab(
-                                onBack = { goBack() },
-                                onOpenCloudflareResources = {
-                                    settingsRoute = com.mlmvpn.scanner.ui.settings.ROUTE_CF_RESOURCES
-                                    openTab("settings")
-                                },
-                                onNavigateToScanner = { openTab("scanner") },
-                                onOpenV2Ray = { openTab("nodes") },
-                                onOpenConfigStudio = { openTab("configstudio") },
-                            )
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "cloud")) {
+                                CloudTab(
+                                    onBack = { goBack() },
+                                    onOpenCloudflareResources = {
+                                        settingsRoute = com.mlmvpn.scanner.ui.settings.ROUTE_CF_RESOURCES
+                                        openTab("settings")
+                                    },
+                                    onNavigateToScanner = { openTab("scanner") },
+                                    onOpenV2Ray = { openTab("nodes") },
+                                    onOpenConfigStudio = { openTab("configstudio") },
+                                )
+                            }
                         }
                     }
                     if (visitedTabs.contains("scanner")) {
                         Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "scanner") 0.dp else 10000.dp)) {
-                            ScannerTab(onBack = { goBack() }, onOpenNodes = { openTab("nodes") })
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "scanner")) {
+                                ScannerTab(onBack = { goBack() }, onOpenNodes = { openTab("nodes") })
+                            }
                         }
                     }
                     if (visitedTabs.contains("aether")) {
                         Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "aether") 0.dp else 10000.dp).padding(top = contentTopInset, bottom = LocalSystemBottomPadding.current)) {
-                            com.mlmvpn.scanner.ui.aether.AetherScreen()
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "aether")) {
+                                com.mlmvpn.scanner.ui.aether.AetherScreen()
+                            }
                         }
                     }
                     // The five transports. One entry each rather than one shared entry with the
@@ -322,10 +333,12 @@ fun AppScreen() {
                     com.mlmvpn.scanner.ui.tunnel.Transport.entries.forEach { transport ->
                         if (visitedTabs.contains(transport.id)) {
                             Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == transport.id) 0.dp else 10000.dp)) {
-                                com.mlmvpn.scanner.ui.tunnel.TransportHost(
-                                    transport = transport,
-                                    onExit = { goBack() },
-                                )
+                                CompositionLocalProvider(LocalTabVisible provides (activeTab == transport.id)) {
+                                    com.mlmvpn.scanner.ui.tunnel.TransportHost(
+                                        transport = transport,
+                                        onExit = { goBack() },
+                                    )
+                                }
                             }
                         }
                     }
@@ -334,125 +347,157 @@ fun AppScreen() {
                     // Aether tab above replaces it.)
                     if (visitedTabs.contains("sublink")) {
                         Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "sublink") 0.dp else 10000.dp)) {
-                            com.mlmvpn.scanner.ui.sublink.SubLinkScreen(
-                                onBack = { goBack() },
-                                cloudManager = androidx.compose.runtime.remember { com.mlmvpn.scanner.data.CloudManager(context) },
-                                nodeManager = androidx.compose.runtime.remember { com.mlmvpn.scanner.data.NodeManager(context) },
-                                onNavigateToCloud = { switchTab("cloud") }
-                            )
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "sublink")) {
+                                com.mlmvpn.scanner.ui.sublink.SubLinkScreen(
+                                    onBack = { goBack() },
+                                    cloudManager = androidx.compose.runtime.remember { com.mlmvpn.scanner.data.CloudManager(context) },
+                                    nodeManager = androidx.compose.runtime.remember { com.mlmvpn.scanner.data.NodeManager(context) },
+                                    onNavigateToCloud = { switchTab("cloud") }
+                                )
+                            }
                         }
                     }
                     if (visitedTabs.contains("game")) {
                         Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "game") 0.dp else 10000.dp)) {
-                            com.mlmvpn.scanner.ui.game.GameBoosterHost(onBack = { goBack() }, onNavigateToCloud = { switchTab("cloud") })
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "game")) {
+                                com.mlmvpn.scanner.ui.game.GameBoosterHost(onBack = { goBack() }, onNavigateToCloud = { switchTab("cloud") })
+                            }
                         }
                     }
                     if (visitedTabs.contains("settings")) {
                         Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "settings") 0.dp else 10000.dp)) {
-                            com.mlmvpn.scanner.ui.settings.SettingsScreen(
-                                openRoute = settingsRoute,
-                                onRouteOpened = { settingsRoute = null },
-                                onDismiss = { goBack() },
-                                onOpenVpnSettings = { openTab("vpn_settings") },
-                                onOpenCloud = { openTab("cloud") },
-                                onOpenUsage = { openTab("usage") },
-                            )
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "settings")) {
+                                com.mlmvpn.scanner.ui.settings.SettingsScreen(
+                                    openRoute = settingsRoute,
+                                    onRouteOpened = { settingsRoute = null },
+                                    onDismiss = { goBack() },
+                                    onOpenVpnSettings = { openTab("vpn_settings") },
+                                    onOpenCloud = { openTab("cloud") },
+                                    onOpenUsage = { openTab("usage") },
+                                )
+                            }
                         }
                     }
                     if (visitedTabs.contains("vpn_settings")) {
                         Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "vpn_settings") 0.dp else 10000.dp)) {
-                            com.mlmvpn.scanner.ui.settings.VpnSettingsScreen(onDismiss = { goBack() })
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "vpn_settings")) {
+                                com.mlmvpn.scanner.ui.settings.VpnSettingsScreen(onDismiss = { goBack() })
+                            }
                         }
                     }
                     if (visitedTabs.contains("usage")) {
                         Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "usage") 0.dp else 10000.dp)) {
-                            com.mlmvpn.scanner.ui.settings.UsageScreen(onDismiss = { goBack() })
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "usage")) {
+                                com.mlmvpn.scanner.ui.settings.UsageScreen(onDismiss = { goBack() })
+                            }
                         }
                     }
                     if (visitedTabs.contains("store")) {
                         Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "store") 0.dp else 10000.dp)) {
-                            com.mlmvpn.scanner.ui.store.StoreScreen(onBack = { goBack() })
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "store")) {
+                                com.mlmvpn.scanner.ui.store.StoreScreen(onBack = { goBack() })
+                            }
                         }
                     }
                     if (visitedTabs.contains("tutorial")) {
                         Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "tutorial") 0.dp else 10000.dp).padding(top = contentTopInset, bottom = LocalSystemBottomPadding.current)) {
-                            HelpCenterScreen(onDismiss = { goBack() })
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "tutorial")) {
+                                HelpCenterScreen(onDismiss = { goBack() })
+                            }
                         }
                     }
                     if (visitedTabs.contains("fixed_ip")) {
                         Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "fixed_ip") 0.dp else 10000.dp)) {
-                            FixedIpScreen(onDismiss = { goBack() })
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "fixed_ip")) {
+                                FixedIpScreen(onDismiss = { goBack() })
+                            }
                         }
                     }
                     if (visitedTabs.contains("configstudio")) {
                         Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "configstudio") 0.dp else 10000.dp)) {
-                            com.mlmvpn.scanner.ui.configstudio.ConfigStudioHost(
-                                onExit = { goBack() },
-                                // Parked off to the side once visited; its back handling must stop
-                                // while another tab is the one on screen.
-                                visible = activeTab == "configstudio",
-                                // «ترکیب» arms a handoff and comes here rather than carrying a
-                                // scanner of its own. openTab, not switchTab: the operator is
-                                // going to press back afterwards and expects Config Studio.
-                                onOpenScanner = { openTab("scanner") },
-                            )
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "configstudio")) {
+                                com.mlmvpn.scanner.ui.configstudio.ConfigStudioHost(
+                                    onExit = { goBack() },
+                                    // Parked off to the side once visited; its back handling must stop
+                                    // while another tab is the one on screen.
+                                    visible = activeTab == "configstudio",
+                                    // «ترکیب» arms a handoff and comes here rather than carrying a
+                                    // scanner of its own. openTab, not switchTab: the operator is
+                                    // going to press back afterwards and expects Config Studio.
+                                    onOpenScanner = { openTab("scanner") },
+                                )
+                            }
                         }
                     }
                     if (visitedTabs.contains("github")) {
                         Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "github") 0.dp else 10000.dp)) {
-                            com.mlmvpn.scanner.ui.github.GithubTunnelScreen(
-                                onBack = { goBack() },
-                                onOpenScanner = { openTab("scanner") },
-                                onOpenCloud = { openTab("cloud") },
-                            )
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "github")) {
+                                com.mlmvpn.scanner.ui.github.GithubTunnelScreen(
+                                    onBack = { goBack() },
+                                    onOpenScanner = { openTab("scanner") },
+                                    onOpenCloud = { openTab("cloud") },
+                                )
+                            }
                         }
                     }
                     if (visitedTabs.contains("lan")) {
                         Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "lan") 0.dp else 10000.dp)) {
-                            com.mlmvpn.scanner.ui.lan.LanScreen(
-                                onBack = { goBack() },
-                                // switchTab, not openTab: a user sent away to bring a tunnel up
-                                // is done with this screen for now, and leaving it on the stack
-                                // would send them back here from the engine they just started.
-                                onConnectVpn = { switchTab(homeTab) },
-                                onOpenProxyMode = {
-                                    settingsRoute = com.mlmvpn.scanner.ui.settings.ROUTE_PROXY_MODE
-                                    openTab("settings")
-                                },
-                            )
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "lan")) {
+                                com.mlmvpn.scanner.ui.lan.LanScreen(
+                                    onBack = { goBack() },
+                                    // switchTab, not openTab: a user sent away to bring a tunnel up
+                                    // is done with this screen for now, and leaving it on the stack
+                                    // would send them back here from the engine they just started.
+                                    onConnectVpn = { switchTab(homeTab) },
+                                    onOpenProxyMode = {
+                                        settingsRoute = com.mlmvpn.scanner.ui.settings.ROUTE_PROXY_MODE
+                                        openTab("settings")
+                                    },
+                                )
+                            }
                         }
                     }
                     if (visitedTabs.contains("openvpn")) {
                         Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "openvpn") 0.dp else 10000.dp)) {
-                            OpenVpnScreen(onBack = { goBack() }, onStore = { openTab("store") },
-                                onIran = { activeModal = "iran" }, visible = activeTab == "openvpn")
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "openvpn")) {
+                                OpenVpnScreen(onBack = { goBack() }, onStore = { openTab("store") },
+                                    onIran = { activeModal = "iran" }, visible = activeTab == "openvpn")
+                            }
                         }
                     }
                     if (visitedTabs.contains("vpngate")) {
                         Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "vpngate") 0.dp else 10000.dp).padding(top = contentTopInset, bottom = LocalSystemBottomPadding.current)) {
-                            VpnGateTab(onDismiss = { goBack() }, onOpenCloud = { openTab("cloud") })
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "vpngate")) {
+                                VpnGateTab(onDismiss = { goBack() }, onOpenCloud = { openTab("cloud") })
+                            }
                         }
                     }
                     if (visitedTabs.contains("mae")) {
                         Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "mae") 0.dp else 10000.dp)) {
-                            com.mlmvpn.scanner.ui.mae.MaeScreen(onBack = { goBack() })
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "mae")) {
+                                com.mlmvpn.scanner.ui.mae.MaeScreen(onBack = { goBack() })
+                            }
                         }
                     }
                     if (visitedTabs.contains("quick")) {
                         Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "quick") 0.dp else 10000.dp)) {
-                            QuickConnectTab(onBack = { goBack() })
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "quick")) {
+                                QuickConnectTab(onBack = { goBack() })
+                            }
                         }
                     }
                     if (visitedTabs.contains("freeconfig")) {
                         Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "freeconfig") 0.dp else 10000.dp)) {
-                            FreeConfigTab(
-                                onBack = { goBack() },
-                                // switchTab, not openTab: after the handoff the user is done with
-                                // the importer, and leaving it on the back stack would send them
-                                // from the configs they just imported back to the screen that
-                                // imported them.
-                                onOpenNodes = { switchTab("nodes") },
-                            )
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "freeconfig")) {
+                                FreeConfigTab(
+                                    onBack = { goBack() },
+                                    // switchTab, not openTab: after the handoff the user is done with
+                                    // the importer, and leaving it on the back stack would send them
+                                    // from the configs they just imported back to the screen that
+                                    // imported them.
+                                    onOpenNodes = { switchTab("nodes") },
+                                )
+                            }
                         }
                     }
                 }

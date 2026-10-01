@@ -157,7 +157,7 @@ internal fun ColumnScope.WarpIdentitySection(transport: Transport, refresh: Any?
     var step by remember { mutableStateOf<String?>(null) }
     var bump by remember { mutableIntStateOf(0) }
     // A cheap file check, repeated: the identity is made mid-connect, before any stage changes.
-    androidx.compose.runtime.LaunchedEffect(Unit) {
+    com.mlmvpn.scanner.ui.LaunchedWhileVisible(Unit) {
         while (true) { kotlinx.coroutines.delay(2000); bump++ }
     }
     val id = remember(refresh, bump) { WarpIdRelay.identityState(context, transport.value) }

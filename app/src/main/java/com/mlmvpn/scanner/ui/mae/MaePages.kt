@@ -21,6 +21,7 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.LayoutDirection
 import com.mlmvpn.scanner.engines.mae.egress.MaeEgressDeployer
+import com.mlmvpn.scanner.ui.collectWhileVisible
 import com.mlmvpn.scanner.ui.settings.IosAlert
 import com.mlmvpn.scanner.ui.settings.IosAlertAction
 import com.mlmvpn.scanner.ui.settings.SettingsToggle
@@ -195,7 +196,7 @@ internal fun MaeManageScreen(onBack: () -> Unit, openPicker: Boolean = false) {
     val scope = rememberCoroutineScope()
     // The rows, as the main screen has them: worked out off the main thread and emitted only
     // when a row changes -- the raw state changes many times a second while apps are checked.
-    val views by MaeEngine.viewsFlow.collectAsState()
+    val views by MaeEngine.viewsFlow.collectWhileVisible()
     val worker by remember { MaeEngine.store.state.map { it.worker }.distinctUntilChanged() }.collectAsState(MaeEngine.store.current.worker)
     var site by rememberSaveable { mutableStateOf("") }
     var siteError by remember { mutableStateOf<String?>(null) }

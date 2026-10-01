@@ -256,6 +256,11 @@ class TunnelVpnService : VpnService(), TunnelEngine.CoreCallback, PsiphonTunnel.
     private var currentSpeedRx = 0L
     private var accountedTx = 0L
     private var accountedRx = 0L
+    /** The session totals last handed to the app's live meter, written to disk with the month. */
+    private var usageTx = 0L
+    private var usageRx = 0L
+    private var usageDirty = false
+    private val usage by lazy { com.mlmvpn.scanner.data.TrafficManager(this) }
     /**
      * Monthly totals held in memory, flushed to disk on a timer.
      *
@@ -889,6 +894,9 @@ class TunnelVpnService : VpnService(), TunnelEngine.CoreCallback, PsiphonTunnel.
          * the desktop), so the proof is repeated rather than trusted.
          */
         private const val CFWG_VERIFY_EVERY_S = 45L
+
+        /** With the screen off, only every this-many-th proof is made (see [startCfWarpMonitor]). */
+        private const val CFWG_VERIFY_SCREEN_OFF_EVERY = 4L
 
         /** Dead endpoints in a row that «وارپ» replaces on its own before the reconnect ladder takes over. */
         private const val CFWG_MAX_DEAD = 4
@@ -2026,6 +2034,9 @@ class TunnelVpnService : VpnService(), TunnelEngine.CoreCallback, PsiphonTunnel.
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // The traffic path stops talking to the screens while there is no screen; see
+        // [updateTrafficNotification].
+        com.mlmvpn.scanner.utils.ScreenState.watch(this)
         // A null intent is the system starting us, not the app: always-on VPN,
         // and a restart after the process was killed. There is no config in
         // hand on that path - the activity never ran - so the last one used is
@@ -2940,6 +2951,12 @@ class TunnelVpnService : VpnService(), TunnelEngine.CoreCallback, PsiphonTunnel.
                 updateTrafficNotification(tx.coerceAtLeast(0L), rx.coerceAtLeast(0L))
                 if (SystemClock.elapsedRealtime() - healthySince > 180_000) cfwarpDead = 0
                 if (tick % CFWG_VERIFY_EVERY_S != 0L) return@scheduleAtFixedRate
+                // The proof is a real request through the tunnel, and each one switches the radio
+                // on. With the screen off one in four is still made -- a dead endpoint is replaced
+                // within a few minutes, so messages keep arriving -- instead of one every 45 s.
+                if (!com.mlmvpn.scanner.utils.ScreenState.on.value &&
+                    (tick / CFWG_VERIFY_EVERY_S) % CFWG_VERIFY_SCREEN_OFF_EVERY != 0L
+                ) return@scheduleAtFixedRate
                 runOnWorker {
                     if (!cfwarpMode || stopRequested.get() || cfwarpRestarting.get()) return@runOnWorker
                     val ok = com.mlmvpn.core.warp.CfWarpEngine.verify(9_000)?.warpOn == true ||
@@ -4355,7 +4372,10 @@ class TunnelVpnService : VpnService(), TunnelEngine.CoreCallback, PsiphonTunnel.
         // that the chain can reuse later. Cheap: a single boolean check on the
         // common path.
         recordWorkingPlainTransport(rx)
-        sendTraffic(tx, rx, monthTx, monthRx)
+        // Only the screens read these, and with the screen off there is no screen to read them:
+        // it was a broadcast a second through the system server, all night, for nobody. The
+        // first one after the screen comes back is at most a second away.
+        if (com.mlmvpn.scanner.utils.ScreenState.on.value) sendTraffic(tx, rx, monthTx, monthRx)
 
         if (now - lastTrafficFlushMs >= TRAFFIC_FLUSH_MS) {
             flushMonthlyTraffic()
@@ -4388,36 +4408,56 @@ class TunnelVpnService : VpnService(), TunnelEngine.CoreCallback, PsiphonTunnel.
      * WARP-on-WARP, Psiphon or Tor was invisible to Settings > Usage and to the live meter in
      * the home header:
      *
-     *  - `vpn_session_traffic` is what the header's up/down readout polls. Written as absolute
-     *    session totals, which is what this service already has; the Xray side accumulates its
-     *    own because it samples per-UID counters rather than being handed totals.
+     *  - [com.mlmvpn.scanner.data.SessionTraffic] is what the header's up/down readout shows.
+     *    Absolute session totals, which is what this service already has; the Xray side
+     *    accumulates its own because it samples per-UID counters rather than being handed totals.
+     *    The `vpn_session_traffic` file behind it used to be rewritten here on every sample, moved
+     *    or not -- once a second for the whole session. It now goes to disk with the monthly
+     *    totals ([flushMonthlyTraffic]).
      *  - [com.mlmvpn.scanner.data.TrafficManager] keeps the per-day history behind Total Usage,
      *    and takes deltas. Gated on the same `enable_usage_tracking` preference the Xray path
      *    honours, so one switch still turns all accounting off.
      *
-     * Called from the throttled sample, so this runs at most once a second and only when bytes
-     * actually moved.
+     * Called from the throttled sample, so this runs at most once a second.
      */
     private fun publishToAppUsage(tx: Long, rx: Long, txDelta: Long, rxDelta: Long) {
-        getSharedPreferences(SESSION_TRAFFIC_PREFS, MODE_PRIVATE).edit()
-            .putLong("session_rx", rx)
-            .putLong("session_tx", tx)
-            .apply()
+        com.mlmvpn.scanner.data.SessionTraffic.publish(rx, tx)
+        if (tx != usageTx || rx != usageRx) {
+            usageTx = tx
+            usageRx = rx
+            usageDirty = true
+        }
         if (txDelta <= 0 && rxDelta <= 0) return
         val tracking = androidx.preference.PreferenceManager
             .getDefaultSharedPreferences(this)
             .getBoolean("enable_usage_tracking", true)
         if (tracking) {
-            com.mlmvpn.scanner.data.TrafficManager(this).addTraffic(rxDelta, txDelta)
+            usage.addTraffic(rxDelta, txDelta)
         }
     }
 
     /** Zero the header's readout so a new session does not open on the last one's figures. */
     private fun resetAppUsageSession() {
+        com.mlmvpn.scanner.data.SessionTraffic.reset()
+        usageTx = 0L
+        usageRx = 0L
+        usageDirty = false
         getSharedPreferences(SESSION_TRAFFIC_PREFS, MODE_PRIVATE).edit()
             .putLong("session_rx", 0L)
             .putLong("session_tx", 0L)
             .apply()
+    }
+
+    /** The session counters and the daily usage, which the traffic path holds in memory. */
+    private fun flushAppUsage() {
+        if (usageDirty) {
+            usageDirty = false
+            getSharedPreferences(SESSION_TRAFFIC_PREFS, MODE_PRIVATE).edit()
+                .putLong("session_rx", usageRx)
+                .putLong("session_tx", usageTx)
+                .apply()
+        }
+        usage.flush()
     }
 
     /**
@@ -4549,6 +4589,9 @@ class TunnelVpnService : VpnService(), TunnelEngine.CoreCallback, PsiphonTunnel.
      * teardown, so an ordinary disconnect always persists an exact figure.
      */
     private fun flushMonthlyTraffic() {
+        // Same cadence and the same teardown points, so the app's own usage figures are never
+        // lost on a path that persisted the month.
+        flushAppUsage()
         val month = monthKey ?: return
         getSharedPreferences(TRAFFIC_PREFS, MODE_PRIVATE).edit()
             .putString(TRAFFIC_MONTH, month)

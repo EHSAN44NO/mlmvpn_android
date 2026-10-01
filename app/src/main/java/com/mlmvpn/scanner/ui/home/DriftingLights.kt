@@ -113,14 +113,20 @@ fun DriftingLights(
     // Nothing has to be wrapped to keep the precision, which was the only reason to: the same
     // replay in Float, at a 24-hour session, puts the largest step at 28px and the clock's rate
     // 0.7% off ideal. It degrades by running imperceptibly fast, never by jumping.
+    //
+    // And only while it can be seen. The tick is a `delay` loop, which -- unlike a frame-driven
+    // animation -- does not stop when the app goes to the background or this page is parked out of
+    // sight: it went on writing a float fifteen times a second for as long as the tunnel kept the
+    // process alive. Paused, it picks up from where the drift stopped, so nothing jumps.
     val clock = remember { mutableFloatStateOf(0f) }
-    LaunchedEffect(Unit) {
+    com.mlmvpn.scanner.ui.LaunchedWhileVisible(Unit) {
         // Read off the wall clock rather than accumulated per tick, so a tick the dispatcher was
         // late for costs one longer step instead of permanently slowing the drift down.
+        val resumeAt = clock.floatValue
         val origin = System.nanoTime()
         while (true) {
             val elapsedMs = (System.nanoTime() - origin) / 1_000_000f
-            clock.floatValue = elapsedMs * (CYCLE / CYCLE_MS)
+            clock.floatValue = resumeAt + elapsedMs * (CYCLE / CYCLE_MS)
             delay(TICK_MS)
         }
     }

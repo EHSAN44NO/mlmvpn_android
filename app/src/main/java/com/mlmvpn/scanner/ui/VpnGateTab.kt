@@ -598,8 +598,11 @@ fun VpnGateTab(
             // after the SSL one is already up, so a value read once at connect time would
             // always say "off".
             var udpActive by remember { mutableStateOf(false) }
-            LaunchedEffect(isConnected) {
-                if (!isConnected) { udpActive = false; return@LaunchedEffect }
+            LaunchedEffect(isConnected) { if (!isConnected) udpActive = false }
+            // Only while this page is on screen: a hidden tab polling every 1.5 s kept the process
+            // busy for as long as the tunnel kept it alive.
+            com.mlmvpn.scanner.ui.LaunchedWhileVisible(isConnected) {
+                if (!isConnected) return@LaunchedWhileVisible
                 while (true) {
                     udpActive = SoftEtherEngine.isUdpAccelerationActive()
                     delay(1500)
@@ -691,7 +694,7 @@ private fun StatusLine(
 
     AnimatedVisibility(visible = isConnected && connectedSince > 0L) {
         var elapsed by remember { mutableStateOf(0L) }
-        LaunchedEffect(connectedSince) {
+        com.mlmvpn.scanner.ui.LaunchedWhileVisible(connectedSince) {
             while (true) {
                 elapsed = System.currentTimeMillis() - connectedSince
                 delay(1000)

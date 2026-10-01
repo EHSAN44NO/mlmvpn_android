@@ -55,9 +55,9 @@ fun UsageScreen(onDismiss: () -> Unit) {
     var monthly by remember { mutableStateOf(trafficManager.getMonthlyTraffic()) }
     var last7Days by remember { mutableStateOf(trafficManager.getTrafficForDays(7).reversed()) }
 
-    LaunchedEffect(Unit) {
+    com.mlmvpn.scanner.ui.LaunchedWhileVisible(Unit) {
         while (true) {
-            kotlinx.coroutines.delay(3000) // live update every 3s
+            kotlinx.coroutines.delay(3000) // live update every 3s, while the page is on screen
             today = trafficManager.getTodayTraffic()
             weekly = trafficManager.getWeeklyTraffic()
             monthly = trafficManager.getMonthlyTraffic()

@@ -137,7 +137,7 @@ fun GithubTunnelScreen(onBack: () -> Unit, onOpenScanner: () -> Unit, onOpenClou
 
     // The countdown is drawn from GitHub's clock, once a second.
     var now by remember { mutableLongStateOf(GtGithub.serverNow()) }
-    LaunchedEffect(Unit) {
+    com.mlmvpn.scanner.ui.LaunchedWhileVisible(Unit) {
         while (true) { now = GtGithub.serverNow(); kotlinx.coroutines.delay(1000) }
     }
 

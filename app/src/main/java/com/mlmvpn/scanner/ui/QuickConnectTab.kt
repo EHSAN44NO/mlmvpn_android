@@ -592,17 +592,30 @@ private fun ConnectOrb(state: QuickState, onClick: () -> Unit) {
     }
     val working = state == QuickState.SEARCHING || state == QuickState.CONNECTING
 
-    val transition = rememberInfiniteTransition(label = "orb")
-    val sweepAngle by transition.animateFloat(
-        initialValue = 0f, targetValue = 360f,
-        animationSpec = infiniteRepeatable(tween(1400, easing = LinearEasing)),
-        label = "sweep"
-    )
-    val breathe by transition.animateFloat(
-        initialValue = 0.97f, targetValue = 1.03f,
-        animationSpec = infiniteRepeatable(tween(2200, easing = FastOutSlowInEasing), RepeatMode.Reverse),
-        label = "breathe"
-    )
+    // Each motion exists only while it is shown, and only on screen. Both used to run in every
+    // state, all the time -- an infinite transition asks for every frame for as long as it is
+    // composed, read or not, and this tab stays composed (parked out of sight) once visited.
+    val onScreen by com.mlmvpn.scanner.ui.rememberOnScreen()
+    val sweep: androidx.compose.runtime.State<Float> =
+        if (onScreen && (working || state == QuickState.DISCONNECTING)) {
+            rememberInfiniteTransition(label = "orb").animateFloat(
+                initialValue = 0f, targetValue = 360f,
+                animationSpec = infiniteRepeatable(tween(1400, easing = LinearEasing)),
+                label = "sweep"
+            )
+        } else {
+            remember { mutableStateOf(0f) }
+        }
+    val sweepAngle by sweep
+    val breathe = if (onScreen && state == QuickState.IDLE) {
+        rememberInfiniteTransition(label = "orbBreathe").animateFloat(
+            initialValue = 0.97f, targetValue = 1.03f,
+            animationSpec = infiniteRepeatable(tween(2200, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+            label = "breathe"
+        ).value
+    } else {
+        1f
+    }
     val pressScale by animateFloatAsState(if (state == QuickState.IDLE) breathe else 1f, label = "scale")
 
     Box(

@@ -432,18 +432,25 @@ private fun AetherPowerButton(
         else -> Color(0xFFFDE293)
     }
     val working = state.running && state.stage != AetherStage.CONNECTED
-
-    val transition = rememberInfiniteTransition(label = "aetherPower")
-    val pulse by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(if (working) 900 else 2200, easing = FastOutSlowInEasing),
-            repeatMode = if (working) RepeatMode.Restart else RepeatMode.Reverse,
-        ),
-        label = "pulse",
-    )
     val active = state.running
+
+    // Composed only while the button is lit and on screen. Idle, the halo does not move, and an
+    // infinite transition asks for every frame for as long as it exists -- whether anything
+    // reads it or not, and in a tab parked out of sight as well.
+    val onScreen by com.mlmvpn.scanner.ui.rememberOnScreen()
+    val pulse = if (active && onScreen) {
+        rememberInfiniteTransition(label = "aetherPower").animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(if (working) 900 else 2200, easing = FastOutSlowInEasing),
+                repeatMode = if (working) RepeatMode.Restart else RepeatMode.Reverse,
+            ),
+            label = "pulse",
+        ).value
+    } else {
+        0f
+    }
     val haloScale = if (active) (if (working) 1f + pulse * 0.35f else 1.06f + pulse * 0.06f) else 1f
     val haloAlpha = if (active) (if (working) (1f - pulse) * 0.35f else 0.12f + pulse * 0.10f) else 0.06f
 
@@ -1062,11 +1069,14 @@ private fun LogCard(engine: AetherEngine) {
     // traffic, because the UI thread is what feeds the notification and state collectors.
     // Draining on an interval bounds that to a few frames per second no matter how loud
     // the engine gets.
-    LaunchedEffect(engine) {
+    // Only while on screen. Out of sight it would wake every flush interval for nothing; back
+    // on screen it starts again from the engine's own buffer, so no line is missed.
+    com.mlmvpn.scanner.ui.LaunchedWhileVisible(engine) {
         val pending = java.util.concurrent.ConcurrentLinkedQueue<String>()
         // Snapshot before subscribing. The other order would replay anything that arrived
         // between the two as a duplicate; this way such a line is simply missed, which is
         // the better failure for a scrolling diagnostic view.
+        lines.clear()
         lines.addAll(engine.logSnapshot().takeLast(MAX_UI_LINES))
         val collector = launch {
             // Plain collect, not collectLatest: every line matters here, and collectLatest
@@ -1144,13 +1154,20 @@ private fun StatusCard(state: AetherState, @Suppress("UNUSED_PARAMETER") protoco
     // and, past the point most successful scans have already resolved, an honest explanation
     // for why it might still be going.
     var scanElapsedSec by remember { mutableStateOf(0) }
+    // From a start stamp rather than by counting ticks, so the count survives the page going out
+    // of sight (when the ticking stops) and is right again the moment it is back.
+    var scanStartedAt by remember { mutableStateOf(0L) }
     LaunchedEffect(state.stage) {
         if (state.stage == AetherStage.SCAN) {
+            scanStartedAt = android.os.SystemClock.elapsedRealtime()
             scanElapsedSec = 0
-            while (true) {
-                kotlinx.coroutines.delay(1000)
-                scanElapsedSec++
-            }
+        }
+    }
+    com.mlmvpn.scanner.ui.LaunchedWhileVisible(state.stage) {
+        if (state.stage != AetherStage.SCAN) return@LaunchedWhileVisible
+        while (true) {
+            scanElapsedSec = ((android.os.SystemClock.elapsedRealtime() - scanStartedAt) / 1000).toInt()
+            kotlinx.coroutines.delay(1000)
         }
     }
     SettingsCard(title = S(R.string.status_2)) {

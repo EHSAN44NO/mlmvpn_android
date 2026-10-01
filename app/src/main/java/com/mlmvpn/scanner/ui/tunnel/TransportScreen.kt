@@ -719,7 +719,7 @@ private fun LiveStats(state: TunnelUiState, transport: Transport) {
     // Recomputed once a second while visible; the elapsed time is the only field that changes
     // without a broadcast, and it is the one people look at.
     var now by remember { androidx.compose.runtime.mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(state.connectedAt) {
+    com.mlmvpn.scanner.ui.LaunchedWhileVisible(state.connectedAt) {
         while (true) {
             now = System.currentTimeMillis()
             kotlinx.coroutines.delay(1000)

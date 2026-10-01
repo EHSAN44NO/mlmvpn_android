@@ -568,7 +568,10 @@ class AetherEngine private constructor(
         telemetryJob?.cancel()
         telemetryJob = scope.launch {
             while (true) {
-                kotlinx.coroutines.delay(2000)
+                // Every two seconds while someone could be reading the log; with the screen off,
+                // every thirty -- this probes the SOCKS port and writes a line each time, for the
+                // whole session. A stage change is still caught on the next pass either way.
+                kotlinx.coroutines.delay(if (com.mlmvpn.scanner.utils.ScreenState.on.value) 2000L else 30_000L)
                 val s = _state.value
                 if (!s.running && s.stage != AetherStage.STARTING) break
 
