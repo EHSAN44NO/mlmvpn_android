@@ -113,6 +113,8 @@ To exercise the app half on a debug build, plant a report and let the normal flo
 ```bash
 adb shell "run-as com.mlmvpn.scanner sh -c 'cat > files/crashlogs/crash-test.txt'" < report.txt
 adb shell "run-as com.mlmvpn.scanner sh -c 'mkdir -p files/crashlogs/outbox && touch files/crashlogs/outbox/crash-test.txt'"
+adb shell am force-stop com.mlmvpn.scanner && adb shell monkey -p com.mlmvpn.scanner -c android.intent.category.LAUNCHER 1  # a launch with a queued report schedules the job
+sleep 8
 adb shell cmd jobscheduler run -f com.mlmvpn.scanner 817758   # CrashUploadJob (0x0C7A5E)
 ```
 
