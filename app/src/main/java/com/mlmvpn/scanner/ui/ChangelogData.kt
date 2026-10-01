@@ -35,6 +35,21 @@ fun changelogVersions(isFa: Boolean): List<ChangelogVersion> =
         if (isFa) {
             listOf(
                 ChangelogVersion(
+                    "نسخه 1.2.41",
+                    listOf(
+                        ChangelogItem(
+                            "FLUX با IPv6",
+                            "حالت IPv6 روی شبکه‌هایی که IPv6 دارند حالا مسیر پیدا می‌کند. بررسی کلادفلر رنج‌های IPv6 درست را تست می‌کند، و اسم سرورهایی که فیلتر شده‌اند از طریق DoH پیدا می‌شود. پیام خطا هم دقیق‌تر شد.",
+                            Icons.Default.Public
+                        ),
+                        ChangelogItem(
+                            "کشورهای بیشتر، تغییر حین اتصال",
+                            "کشورهای بیشتری در لیست نمایش داده می‌شوند (تأییدنشده‌ها با برچسب) و FLUX روی Wi-Fi کم‌کم کشور واقعی نودها را می‌سنجد. کشور و نسخهٔ IP را حالا در حالت متصل هم می‌توانید عوض کنید.",
+                            Icons.Default.Bolt
+                        ),
+                    )
+                ),
+                ChangelogVersion(
                     "نسخه 1.2.40",
                     listOf(
                         ChangelogItem(
@@ -1707,6 +1722,21 @@ fun changelogVersions(isFa: Boolean): List<ChangelogVersion> =
             )
         } else {
             listOf(
+                ChangelogVersion(
+                    "Version 1.2.41",
+                    listOf(
+                        ChangelogItem(
+                            "FLUX over IPv6",
+                            "IPv6 mode now finds routes on networks that have IPv6. The Cloudflare check uses the right IPv6 ranges, and servers whose names are filtered are resolved through DoH. The error message is more precise too.",
+                            Icons.Default.Public
+                        ),
+                        ChangelogItem(
+                            "More countries, change while connected",
+                            "More countries are listed (unverified ones are marked), and on Wi-Fi FLUX gradually measures where nodes really exit. Country and IP version can now be changed while connected.",
+                            Icons.Default.Bolt
+                        ),
+                    )
+                ),
                 ChangelogVersion(
                     "Version 1.2.40",
                     listOf(

@@ -27,6 +27,8 @@ object FluxLearner {
     fun afterRace(
         s0: FluxState, net: String, now: Long, country: String?, mode: IpMode,
         tried: List<FluxCandidate>, out: FluxRacer.Outcome,
+        /** Off for a discovery race: it learns exits and health, but does not pick the routes in use. */
+        setBest: Boolean = true,
     ): FluxState {
         var s = FluxMemory.markSeen(s0, net, now)
         val byId = tried.associateBy { it.id }
@@ -50,7 +52,7 @@ object FluxLearner {
         s = learnEdges(s, net, tried, out)
         s = learnFragment(s, net, out)
 
-        if (out.ranked.isNotEmpty()) s = FluxMemory.setBest(s, net, country, mode, pickRoutes(out.ranked.map { it.first }))
+        if (setBest && out.ranked.isNotEmpty()) s = FluxMemory.setBest(s, net, country, mode, pickRoutes(out.ranked.map { it.first }))
         return s
     }
 

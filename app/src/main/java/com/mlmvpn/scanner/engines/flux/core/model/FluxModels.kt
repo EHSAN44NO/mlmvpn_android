@@ -111,6 +111,9 @@ class FluxNode(
         get() = proto != Proto.HY2 && transport.cdnFrontable && security != Security.REALITY &&
             (host.isNotEmpty() || sni.isNotEmpty() || Family.ofLiteral(server) == null)
 
+    /** The country the node's own name claims. A hint for ordering, never proof (see EgressVerifier). */
+    val countryHint: String? by lazy { com.mlmvpn.scanner.engines.flux.core.country.CountryHint.of(label) }
+
     /** Carries UDP end to end (QUIC, calls, games). A CDN-fronted transport does not. */
     val carriesUdp: Boolean get() = proto == Proto.HY2 || !transport.cdnFrontable
 
@@ -240,8 +243,10 @@ enum class FailureKind {
     NOTHING_WORKS,
     /** Routes work, but none exits in the chosen country. */
     NO_ROUTE_FOR_COUNTRY,
-    /** The chosen family does not work on this network. */
+    /** The chosen family does not exist on this network (no IPv6 address or route). */
     FAMILY_UNAVAILABLE,
+    /** The network has the family, but no server answered over it right now. */
+    NO_ROUTE_FOR_FAMILY,
     /** The device is offline. */
     OFFLINE,
     /** Android refused the VPN (permission withdrawn, another always-on VPN). */

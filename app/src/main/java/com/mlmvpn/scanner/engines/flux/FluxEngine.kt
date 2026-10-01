@@ -96,6 +96,13 @@ object FluxEngine {
         store = FluxStore(app.filesDir)
         sources = FluxSourceRepo(app)
         store.update { FluxMemory.prune(it, System.currentTimeMillis()) }
+        // Verdicts measured with the first IPv6 edge sampler (random addresses across whole /32s)
+        // could say "Cloudflare v6 cut" where it works: measured again once.
+        val fp = app.getSharedPreferences("flux_sources", Context.MODE_PRIVATE)
+        if (fp.getInt("verdict_gen", 0) < 2) {
+            store.update { s -> s.copy(nets = s.nets.mapValues { (_, n) -> n.copy(verdict = n.verdict.copy(at = 0L)) }) }
+            fp.edit().putInt("verdict_gen", 2).apply()
+        }
         watchNetwork()
         observeSession()
         initialized = true
@@ -129,15 +136,33 @@ object FluxEngine {
 
     fun setIpMode(mode: IpMode) { store.update { it.copy(prefs = it.prefs.copy(ipMode = mode)) } }
 
-    /** A country in the picker: proven somewhere, and whether it works on this network. */
-    data class CountryOption(val code: String, val availableHere: Boolean)
+    /**
+     * A country in the picker. [verified]: an exit there was measured. [availableHere]: one
+     * worked on this network in the last day. Neither: only node names claim it -- choosing it
+     * races those nodes first and accepts only an exit measured there.
+     */
+    data class CountryOption(val code: String, val verified: Boolean, val availableHere: Boolean)
 
     fun countries(): List<CountryOption> {
         val now = System.currentTimeMillis()
         val s = store.current
         val here = FluxMemory.countriesHere(s, FluxNet.current(app).key, now).toSet()
-        return FluxMemory.provenCountries(s, now).map { CountryOption(it, it in here) }
-            .sortedWith(compareByDescending<CountryOption> { it.availableHere }.thenBy { it.code })
+        val proven = FluxMemory.provenCountries(s, now).toSet()
+        val hinted = nodes().mapNotNull { it.countryHint }.groupingBy { it }.eachCount().filter { it.value >= 2 }.keys
+        return (proven + hinted).map { CountryOption(it, it in proven, it in here) }
+            .sortedWith(compareByDescending<CountryOption> { it.availableHere }.thenByDescending { it.verified }.thenBy { it.code })
+    }
+
+    /**
+     * The user changed the country or the IP version. While connected, FLUX moves to a route for
+     * the new choice (its known route here if there is one, else a race); otherwise nothing yet.
+     */
+    fun applyChoice(context: Context) {
+        init(context)
+        if (!wantConnected || !isOurs()) return
+        FluxLog.i("choice changed while connected (${prefs().country ?: "auto"}/${prefs().ipMode}); re-planning")
+        connectJob?.cancel(); watchJob?.cancel()
+        connectJob = scope.launch { runCatching { connect() }.onFailure { if (it !is kotlinx.coroutines.CancellationException) FluxLog.w("re-plan failed", it) } }
     }
 
     fun isOurs(): Boolean = MyVpnService.connectedNodeIdFlow.value == NODE_ID && MyVpnService.connectionPhaseFlow.value != MyVpnService.Phase.IDLE
@@ -460,7 +485,13 @@ object FluxEngine {
         }
         FluxLog.i("background: exit seen by ${obs.size}/3 echo services: " + obs.joinToString { "${it.source}=${it.countryCode}" })
         if (obs.isNotEmpty()) {
-            val id = EgressVerifier.combine(obs, System.currentTimeMillis())
+            var id = EgressVerifier.combine(obs, System.currentTimeMillis())
+            if (id.countryCode == null && obs.size >= 2) {
+                // The sources disagree (a device saw ip-api=DE, ipwho=US): a fourth breaks the tie.
+                val tie = withContext(Dispatchers.IO) { httpGet(port, EgressVerifier.IFCONFIG.url, 8 * 1024)?.let { EgressVerifier.parse(EgressVerifier.IFCONFIG.id, it) } }
+                FluxLog.i("background: sources disagree; ifconfig says ${tie?.countryCode ?: "nothing"}")
+                if (tie != null) id = EgressVerifier.combine(obs + tie, System.currentTimeMillis())
+            }
             store.update { FluxMemory.recordEgress(it, primary.egressKey, id) }
             val st = _ui.value
             if (st is FluxUiState.Connected && id.countryCode != null) _ui.value = st.copy(countryCode = id.countryCode)
@@ -481,11 +512,45 @@ object FluxEngine {
             FluxLog.i("background: throughput ${kbps?.let { "%.1f Mbps".format(it / 1000) } ?: "not measured"} ($bytes bytes)")
             if (kbps != null) store.update { FluxMemory.recordThroughput(it, here.key, primary.id, kbps) }
         }
+        // Countries: on Wi-Fi, now and then, measure where untried nodes exit, so the country list
+        // holds verified countries and a later country choice connects without a long search.
+        if (here.wifi) discoverCountries(here)
         // The verdict, if it is getting old, measured now while nobody waits on it.
         if (verdictFor(here.key).stale(System.currentTimeMillis())) {
             val v = FluxNet.measureVerdict(app, here, System.currentTimeMillis())
             store.update { s -> FluxMemory.setVerdict(s, here.key, mergeVerdict(s.nets[here.key]?.verdict, v)) }
         }
+    }
+
+    /**
+     * A small race over nodes whose exit is not known yet, spread across the countries their
+     * names claim -- for the exits only (it never changes the routes in use). Wi-Fi only, at most
+     * once in [DISCOVERY_EVERY_MS] per network, at most [DISCOVERY_MAX] candidates.
+     */
+    private suspend fun discoverCountries(here: FluxNet.Here) {
+        val prefs = app.getSharedPreferences("flux_sources", Context.MODE_PRIVATE)
+        val key = "disc_${here.key}"
+        val now = System.currentTimeMillis()
+        if (now - prefs.getLong(key, 0L) < DISCOVERY_EVERY_MS) return
+        prefs.edit().putLong(key, now).apply()
+        val p = prefs()
+        val s = store.current
+        val pool = FluxPlanner.candidates(input(here, null, IpMode.BOTH, nodes(), verdictFor(here.key), resolvedFor(here.key)).copy(budget = Int.MAX_VALUE))
+            .filter { s.egress[it.egressKey]?.valid(now) != true && it.fragment.code == "0" }
+            .distinctBy { it.node.id }
+        // Round-robin over the claimed countries, so one big country does not take every slot.
+        val byHint = pool.groupBy { it.node.countryHint ?: "?" }.values.map { it.toMutableList() }
+        val picked = ArrayList<FluxCandidate>()
+        while (picked.size < DISCOVERY_MAX && byHint.any { it.isNotEmpty() }) byHint.forEach { l -> if (l.isNotEmpty() && picked.size < DISCOVERY_MAX) picked += l.removeAt(0) }
+        if (picked.isEmpty()) return
+        FluxLog.i("discovery: measuring the exits of ${picked.size} untried nodes (claims: ${picked.groupingBy { it.node.countryHint ?: "?" }.eachCount()})")
+        val probe = FluxAndroidProbe(app, here.network, mobile = false)
+        val out = try {
+            FluxRacer(probe, FluxRacer.Config(reachConcurrency = 8, realBatch = DISCOVERY_MAX, graceMs = 4_000))
+                .race(picked, accept = { _, _ -> true }, score = { _, r -> -(r.rttMs ?: 9_999).toDouble() })
+        } finally { withContext(Dispatchers.IO) { probe.close() } }
+        store.update { FluxLearner.afterRace(it, here.key, System.currentTimeMillis(), null, p.ipMode, picked, out, setBest = false) }
+        FluxLog.i("discovery: ${out.ranked.size} answered; exits ${out.ranked.mapNotNull { it.second.egress?.countryCode }.groupingBy { it }.eachCount()}")
     }
 
     private suspend fun throughput(port: Int, bytes: Int): Double? = withContext(Dispatchers.IO) {
@@ -585,8 +650,8 @@ object FluxEngine {
         if (named.isEmpty()) return emptyMap()
         val gate = Semaphore(16)
         val out = java.util.concurrent.ConcurrentHashMap<String, Map<Family, String>>()
-        withTimeoutOrNull(3_000) {
-            named.map { n -> scope.async { gate.withPermit { FluxNet.resolve(here.network, n.server).takeIf { it.isNotEmpty() }?.let { out[n.id] = it } } } }.awaitAll()
+        withTimeoutOrNull(4_500) {
+            named.map { n -> scope.async { gate.withPermit { FluxNet.resolve(app, here.network, n.server).takeIf { it.isNotEmpty() }?.let { out[n.id] = it } } } }.awaitAll()
         }
         return out.toMap().also { resolvedCache = here.key to it }
     }
@@ -598,7 +663,9 @@ object FluxEngine {
             if (elsewhere.isNotEmpty() || FluxMemory.provenCountries(store.current, now).isNotEmpty())
                 return FluxUiState.Failed(FailureKind.NO_ROUTE_FOR_COUNTRY, elsewhere.take(3).joinToString(" · ").ifEmpty { null })
         }
-        if (p.ipMode == IpMode.V6) return FluxUiState.Failed(FailureKind.FAMILY_UNAVAILABLE)
+        // The network has IPv6, but no server answered over it: say that, not "your IPv6 is broken".
+        if (p.ipMode == IpMode.V6) return FluxUiState.Failed(
+            if (verdictFor(here.key).v6 == com.mlmvpn.scanner.engines.flux.core.model.Tri.NO) FailureKind.FAMILY_UNAVAILABLE else FailureKind.NO_ROUTE_FOR_FAMILY)
         return FluxUiState.Failed(FailureKind.NOTHING_WORKS)
     }
 
@@ -625,6 +692,8 @@ object FluxEngine {
     }
 
     private const val ROUNDS = 3
+    private const val DISCOVERY_EVERY_MS = 6 * 3600_000L
+    private const val DISCOVERY_MAX = 24
 
     /** FLUX's own probes on mobile data: at most this much a day. */
     private const val MOBILE_BUDGET_BYTES = 3_000_000L

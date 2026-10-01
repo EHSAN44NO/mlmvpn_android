@@ -32,7 +32,18 @@ object Cloudflare {
      * serve a Worker or a proxied site.
      */
     private val V4_EDGE_POOLS = listOf("104.16.0.0/13", "104.24.0.0/14", "172.64.0.0/13", "188.114.96.0/20", "162.158.0.0/15", "141.101.64.0/18", "108.162.192.0/18", "173.245.48.0/20")
-    private val V6_EDGE_POOLS = listOf("2606:4700::/32", "2a06:98c0::/29", "2803:f800::/32")
+    /**
+     * IPv6: the /48s that served Workers on a phone in Iran (the app's own measurement, kept in
+     * `data/CfFamily.kt` V6_PREFIXES: 48 of 54 random addresses answered). Any interface id inside
+     * one reaches the same edge. Random addresses across whole /32s, which this used before, are
+     * mostly unrouted -- they made a working Cloudflare-over-IPv6 look cut.
+     */
+    val V6_EDGE_PREFIXES = listOf(
+        "2606:4700:3030", "2606:4700:3031", "2606:4700:3032", "2606:4700:3033",
+        "2606:4700:3034", "2606:4700:3035", "2606:4700:3036", "2606:4700:3037",
+        "2606:4700:10", "2606:4700:20", "2606:4700:7", "2606:4700:4400",
+        "2803:f800:50", "2a06:98c1:3120", "2a06:98c1:3121", "2400:cb00:2049",
+    )
 
     private data class Cidr(val base: BigInteger, val bits: Int, val prefix: Int) {
         fun contains(a: BigInteger): Boolean = a.shiftRight(bits - prefix) == base.shiftRight(bits - prefix)
@@ -53,7 +64,15 @@ object Cloudflare {
      * yet. Spread across pools so one blocked /16 cannot sink the whole sample.
      */
     fun sampleEdges(family: Family, count: Int, random: Random = Random.Default): List<String> {
-        val pools = (if (family == Family.V4) V4_EDGE_POOLS else V6_EDGE_POOLS).map(::cidr)
+        if (family == Family.V6) {
+            val start = random.nextInt(V6_EDGE_PREFIXES.size)
+            return (0 until count).map { i ->
+                val p = V6_EDGE_PREFIXES[(start + i) % V6_EDGE_PREFIXES.size]
+                val groups = 8 - p.split(':').size
+                compressV6(p + ":" + (0 until groups).joinToString(":") { Integer.toHexString(1 + random.nextInt(0xfffe)) })
+            }.distinct()
+        }
+        val pools = V4_EDGE_POOLS.map(::cidr)
         val out = LinkedHashSet<String>()
         var guard = 0
         while (out.size < count && guard++ < count * 20) {

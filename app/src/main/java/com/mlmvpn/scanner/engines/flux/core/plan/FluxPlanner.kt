@@ -146,10 +146,14 @@ object FluxPlanner {
             !(inp.country != null && e != null && e.valid(inp.now) && e.countryCode != null && !e.countryCode.equals(inp.country, true))
         }
         fun countryMatch(c: FluxCandidate) = inp.country != null && EgressVerifier.accepts(inp.state.egress[c.egressKey], inp.country, inp.now)
+        // What the node's name claims: only an ordering hint among the unproven, never proof.
+        fun hinted(c: FluxCandidate) = inp.country != null && c.node.countryHint.equals(inp.country, true)
         val (known, unknown) = usable.partition { FluxMemory.metrics(inp.state, inp.net, it.id)?.lastOkAt?.let { t -> t > 0 } == true }
         val knownSorted = known.sortedWith(compareByDescending<FluxCandidate> { countryMatch(it) }
+            .thenByDescending { hinted(it) }
             .thenByDescending { FluxScorer.score(it, FluxMemory.metrics(inp.state, inp.net, it.id), null, inp.now) })
         val unknownSorted = unknown.shuffled(inp.random).sortedWith(compareByDescending<FluxCandidate> { countryMatch(it) }
+            .thenByDescending { hinted(it) }
             .thenBy { if (it.edge == null) 0 else 1 }
             .thenBy { it.fragment != FragmentProfile.OFF })
         val merged = ArrayList<FluxCandidate>(usable.size)
@@ -159,8 +163,12 @@ object FluxPlanner {
             repeat(3) { if (k < knownSorted.size) merged += knownSorted[k++] }
             if (u < unknownSorted.size) merged += unknownSorted[u++]
         }
+        // A chosen country: proven matches, then name hints, ahead of everything else (a stable
+        // sort, so the known/unknown mix holds inside each group).
+        val ordered = if (inp.country == null) merged
+            else merged.sortedWith(compareByDescending<FluxCandidate> { countryMatch(it) }.thenByDescending { hinted(it) })
         val perNode = HashMap<String, Int>()
-        return merged.filter { c -> (perNode.merge(c.node.id, 1, Int::plus) ?: 0) <= PER_NODE }
+        return ordered.filter { c -> (perNode.merge(c.node.id, 1, Int::plus) ?: 0) <= PER_NODE }
     }
 
     private fun originFor(node: FluxNode, f: Family, inp: Input): String? {

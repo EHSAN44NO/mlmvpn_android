@@ -4987,7 +4987,9 @@ After that it builds the combinations itself, measures every one with a real req
     <string name="flux_fail_nothing">No working route was found on this network right now. Try again in a few minutes.</string>
     <string name="flux_fail_country">No working route for this country on this network right now.</string>
     <string name="flux_fail_country_try">Available: %1$s</string>
-    <string name="flux_fail_family">This IP version does not work on this network. Try IPv4 or Both.</string>
+    <string name="flux_fail_family">This network has no IPv6. Use IPv4 or Both.</string>
+    <string name="flux_fail_family_route">No server answered over IPv6 on this network right now. “Both” connects over IPv4 meanwhile.</string>
+    <string name="flux_country_unverified">Not verified yet — FLUX checks the real exit when you connect</string>
     <string name="flux_fail_vpn">Android did not allow the VPN to start.</string>
     <string name="flux_diag_title">FLUX diagnostics</string>
     <string name="flux_diag_subs">Your subscriptions</string>

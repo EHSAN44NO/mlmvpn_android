@@ -4,6 +4,21 @@ All notable changes to the MLM VPN Android app are documented here. Dates are in
 
 فارسی این فایل در ادامه (پایین همین صفحه) آمده است.
 
+## [1.2.41] — 2026-10-01
+
+### Fixed
+- **FLUX: IPv6 mode said IPv6 did not work, on a network where it does.** The Cloudflare check sampled random addresses across whole IPv6 /32s, most of them unrouted, so it judged Cloudflare-over-IPv6 cut and left every CDN-fronted node out. It now uses the 16 /48 prefixes the app measured serving from Iran (`CfFamily.V6_PREFIXES`). Verdicts taken with the old sampler are measured again once.
+- **FLUX: servers whose names Iran's resolver poisons.** Such names resolve to the block page, which over IPv6 is `2001:4188:2:600::/64`. These answers are now recognised, and the name is resolved through DoH by IP instead, which also brings in the IPv6 addresses an IPv6 race needs.
+- **FLUX: an honest IPv6 message.** "This network has no IPv6" is shown only when it has none. Otherwise the message is "no server answered over IPv6 right now".
+- **FLUX: "FLUX" was shown twice on its page.**
+
+### Changed
+- **FLUX: country and IP version can be changed while connected.** The tunnel moves to a route for the new choice.
+- **FLUX: more countries in the list.**
+  - Countries claimed by node names are listed and marked "not verified yet". Choosing one races those nodes first, and FLUX still accepts only an exit measured in that country.
+  - After a Wi-Fi connect, FLUX measures where up to 24 untried nodes exit, at most once in 6 h per network, so verified countries accumulate.
+  - When the country sources disagree, a fourth one (ifconfig.co) breaks the tie.
+
 ## [1.2.40] — 2026-10-01
 
 ### Fixed
@@ -691,6 +706,20 @@ Optimized specifically for degraded/censored network conditions (server creation
 ## فارسی
 
 نسخه‌بندی این فایل مطابق `versionName` در [`app/build.gradle`](app/build.gradle) است. برای جزئیات کامل‌تر و به‌روزتر هر نسخه، داخل خود اپ به «درباره ما → لیست تغییرات» مراجعه کنید.
+
+### [1.2.41] — 2026-10-01
+
+**رفع‌شده:**
+- **FLUX: حالت IPv6 روی شبکه‌ای که IPv6 دارد، می‌گفت کار نمی‌کند.** بررسی کلادفلر آدرس‌های تصادفی و بی‌مقصد IPv6 را تست می‌کرد و کلادفلرِ IPv6 را قطع فرض می‌کرد. حالا از ۱۶ رنجی استفاده می‌کند که برنامه قبلاً در ایران سالم اندازه گرفته است.
+- **FLUX: سرورهایی که اسمشان مسموم می‌شود.** آدرس صفحهٔ فیلتر (از جمله `2001:4188:2:600::/64`) شناخته می‌شود و اسم سرور از طریق DoH دوباره resolve می‌شود.
+- **FLUX: پیام درست برای IPv6.** «این شبکه IPv6 ندارد» فقط وقتی نمایش داده می‌شود که واقعاً نداشته باشد. در غیر این صورت پیام این است: «هیچ سروری از طریق IPv6 جواب نداد».
+- **FLUX: عنوان FLUX دو بار نمایش داده می‌شد.**
+
+**تغییرکرده:**
+- **FLUX: کشور و نسخهٔ IP در حالت متصل هم قابل تغییرند** و اتصال به مسیر مناسب انتخاب جدید می‌رود.
+- **FLUX: کشورهای بیشتر.**
+  - کشورهایی که در اسم نودها آمده‌اند با برچسب «هنوز تأیید نشده» نمایش داده می‌شوند. FLUX فقط خروجیِ واقعاً اندازه‌گیری‌شده در آن کشور را قبول می‌کند.
+  - بعد از اتصال روی Wi-Fi، FLUX کشور خروجی حداکثر ۲۴ نود تست‌نشده را می‌سنجد، حداکثر هر ۶ ساعت یک بار برای هر شبکه، تا لیست کشورها پر شود.
 
 ### [1.2.40] — 2026-10-01
 

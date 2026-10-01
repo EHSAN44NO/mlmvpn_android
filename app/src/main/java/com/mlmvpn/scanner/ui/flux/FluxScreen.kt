@@ -125,7 +125,8 @@ private fun FluxMain(onBack: () -> Unit, onCountry: () -> Unit, onDiagnostics: (
         if (prep != null) launcher.launch(prep) else FluxEngine.connectAsync(context)
     }
 
-    IosScreen(title = stringResource(R.string.flux_title_short), onBack = onBack, backLabel = stringResource(R.string.home)) {
+    // No bar title: the big one below is the page's only "FLUX" (and the developer's door).
+    IosScreen(onBack = onBack, backLabel = stringResource(R.string.home)) {
         Spacer(Modifier.height(12.dp))
         // The title is also the developer's door: a long press opens diagnostics.
         Text(
@@ -140,11 +141,14 @@ private fun FluxMain(onBack: () -> Unit, onCountry: () -> Unit, onDiagnostics: (
                 title = stringResource(R.string.flux_country),
                 icon = Icons.Default.Public, tint = Ios.Blue,
                 value = prefs.country?.let { countryLabel(it) } ?: stringResource(R.string.flux_country_auto),
-                onClick = if (connected || searching) null else onCountry,
+                // Open while connected too: a new country moves the tunnel to a route for it.
+                onClick = onCountry,
             )
         }
         SettingsSectionHeader(stringResource(R.string.flux_ip))
-        IpSelector(prefs.ipMode, enabled = !connected && !searching) { FluxEngine.setIpMode(it) }
+        IpSelector(prefs.ipMode, enabled = true) { m ->
+            if (m != prefs.ipMode) { FluxEngine.setIpMode(m); FluxEngine.applyChoice(context) }
+        }
 
         Spacer(Modifier.height(30.dp))
         ConnectButton(connected, searching) {
@@ -178,6 +182,7 @@ private fun statusText(ui: FluxUiState, connected: Boolean, searching: Boolean):
         FailureKind.NO_ROUTE_FOR_COUNTRY -> stringResource(R.string.flux_fail_country) +
             (ui.suggestion?.let { s -> "\n" + stringResource(R.string.flux_fail_country_try, s.split(" · ").joinToString(" · ") { countryLabel(it) }) } ?: "")
         FailureKind.FAMILY_UNAVAILABLE -> stringResource(R.string.flux_fail_family)
+        FailureKind.NO_ROUTE_FOR_FAMILY -> stringResource(R.string.flux_fail_family_route)
         FailureKind.VPN_REFUSED -> stringResource(R.string.flux_fail_vpn)
     }
     else -> stringResource(R.string.flux_status_idle)
@@ -235,17 +240,25 @@ private fun ConnectButton(connected: Boolean, busy: Boolean, onClick: () -> Unit
 
 @Composable
 private fun CountryPicker(onBack: () -> Unit) {
+    val context = LocalContext.current
     val countries = remember { FluxEngine.countries() }
     val current = FluxEngine.prefs().country
     val here = stringResource(R.string.flux_country_here)
     val unchecked = stringResource(R.string.flux_country_unchecked)
+    val unverified = stringResource(R.string.flux_country_unverified)
     val options = listOf(IosOption("", stringResource(R.string.flux_country_auto))) +
-        countries.map { IosOption(it.code, "${flag(it.code)}  ${countryLabel(it.code)}", if (it.availableHere) here else unchecked) }
+        countries.map { c ->
+            IosOption(c.code, "${flag(c.code)}  ${countryLabel(c.code)}",
+                when { c.availableHere -> here; c.verified -> unchecked; else -> unverified })
+        }
     IosPickerScreen(
         title = stringResource(R.string.flux_country),
         options = options,
         selectedKey = current ?: "",
-        onSelect = { FluxEngine.setCountry(it.ifEmpty { null }) },
+        onSelect = { key ->
+            val cc = key.ifEmpty { null }
+            if (cc != current) { FluxEngine.setCountry(cc); FluxEngine.applyChoice(context) }
+        },
         onBack = onBack,
         backLabel = stringResource(R.string.flux_title_short),
         footer = stringResource(R.string.flux_country_footer),

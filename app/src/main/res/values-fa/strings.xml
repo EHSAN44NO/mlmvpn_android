@@ -4979,7 +4979,9 @@
     <string name="flux_fail_nothing">در حال حاضر هیچ مسیر سالمی روی این شبکه پیدا نشد. چند دقیقه دیگر دوباره تلاش کنید.</string>
     <string name="flux_fail_country">در حال حاضر برای این کشور روی این شبکه مسیر سالمی پیدا نشد.</string>
     <string name="flux_fail_country_try">در دسترس: %1$s</string>
-    <string name="flux_fail_family">این نسخه IP روی این شبکه کار نمی‌کند. IPv4 یا «هردو» را امتحان کنید.</string>
+    <string name="flux_fail_family">این شبکه IPv6 ندارد. IPv4 یا «هردو» را انتخاب کنید.</string>
+    <string name="flux_fail_family_route">در حال حاضر هیچ سروری روی این شبکه از طریق IPv6 جواب نداد. با «هردو» از طریق IPv4 وصل شوید.</string>
+    <string name="flux_country_unverified">هنوز تأیید نشده؛ هنگام اتصال، FLUX کشور خروجی واقعی را بررسی می‌کند</string>
     <string name="flux_fail_vpn">اندروید اجازه راه‌اندازی VPN را نداد.</string>
     <string name="flux_diag_title">عیب‌یابی FLUX</string>
     <string name="flux_diag_subs">اشتراک‌های شما</string>

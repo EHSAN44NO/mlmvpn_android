@@ -9,6 +9,7 @@ import com.mlmvpn.scanner.engines.flux.core.model.Family
 import com.mlmvpn.scanner.engines.flux.core.model.NetVerdict
 import com.mlmvpn.scanner.engines.flux.core.model.Tri
 import com.mlmvpn.scanner.engines.flux.core.net.Cloudflare
+import com.mlmvpn.scanner.engines.flux.core.net.Poison
 import com.mlmvpn.scanner.engines.game.booster.memory.NetworkKey
 import com.mlmvpn.scanner.engines.game.booster.session.GameNetwork
 import kotlinx.coroutines.Dispatchers
@@ -70,20 +71,31 @@ object FluxNet {
         }
     }
 
-    /** Name -> literal per family, through the network's own resolver. Poisoned answers are dropped. */
-    suspend fun resolve(network: Network?, host: String): Map<Family, String> = withContext(Dispatchers.IO) {
-        val addrs = runCatching { (network?.getAllByName(host) ?: InetAddress.getAllByName(host)).toList() }.getOrDefault(emptyList())
-            .filterNot { poisoned(it) }
-        buildMap {
-            addrs.firstOrNull { it is Inet4Address }?.hostAddress?.let { put(Family.V4, it) }
-            addrs.firstOrNull { it is Inet6Address }?.hostAddress?.substringBefore('%')?.let { put(Family.V6, it) }
+    /**
+     * Name -> literal per family. The network's own resolver first; where it answers nothing usable
+     * (no answer, or a poisoned one -- the block page, a private address), DoH by IP on the
+     * underlying network ([NetProber.dohResolve], 8.8.8.8 first: the one measured reachable on MCI).
+     */
+    suspend fun resolve(context: Context, network: Network?, host: String): Map<Family, String> = withContext(Dispatchers.IO) {
+        val sys = runCatching { (network?.getAllByName(host) ?: InetAddress.getAllByName(host)).toList() }.getOrDefault(emptyList())
+            .mapNotNull { it.hostAddress?.substringBefore('%') }
+        val out = HashMap<Family, String>()
+        sys.filterNot { Poison.isPoisoned(it) }.forEach { ip -> Family.ofLiteral(ip)?.let { out.putIfAbsent(it, ip) } }
+        val poisoned = sys.any { Poison.isPoisoned(it) }
+        if (out.size < 2 && (poisoned || out.isEmpty() || !out.containsKey(Family.V6))) {
+            val doh = runCatching { com.mlmvpn.scanner.engines.mae.probe.NetProber(context) }.getOrNull()
+            for ((fam, type) in listOf(Family.V4 to 1, Family.V6 to 28)) {
+                if (out.containsKey(fam)) continue
+                // Only where it can matter: no answer at all, a poisoned one, or the v6 a
+                // v6 race needs. A clean v4-only answer is not second-guessed for v4.
+                val ip = runCatching { doh?.dohResolve(host, type) }.getOrNull().orEmpty()
+                    .firstOrNull { Family.ofLiteral(it) == fam && !Poison.isPoisoned(it) }
+                if (ip != null) out[fam] = ip
+            }
+            if (poisoned) FluxLog.i("resolve: $host poisoned by the network resolver (${sys.joinToString()}); DoH gave ${out.values.joinToString().ifEmpty { "nothing" }}")
         }
+        out
     }
-
-    /** Iran's resolvers answer filtered names with the block page's address or a private one. */
-    private fun poisoned(a: InetAddress): Boolean =
-        a.isSiteLocalAddress || a.isLoopbackAddress || a.isAnyLocalAddress || a.isLinkLocalAddress ||
-            a.hostAddress?.startsWith("10.10.34.") == true
 
     /**
      * The network's verdict on Cloudflare, measured: a TCP connect to three random edges per

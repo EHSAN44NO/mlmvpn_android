@@ -22,6 +22,9 @@ object EgressVerifier {
     val IP_API = Source("ip-api", "http://ip-api.com/json/?fields=status,countryCode,query,as,org")
     val IPWHO = Source("ipwho", "https://ipwho.is/?fields=success,ip,country_code,connection")
 
+    /** A fourth opinion, asked only when the others disagree. */
+    val IFCONFIG = Source("ifconfig", "https://ifconfig.co/json")
+
     /** First pair asked; [IPWHO] only when these two disagree. */
     val PRIMARY = listOf(TRACE, IP_API)
 
@@ -46,6 +49,11 @@ object EgressVerifier {
                 val conn = o.optJSONObject("connection")
                 Observation(sourceId, o.optString("ip").ifEmpty { null }, cc(o.optString("country_code")),
                     conn?.optString("asn")?.ifEmpty { null }?.let { "AS$it" }, conn?.optString("org")?.ifEmpty { null })
+            }
+            IFCONFIG.id -> {
+                val o = JSONObject(body)
+                Observation(sourceId, o.optString("ip").ifEmpty { null }, cc(o.optString("country_iso")),
+                    o.optString("asn").ifEmpty { null }, o.optString("asn_org").ifEmpty { null })
             }
             else -> null
         }?.takeIf { it.countryCode != null }

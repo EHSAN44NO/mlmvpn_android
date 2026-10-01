@@ -12,8 +12,8 @@ android {
         applicationId "com.mlmvpn.scanner"
         minSdk 24
         targetSdk 34
-        versionCode 72
-        versionName "1.2.40"
+        versionCode 73
+        versionName "1.2.41"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
