@@ -38,6 +38,21 @@ fun changelogVersions(isFa: Boolean): List<ChangelogVersion> =
                     "نسخه 1.2.38",
                     listOf(
                         ChangelogItem(
+                            "پوشه در صفحهٔ اصلی، مثل آیفون",
+                            "یک برنامه را روی برنامهٔ دیگر نگه دارید تا قاب پوشه پشتش ظاهر شود و رها کنید: هر دو در یک پوشه می‌روند. برنامه را روی پوشه نگه دارید تا باز شود و بتوانید جای دقیقش را داخل پوشه بگذارید، یا بیرون بکشید. در حالت جابه‌جایی، پوشه‌ها نشان «−» دارند و حذفشان اول تأیید می‌گیرد و برنامه‌ها سر جایشان برمی‌گردند. اسم پوشه قابل تغییر است و اگر بیش از نُه برنامه داشته باشد، صفحه‌به‌صفحه ورق می‌خورد. کشیدن آیکون‌ها هم از نو ساخته شد: تا انگشت نایستد چیزی جابه‌جا نمی‌شود.",
+                            Icons.Default.Folder
+                        ),
+                        ChangelogItem(
+                            "گزارش کرش که همیشه به سازنده می‌رسد",
+                            "هر کرش، چه جاوا، چه بومی و چه هنگ کردن، حالا گزارش می‌شود و با نسخهٔ برنامه و آخرین کار شما فرستاده می‌شود. ارسال خودکار است و اگر اینترنت نباشد با تأخیر و حتی بعد از ری‌استارت گوشی دوباره تلاش می‌شود. بار اول به شما می‌گوید چه چیزی فرستاده شد (فقط خطا و مدل گوشی، نه کانفیگ یا ترافیک) و در «تنظیمات ← گزارش خطا» می‌توانید خاموشش کنید. گزارش‌ها دیگر در شلوغ‌ترین روزهای استخر گم نمی‌شوند.",
+                            Icons.Default.BugReport
+                        ),
+                        ChangelogItem(
+                            "مصرف باتری کمتر هنگام اتصال",
+                            "قفل بیداری سرویس VPN همیشه نگه داشته می‌شد و پردازنده هرگز نمی‌خوابید. حالا فقط هنگام اتصال و انتقال واقعی داده با صفحهٔ خاموش نگه داشته می‌شود. موتور تطبیقی بررسی‌های دوره‌ای شبکه‌های آشنا را تا روشن شدن صفحه عقب می‌اندازد. صفحه‌های بیرون از دید و انیمیشن‌های همیشه‌روشن دیگر کار نمی‌کنند.",
+                            Icons.Default.BatteryFull
+                        ),
+                        ChangelogItem(
                             "مسیر خراب را خودش درست می‌کند",
                             "اگر مسیر یک برنامه وسط کار از کار بیفتد، موتور تطبیقی حالا خودش متوجه می‌شود. مثلاً اینستاگرام بعد از حدود ۲۰ دقیقه کنار گذاشتن گوشی ویدیو پخش نمی‌کرد تا اتصال را دستی قطع و وصل کنید. هر ۵ دقیقه، و هر بار که بعد از چند دقیقه قفل گوشی را باز می‌کنید، مسیر هر برنامه از داخل خود اتصال امتحان می‌شود. مسیر خراب همان لحظه با مسیر سالم بعدی عوض می‌شود، یا در صورت لزوم موتور خودش یک بار دوباره وصل می‌شود. روی ردیف برنامه هم نوشته می‌شود.",
                             Icons.Default.Healing
@@ -1660,6 +1675,21 @@ fun changelogVersions(isFa: Boolean): List<ChangelogVersion> =
                 ChangelogVersion(
                     "Version 1.2.38",
                     listOf(
+                        ChangelogItem(
+                            "Folders on the home screen, the iOS way",
+                            "Hold an app over another until a plate grows behind it, and let go: both go into a folder. Hold an app over a folder to open it and place the app exactly where you want inside, or drag it out. While rearranging, folders wear the “−” badge, removing one asks first and the apps go back where it was. The name can be changed, and a folder with more than nine apps pages sideways. Dragging icons was rebuilt too: nothing moves under your finger until it rests.",
+                            Icons.Default.Folder
+                        ),
+                        ChangelogItem(
+                            "Crash reports that always reach the developers",
+                            "Every crash, whether Java, native or a hang, is now reported and sent with the app version and your last action. Sending is automatic, retried later when there is no internet and even after the phone restarts. The first time it tells you what was sent (only the error and the phone model, never configs or traffic), and you can turn it off in Settings → Crash report. Reports no longer get lost on the pool's busiest days.",
+                            Icons.Default.BugReport
+                        ),
+                        ChangelogItem(
+                            "Less battery drain while connected",
+                            "The VPN service held its wake lock for ever, so the CPU never slept. It is now held only during a connect and during a real transfer while the screen is off. The adaptive engine puts routine re-checks of known networks off until the screen comes on. Screens out of sight and always-on animations no longer run.",
+                            Icons.Default.BatteryFull
+                        ),
                         ChangelogItem(
                             "It repairs a broken route by itself",
                             "When an app's route stops working mid-use, the adaptive engine now notices on its own. For example, Instagram's videos would not play after the phone sat idle for about 20 minutes, until you disconnected and reconnected by hand. Every 5 minutes, and whenever you unlock the phone after a few minutes, each app's route is tried from inside the connection itself. A broken route is swapped for the next working one at once, or the engine reconnects once by itself if it has to. The app's row says so.",

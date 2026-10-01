@@ -4,7 +4,7 @@ All notable changes to the MLM VPN Android app are documented here. Dates are in
 
 فارسی این فایل در ادامه (پایین همین صفحه) آمده است.
 
-## [Unreleased]
+## [1.2.38] — 2026-09-30
 
 ### Added
 - **Crash reports that reach the developers, every time.**
@@ -20,6 +20,20 @@ All notable changes to the MLM VPN Android app are documented here. Dates are in
   - While rearranging, folders wear iOS's minus badge. Removing a folder asks first, then puts its apps back where the folder was.
   - The name is a text field with a clear button while rearranging. Outside rearranging, holding the name starts renaming.
   - More than nine apps page sideways inside a folder. Holding an icon at the edge of the board or of a folder turns the page. Right-to-left layouts are mirrored throughout.
+- **MAE: self-healing.** A route could die under an app and nothing looked. After ~20 minutes idle, Instagram's videos stopped until the user reconnected by hand. MAE now sends one small request through the running tunnel itself: into its own loopback inbound, through the rules and the app's balancer, out of the route the app is using. This runs 8 s after connecting, every 5 minutes with the screen on, and on unlock after 3+ minutes with the screen off. A dead WARP session, or every route dead, heals by reconnecting (at most once in 3 minutes). Anything else fails over live to the next proven route and is re-checked first. The app's row says what happened.
+- **MAE: foreign exits from the user's own Cloudflare panels.** For apps that refuse Iranian addresses, WARP, WARP-in-WARP, WireGuard and MASQUE are no use: they all exit in Iran.
+  - MAE takes configs automatically from the panels on the user's Cloudflare accounts (BPB, EDG, MLM, Netra, then GZG, NVA, NHN), through the same adapters the config arena uses.
+  - Each link goes on a clean IPv6 edge first, with IPv4 as the fallback, gated by the network's measured family verdict.
+  - Discovery proves every variant per app and keeps the fastest.
+  - Links are sealed and read again every 12 h.
+- **MAE: whole-app routing (Android 10+).** A chosen app that is installed is routed by its UID (Xray `process` rules, ahead of the domain rules). All of its traffic takes its route: every API domain, fixed IPs and CDNs, not only the domains the registry knows. Each app also has a QUIC balancer; a route that cannot carry QUIC blocks it, so the app falls back to TCP at once.
+- **MAE: a Cloudflare account first.** Every foreign exit MAE uses lives on the user's Cloudflare account, so MAE no longer starts without one. With none connected, the screen asks for it first, with the Cloud tab's own form and store: an account added here is the Cloud tab's too.
+- **MAE: check again.** "Check all again" on the list (pull-to-refresh does the same) and a check button on every app. Rows swipe like iOS lists: left for Delete, right for Check again; a long swipe acts at once.
+- **MAE: an app page.** The manage list opens one page per app: its route as a checkmark list, a switch for whether MAE carries it, Check again, and Remove alone at the bottom behind an iOS alert. The row of identical chips (pause, auto, every route, remove) is gone.
+- **Versioned Workers.** The MAE foreign exit, the US exit for Gemini (`GEMINI_EXIT_VERSION`) and the WARP identity relay (`WarpIdRelay.VERSION`) record the build deployed. A current one is not uploaded again on a tap (Reinstall asks first); an older one shows a red badge and "Update". Shared as `WorkerSetupRow` by Settings and the WARP / WireGuard pages.
+- **OpenVPN: a real delay test.** After the reset, the probe sends a TLS ClientHello inside the control channel (for TunnelBear cut and window-clamped exactly as `OpenVpnSplitRelay` does) and passes only when the server's certificate flight (2 KB+) or a TLS alert comes back. A server that answers the reset and is then cut shows "Blocked". Eight at a time, with a progress bar and a count.
+- **iOS-style update badge.** A red "1" on the Settings icon (dock, board and folders) and a "Software Update Available" row at the top of Settings replace the glyph in the status strip.
+- **MAE has its own home-screen icon.**
 
 ### Changed
 - **Home screen: dragging was rebuilt.**
@@ -27,6 +41,18 @@ All notable changes to the MLM VPN Android app are documented here. Dates are in
   - What an icon is held over is decided by the icon's middle, not by the finger.
   - While rearranging, an icon is carried by the point where it was touched, not the point the finger had reached when the drag began.
   - A tap on an icon is no longer lost to the board's own "tap empty space to finish" handler.
+- **MAE: picking apps no longer rebuilds the tunnel on every tap.** Changes are held while the app picker is open and applied once when it closes, after the new apps' checks. Only newly picked apps are checked (first); every pick used to queue the whole list again. MAE's own apply-reconnect skips the post-connect canary, which could move apps that were fine while the tunnel warmed up.
+- **MAE: updating or reinstalling the foreign exit in place** (same address and key) no longer invalidates every app's decisions.
+- **MAE: the SIM / time-zone warning was removed from the app rows** (the user found it wrong on a phone where TikTok opened).
+- **MAE: TikTok.** Registry v7 marks it `requiresForeign`, so a foreign exit is always probed and required. Its web page answers from Iran, which used to rule a geo restriction out. Its missing API and CDN domains were added.
+- **MAE: `gvt1.com` and `ggpht.com` left the Gemini / Flow bundle.** They sent Play Store downloads and YouTube images through the quota-limited US exit.
+- **MAE: the repair ladder repairs.**
+  - Rung 1 goes abroad at once for a geo-restricted app on a local route, and rung 5 keeps the foreign requirement. Before, rungs 1–2 only rotated local routes, all of them Iranian addresses.
+  - The user's evidence ("country refusal", "didn't open on route X") is kept per app and network for 7 days, so the next routine refresh no longer undoes a repair.
+  - A repair that changes the route reconnects, so the app's open connections move too. Live switching kept them on the route the user had just said does not work.
+  - Cancelling "what's wrong?" no longer uses a rung or marks a route. A 👎 during a routine check is queued, not dropped.
+  - Hosts learned from a registry app's site are applied at last.
+- **MAE: WARP runs one WireGuard session per core.** Three same-key outbounds per core, plus copies in the probe core, knocked each other off. The probe core has its own WARP identity.
 
 ### Fixed
 - **Crash reports lost on the pool's busiest days.**
@@ -44,40 +70,6 @@ All notable changes to the MLM VPN Android app are documented here. Dates are in
   - Traffic counters are sampled every 10 s with the screen off (2 s on). Daily usage is written once a minute instead of on every sample.
   - The other tunnels (MASQUE, WireGuard, WARP, Psiphon, Tor) skip the per-second session write and broadcast while the screen is off. Standalone WARP re-proves its endpoint every 3 minutes instead of every 45 s while the screen is off.
   - Screens out of sight and a backgrounded app no longer poll. Always-on animations (the Quick Connect orb, the Aether halo, the LAN pulse, the drifting lights) run only while on screen.
-
-## [1.2.38] — 2026-09-30
-
-### Added
-- **MAE: self-healing.** A route could die under an app and nothing looked. After ~20 minutes idle, Instagram's videos stopped until the user reconnected by hand. MAE now sends one small request through the running tunnel itself: into its own loopback inbound, through the rules and the app's balancer, out of the route the app is using. This runs 8 s after connecting, every 5 minutes with the screen on, and on unlock after 3+ minutes with the screen off. A dead WARP session, or every route dead, heals by reconnecting (at most once in 3 minutes). Anything else fails over live to the next proven route and is re-checked first. The app's row says what happened.
-- **MAE: foreign exits from the user's own Cloudflare panels.** For apps that refuse Iranian addresses, WARP, WARP-in-WARP, WireGuard and MASQUE are no use: they all exit in Iran.
-  - MAE takes configs automatically from the panels on the user's Cloudflare accounts (BPB, EDG, MLM, Netra, then GZG, NVA, NHN), through the same adapters the config arena uses.
-  - Each link goes on a clean IPv6 edge first, with IPv4 as the fallback, gated by the network's measured family verdict.
-  - Discovery proves every variant per app and keeps the fastest.
-  - Links are sealed and read again every 12 h.
-- **MAE: whole-app routing (Android 10+).** A chosen app that is installed is routed by its UID (Xray `process` rules, ahead of the domain rules). All of its traffic takes its route: every API domain, fixed IPs and CDNs, not only the domains the registry knows. Each app also has a QUIC balancer; a route that cannot carry QUIC blocks it, so the app falls back to TCP at once.
-- **MAE: a Cloudflare account first.** Every foreign exit MAE uses lives on the user's Cloudflare account, so MAE no longer starts without one. With none connected, the screen asks for it first, with the Cloud tab's own form and store: an account added here is the Cloud tab's too.
-- **MAE: check again.** "Check all again" on the list (pull-to-refresh does the same) and a check button on every app. Rows swipe like iOS lists: left for Delete, right for Check again; a long swipe acts at once.
-- **MAE: an app page.** The manage list opens one page per app: its route as a checkmark list, a switch for whether MAE carries it, Check again, and Remove alone at the bottom behind an iOS alert. The row of identical chips (pause, auto, every route, remove) is gone.
-- **Versioned Workers.** The MAE foreign exit, the US exit for Gemini (`GEMINI_EXIT_VERSION`) and the WARP identity relay (`WarpIdRelay.VERSION`) record the build deployed. A current one is not uploaded again on a tap (Reinstall asks first); an older one shows a red badge and "Update". Shared as `WorkerSetupRow` by Settings and the WARP / WireGuard pages.
-- **OpenVPN: a real delay test.** After the reset, the probe sends a TLS ClientHello inside the control channel (for TunnelBear cut and window-clamped exactly as `OpenVpnSplitRelay` does) and passes only when the server's certificate flight (2 KB+) or a TLS alert comes back. A server that answers the reset and is then cut shows "Blocked". Eight at a time, with a progress bar and a count.
-- **iOS-style update badge.** A red "1" on the Settings icon (dock, board and folders) and a "Software Update Available" row at the top of Settings replace the glyph in the status strip.
-- **MAE has its own home-screen icon.**
-
-### Changed
-- **MAE: picking apps no longer rebuilds the tunnel on every tap.** Changes are held while the app picker is open and applied once when it closes, after the new apps' checks. Only newly picked apps are checked (first); every pick used to queue the whole list again. MAE's own apply-reconnect skips the post-connect canary, which could move apps that were fine while the tunnel warmed up.
-- **MAE: updating or reinstalling the foreign exit in place** (same address and key) no longer invalidates every app's decisions.
-- **MAE: the SIM / time-zone warning was removed from the app rows** (the user found it wrong on a phone where TikTok opened).
-- **MAE: TikTok.** Registry v7 marks it `requiresForeign`, so a foreign exit is always probed and required. Its web page answers from Iran, which used to rule a geo restriction out. Its missing API and CDN domains were added.
-- **MAE: `gvt1.com` and `ggpht.com` left the Gemini / Flow bundle.** They sent Play Store downloads and YouTube images through the quota-limited US exit.
-- **MAE: the repair ladder repairs.**
-  - Rung 1 goes abroad at once for a geo-restricted app on a local route, and rung 5 keeps the foreign requirement. Before, rungs 1–2 only rotated local routes, all of them Iranian addresses.
-  - The user's evidence ("country refusal", "didn't open on route X") is kept per app and network for 7 days, so the next routine refresh no longer undoes a repair.
-  - A repair that changes the route reconnects, so the app's open connections move too. Live switching kept them on the route the user had just said does not work.
-  - Cancelling "what's wrong?" no longer uses a rung or marks a route. A 👎 during a routine check is queued, not dropped.
-  - Hosts learned from a registry app's site are applied at last.
-- **MAE: WARP runs one WireGuard session per core.** Three same-key outbounds per core, plus copies in the probe core, knocked each other off. The probe core has its own WARP identity.
-
-### Fixed
 - **OpenVPN: stuck on "connecting".** A dead server kept the core dialling for ever, and a stop that took longer than 12 s left the page on "connecting"/"disconnecting" until the app was force-stopped. A stop now waits 5 s and then abandons the session (its tunnel and relay closed from outside); a connect not verified within 60 s ends with a reason.
 - **MAE: Google's apps (Maps, Gmail, Photos...) could not be ticked in the app picker**, while each tap still re-queued every app. They are now attached to Google (`extraPackages`, routed by UID) and untick cleanly.
 - **MAE: changes that never reached the tunnel.** A rotated WARP endpoint, a redeployed Worker or an edited config waited for the next manual connect. Meanwhile, the DoH path's timestamp forced a reconnect (and a FakeDNS reset) every 6 hours.
@@ -659,7 +651,7 @@ Optimized specifically for degraded/censored network conditions (server creation
 
 نسخه‌بندی این فایل مطابق `versionName` در [`app/build.gradle`](app/build.gradle) است. برای جزئیات کامل‌تر و به‌روزتر هر نسخه، داخل خود اپ به «درباره ما → لیست تغییرات» مراجعه کنید.
 
-### [منتشرنشده]
+### [1.2.38] — 2026-09-30
 
 **افزوده‌شده:**
 - **گزارش کرش که همیشه به سازنده می‌رسد.**
@@ -675,34 +667,6 @@ Optimized specifically for degraded/censored network conditions (server creation
   - در حالت جابه‌جایی، روی پوشه‌ها نشان «−» آیفون هست. حذف پوشه اول تأیید می‌گیرد، بعد برنامه‌هایش را سر جای پوشه برمی‌گرداند.
   - در حالت جابه‌جایی، نام پوشه یک فیلد متن با دکمهٔ پاک کردن است. بیرون از این حالت، با نگه داشتن نام می‌توانید آن را عوض کنید.
   - اگر پوشه بیش از نُه برنامه داشته باشد، صفحه‌به‌صفحه ورق می‌خورد. نگه داشتن آیکون در لبهٔ صفحه یا پوشه، صفحه را ورق می‌زند. چیدمان راست‌به‌چپ همه‌جا آینه شده است.
-
-**تغییر:**
-- **کشیدن آیکون‌ها از نو ساخته شد.**
-  - تا انگشت نایستد، چیزی زیرش جابه‌جا نمی‌شود. رد شدن از روی آیکون‌ها یا مکث کوتاه در راه، دیگر آن‌ها را به هم نمی‌ریزد.
-  - این‌که آیکون روی چه چیزی است، از وسط خود آیکون حساب می‌شود، نه از نوک انگشت.
-  - در حالت جابه‌جایی، آیکون از همان نقطه‌ای که لمسش کرده‌اید جابه‌جا می‌شود.
-  - لمس یک آیکون دیگر با لمسِ «جای خالی برای پایان» اشتباه گرفته نمی‌شود.
-
-**رفع اشکال:**
-- **گزارش‌هایی که در شلوغ‌ترین روزهای استخر گم می‌شد.**
-  - گزارش کرش با ۶۰ درخواست روزانهٔ اتصال سریع شریک بود، پس گزارش کاربرِ پرمصرف رد می‌شد (۴۲۹). حالا سهم جدای خودش را دارد.
-  - روزهایی که D1 استخر به سقف خواندن روزانه می‌رسید، همهٔ گزارش‌ها رد می‌شد، و بررسی ساختار پایگاه داده صفحهٔ خطای کلادفلر را جلوی همهٔ مسیرها می‌آورد. حالا گزارشِ نصب‌هایی که ورکر قبلاً تأییدشان کرده پذیرفته می‌شود و بقیه ۵۰۳ می‌گیرند تا برنامه بعداً دوباره بفرستد.
-  - وقتی سقف نوشتن KV پر می‌شد، هر گزارشِ یک باگ شناخته‌شده دوباره زیر issue نظر می‌گذاشت. حالا هر نمونهٔ ورکر سوابق را در حافظه هم نگه می‌دارد.
-- **گزارش‌های کرشی که خودِ کرش در آن‌ها نبود.**
-  - متنی که کاربر می‌فرستاد (تنظیمات ← گزارش کرش، یا وقتی ارسال خودکار نشد) سه فایل آخر گوشی بود. با هر بار باز شدن برنامه یک «تاریخچهٔ خروج» نوشته می‌شد، پس آن سه فایل تقریباً همیشه همین تاریخچه‌ها بودند: گزارش می‌گفت کرش شده، ولی متن خطا در آن نبود. حالا متن خطا اول می‌آید.
-  - تاریخچهٔ خروج فقط وقتی نوشته می‌شود که اجرا بد تمام شده باشد (کرش، هنگ کردن، بسته شدن به‌خاطر مصرف منابع)، هر خروج یک بار و فقط در فرایند اصلی. بستن از فهرست برنامه‌های اخیر، آپدیت و خروج عادی فرایند تونل ثبت نمی‌شود.
-  - فایل‌های قدیمی بر اساس نوع پاک می‌شوند، پس متن کرش دیگر برای جا باز کردن پاک نمی‌شود. تنظیمات فقط گزارش‌های واقعی را می‌شمارد.
-  - ارسال، همهٔ کرش‌های بعد از آخرین پیشنهاد (تا سه مورد) را می‌فرستد، نه فقط آخری را. ردِ هنگ کردن یا کرش بومی کوتاه و خوانا می‌شود.
-- **مصرف زیاد باتری هنگام اتصال، به‌خصوص با موتور تطبیقی.**
-  - قفل بیداری سرویس VPN قرار بود بعد از پنج دقیقه بیکاری آزاد شود. اما گوشیِ وصل هیچ‌وقت بیکار نیست، پس قفل مدام تمدید می‌شد و پردازنده هیچ‌وقت نمی‌خوابید. حالا فقط موقع اتصال (۳۰ ثانیه) گرفته می‌شود، و وقتی صفحه خاموش است فقط هنگام انتقال واقعی داده (۱۶ کیلوبایت در ثانیه یا بیشتر).
-  - موتور تطبیقی بررسی‌های دوره‌ای شبکه‌های آشنا را تا روشن شدن صفحه عقب می‌اندازد؛ شبکهٔ تازه همچنان فوراً یاد گرفته می‌شود. حلقه‌های آمار و بررسی زنده با صفحهٔ خاموش می‌خوابند، و keepalive وارپ به‌جای ۱۵ ثانیه ۲۵ ثانیه است.
-  - شمارندهٔ ترافیک با صفحهٔ خاموش هر ۱۰ ثانیه نمونه می‌گیرد (با صفحهٔ روشن هر ۲ ثانیه). مصرف روزانه دقیقه‌ای یک بار ذخیره می‌شود، نه با هر نمونه.
-  - بقیهٔ تونل‌ها (ماسک، وایرگارد، وارپ، سایفون، تور) با صفحهٔ خاموش دیگر هر ثانیه فایل نمی‌نویسند و پیام نمی‌فرستند. وارپِ مستقل با صفحهٔ خاموش به‌جای هر ۴۵ ثانیه، هر ۳ دقیقه مسیرش را می‌سنجد.
-  - صفحه‌هایی که دیده نمی‌شوند و برنامه‌ای که در پس‌زمینه است دیگر چیزی را مدام بررسی نمی‌کنند. انیمیشن‌های همیشگی (گوی اتصال سریع، هالهٔ ایتر، تپش LAN، نورهای شناور) فقط وقتی روی صفحه‌اند اجرا می‌شوند.
-
-### [1.2.38] — 2026-09-30
-
-**افزوده‌شده:**
 - **خود-ترمیمی موتور تطبیقی.** اگر مسیر یک برنامه وسط کار از کار بیفتد، موتور حالا خودش از داخل تونل متوجه می‌شود. مثلاً اینستاگرام بعد از ۲۰ دقیقه کنار گذاشتن گوشی ویدیو پخش نمی‌کرد.
   - مسیر را خودش عوض می‌کند، یا در صورت لزوم یک بار دوباره وصل می‌شود.
   - هر ۵ دقیقه و هر بار باز کردن قفل گوشی بعد از چند دقیقه بررسی می‌کند.
@@ -718,6 +682,11 @@ Optimized specifically for degraded/censored network conditions (server creation
 - **نشان به‌روزرسانی مثل آیفون** روی آیکون تنظیمات، و آیکون تازه برای موتور تطبیقی.
 
 **تغییر:**
+- **کشیدن آیکون‌ها از نو ساخته شد.**
+  - تا انگشت نایستد، چیزی زیرش جابه‌جا نمی‌شود. رد شدن از روی آیکون‌ها یا مکث کوتاه در راه، دیگر آن‌ها را به هم نمی‌ریزد.
+  - این‌که آیکون روی چه چیزی است، از وسط خود آیکون حساب می‌شود، نه از نوک انگشت.
+  - در حالت جابه‌جایی، آیکون از همان نقطه‌ای که لمسش کرده‌اید جابه‌جا می‌شود.
+  - لمس یک آیکون دیگر با لمسِ «جای خالی برای پایان» اشتباه گرفته نمی‌شود.
 - **انتخاب برنامه دیگر اتصال را قطع و وصل نمی‌کند:** تغییرها یک بار موقع خروج از لیست اعمال می‌شوند و فقط برنامهٔ تازه بررسی می‌شود.
 - **نصب مجدد خروجی خارجی** دیگر همهٔ برنامه‌ها را از اول بررسی نمی‌کند.
 - هشدار سیم‌کارت و منطقهٔ زمانی از ردیف برنامه‌ها برداشته شد.
@@ -731,6 +700,21 @@ Optimized specifically for degraded/censored network conditions (server creation
 - **وارپ** در هر هسته فقط یک نشست دارد و دیگر با خودش تداخل نمی‌کند.
 
 **رفع‌شده:**
+- **گزارش‌هایی که در شلوغ‌ترین روزهای استخر گم می‌شد.**
+  - گزارش کرش با ۶۰ درخواست روزانهٔ اتصال سریع شریک بود، پس گزارش کاربرِ پرمصرف رد می‌شد (۴۲۹). حالا سهم جدای خودش را دارد.
+  - روزهایی که D1 استخر به سقف خواندن روزانه می‌رسید، همهٔ گزارش‌ها رد می‌شد، و بررسی ساختار پایگاه داده صفحهٔ خطای کلادفلر را جلوی همهٔ مسیرها می‌آورد. حالا گزارشِ نصب‌هایی که ورکر قبلاً تأییدشان کرده پذیرفته می‌شود و بقیه ۵۰۳ می‌گیرند تا برنامه بعداً دوباره بفرستد.
+  - وقتی سقف نوشتن KV پر می‌شد، هر گزارشِ یک باگ شناخته‌شده دوباره زیر issue نظر می‌گذاشت. حالا هر نمونهٔ ورکر سوابق را در حافظه هم نگه می‌دارد.
+- **گزارش‌های کرشی که خودِ کرش در آن‌ها نبود.**
+  - متنی که کاربر می‌فرستاد (تنظیمات ← گزارش کرش، یا وقتی ارسال خودکار نشد) سه فایل آخر گوشی بود. با هر بار باز شدن برنامه یک «تاریخچهٔ خروج» نوشته می‌شد، پس آن سه فایل تقریباً همیشه همین تاریخچه‌ها بودند: گزارش می‌گفت کرش شده، ولی متن خطا در آن نبود. حالا متن خطا اول می‌آید.
+  - تاریخچهٔ خروج فقط وقتی نوشته می‌شود که اجرا بد تمام شده باشد (کرش، هنگ کردن، بسته شدن به‌خاطر مصرف منابع)، هر خروج یک بار و فقط در فرایند اصلی. بستن از فهرست برنامه‌های اخیر، آپدیت و خروج عادی فرایند تونل ثبت نمی‌شود.
+  - فایل‌های قدیمی بر اساس نوع پاک می‌شوند، پس متن کرش دیگر برای جا باز کردن پاک نمی‌شود. تنظیمات فقط گزارش‌های واقعی را می‌شمارد.
+  - ارسال، همهٔ کرش‌های بعد از آخرین پیشنهاد (تا سه مورد) را می‌فرستد، نه فقط آخری را. ردِ هنگ کردن یا کرش بومی کوتاه و خوانا می‌شود.
+- **مصرف زیاد باتری هنگام اتصال، به‌خصوص با موتور تطبیقی.**
+  - قفل بیداری سرویس VPN قرار بود بعد از پنج دقیقه بیکاری آزاد شود. اما گوشیِ وصل هیچ‌وقت بیکار نیست، پس قفل مدام تمدید می‌شد و پردازنده هیچ‌وقت نمی‌خوابید. حالا فقط موقع اتصال (۳۰ ثانیه) گرفته می‌شود، و وقتی صفحه خاموش است فقط هنگام انتقال واقعی داده (۱۶ کیلوبایت در ثانیه یا بیشتر).
+  - موتور تطبیقی بررسی‌های دوره‌ای شبکه‌های آشنا را تا روشن شدن صفحه عقب می‌اندازد؛ شبکهٔ تازه همچنان فوراً یاد گرفته می‌شود. حلقه‌های آمار و بررسی زنده با صفحهٔ خاموش می‌خوابند، و keepalive وارپ به‌جای ۱۵ ثانیه ۲۵ ثانیه است.
+  - شمارندهٔ ترافیک با صفحهٔ خاموش هر ۱۰ ثانیه نمونه می‌گیرد (با صفحهٔ روشن هر ۲ ثانیه). مصرف روزانه دقیقه‌ای یک بار ذخیره می‌شود، نه با هر نمونه.
+  - بقیهٔ تونل‌ها (ماسک، وایرگارد، وارپ، سایفون، تور) با صفحهٔ خاموش دیگر هر ثانیه فایل نمی‌نویسند و پیام نمی‌فرستند. وارپِ مستقل با صفحهٔ خاموش به‌جای هر ۴۵ ثانیه، هر ۳ دقیقه مسیرش را می‌سنجد.
+  - صفحه‌هایی که دیده نمی‌شوند و برنامه‌ای که در پس‌زمینه است دیگر چیزی را مدام بررسی نمی‌کنند. انیمیشن‌های همیشگی (گوی اتصال سریع، هالهٔ ایتر، تپش LAN، نورهای شناور) فقط وقتی روی صفحه‌اند اجرا می‌شوند.
 - **OpenVPN دیگر در «در حال اتصال» گیر نمی‌کند:** «لغو» حداکثر در ۵ ثانیه آزاد می‌شود و اتصالی که در ۶۰ ثانیه برقرار نشود، خودش لغو و اعلام می‌شود.
 - برنامه‌های گوگل (Maps، Gmail و…) در لیست انتخاب برنامه تیک نمی‌خوردند؛ حالا انتخاب می‌شوند.
 - تغییر مسیرها (چرخش وارپ، ورکر تازه، ویرایش کانفیگ) حالا به تونلِ روشن می‌رسد. قطع و وصل بی‌دلیلِ هر ۶ ساعت حذف شد.
