@@ -158,7 +158,7 @@ object FluxEngine {
         if (connectJob?.isActive == true) return
         connectJob = scope.launch {
             try { connect() } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) {
-                Log.w(TAG, "connect failed: ${e.javaClass.simpleName}")
+                FluxLog.w("connect crashed", e)
                 if (wantConnected) _ui.value = FluxUiState.Failed(FailureKind.NOTHING_WORKS)
             }
         }
@@ -192,17 +192,22 @@ object FluxEngine {
         _ui.value = FluxUiState.Searching
         val now0 = System.currentTimeMillis()
         val here = FluxNet.current(app)
-        if (!FluxNet.online(app)) { _ui.value = FluxUiState.Failed(FailureKind.OFFLINE); return }
         val p = prefs()
+        FluxLog.i("==== connect: net=${here.key} wifi=${here.wifi} cellular=${here.cellular} mode=${p.ipMode} country=${p.country ?: "auto"}")
+        if (!FluxNet.online(app)) { fail(FluxUiState.Failed(FailureKind.OFFLINE), "no underlying network"); return }
         store.update { FluxMemory.markSeen(it, here.key, now0) }
 
         var nodes = nodes()
         if (nodes.isEmpty()) {
             // A fresh install: nothing cached yet. The one time a connect waits for the lists.
+            FluxLog.i("no cached nodes: fetching the sources now")
             withContext(Dispatchers.IO) { sources.refreshDue(here.wifi, null, force = true) }
             nodes = nodes()
-            if (nodes.isEmpty()) { _ui.value = FluxUiState.Failed(FailureKind.NO_NODES); return }
-        } else {
+            if (nodes.isEmpty()) { fail(FluxUiState.Failed(FailureKind.NO_NODES), "every source failed and nothing is cached"); return }
+        }
+        FluxLog.i("nodes: ${nodes.size} " + nodes.groupingBy { "${it.proto.name.lowercase()}/${it.transport.code}/${it.security.name.lowercase()}" }.eachCount()
+            + " by source " + nodes.groupingBy { it.sourceId }.eachCount())
+        if (nodes.isNotEmpty()) {
             scope.launch(Dispatchers.IO) { runCatching { sources.refreshDue(here.wifi, tunnelHttpPort()) } }
         }
 
@@ -210,11 +215,13 @@ object FluxEngine {
         val storedVerdict = verdictFor(here.key)
         val warm = FluxPlanner.warm(input(here, p.country, p.ipMode, nodes, storedVerdict, resolvedFor(here.key)))
         if (warm.isNotEmpty()) {
-            Log.i(TAG, "warm start on this network: ${warm.size} known route(s)")
+            FluxLog.i("warm start: ${warm.size} known route(s) on this network: ${warm.joinToString(" | ")}")
             if (startAndVerify(warm, p.ipMode, here)) { afterConnected(here, p); return }
+            FluxLog.i("warm route failed; benching it and racing")
             sitOut(here.key, warm.first().id)
             // The standbys were in the same tunnel and it still failed: the race decides.
         }
+        else FluxLog.i("no known route on this network for ${FluxState.policyKey(p.country, p.ipMode)}: cold start")
         if (!wantConnected) return
 
         // ---- cold: measure the network and resolve server names (side by side), then race.
@@ -228,20 +235,30 @@ object FluxEngine {
             vJob.await() to rJob.await()
         }
         val v = verdictFor(here.key).takeIf { !it.stale(now0) } ?: verdict
-        if (FluxPlanner.families(p.ipMode, v).isEmpty()) { _ui.value = FluxUiState.Failed(FailureKind.FAMILY_UNAVAILABLE); return }
+        FluxLog.i("verdict: cloudflare v4=${v.cfV4} v6=${v.cfV6} ipv6=${v.v6} udp=${v.udp} (cut=${v.cloudflareCut}, measured ${(System.currentTimeMillis() - v.at) / 1000}s ago); resolved ${resolved.size} server names in ${System.currentTimeMillis() - now0} ms")
+        if (FluxPlanner.families(p.ipMode, v).isEmpty()) { fail(FluxUiState.Failed(FailureKind.FAMILY_UNAVAILABLE), "mode ${p.ipMode} has no usable family here"); return }
 
-        for (wave in 1..2) {
+        // Up to three rounds, each on candidates not raced yet in this connect: public nodes come
+        // and go, and a round that found nothing (or a winner that failed in the tunnel) should
+        // move on to fresh ones rather than measure the same dead ones again.
+        val tried = HashSet<String>()
+        for (round in 1..ROUNDS) {
             if (!wantConnected) return
-            val inp = input(here, p.country, p.ipMode, nodes, v, resolved).copy(wave = wave, budget = if (here.wifi) 40 else 28)
-            val cands = FluxPlanner.candidates(inp)
-            if (cands.isEmpty()) continue
+            val inp = input(here, p.country, p.ipMode, nodes, v, resolved).copy(budget = if (here.wifi) 40 else 28)
+            val all = FluxPlanner.candidates(inp.copy(budget = Int.MAX_VALUE))
+            val cands = all.filterNot { it.id in tried }.take(inp.budget)
+            FluxLog.i("round $round: ${all.size} candidates possible, ${cands.size} new to race: " +
+                cands.groupingBy { "${it.node.proto.name.lowercase()}${if (it.edge != null) "+edge" else ""}/v${it.family.code}${if (it.fragment.code != "0") "+frag" else ""}" }.eachCount())
+            if (cands.isEmpty()) break
+            tried += cands.map { it.id }
             val routes = race(here, p, cands) ?: continue
             if (!wantConnected) return
             if (startAndVerify(routes, p.ipMode, here)) { afterConnected(here, p); return }
+            FluxLog.i("round $round: winner did not carry traffic in the tunnel; benching it")
             sitOut(here.key, routes.first().id)
         }
         if (!wantConnected) return
-        _ui.value = failureFor(p, here)
+        fail(failureFor(p, here), "no route after ${tried.size} candidates")
         stopService()
     }
 
@@ -267,7 +284,10 @@ object FluxEngine {
                     out.ranked.firstOrNull { it.first.id == c.id }?.let { FluxScorer.score(c, FluxMemory.metrics(store.current, here.key, c.id), it.second.rttMs, now) })
             },
         )
-        Log.i(TAG, "race: ${cands.size} candidates, ${out.reach.count { it.value.ok }} reachable, ${out.ranked.size} accepted, ${now - t0} ms")
+        FluxLog.i("race: ${cands.size} candidates, ${out.reach.count { it.value.ok }} reachable, ${out.real.count { it.value.ok }} answered, ${out.ranked.size} accepted, ${out.refused.size} wrong country, ${now - t0} ms")
+        out.reach.values.filter { !it.ok }.groupingBy { it.reason?.name ?: "?" }.eachCount().takeIf { it.isNotEmpty() }?.let { FluxLog.i("race: stage-1 failures by reason $it") }
+        out.real.values.filter { !it.ok }.groupingBy { it.reason?.name ?: "?" }.eachCount().takeIf { it.isNotEmpty() }?.let { FluxLog.i("race: stage-2 failures by reason $it") }
+        out.ranked.forEachIndexed { i, (c, r) -> FluxLog.i("race: #${i + 1} ${r.rttMs}ms exit=${r.egress?.countryCode ?: "?"} | $c") }
         if (out.ranked.isEmpty()) return null
         val ids = FluxLearner.pickRoutes(out.ranked.map { it.first })
         val byId = out.ranked.associate { it.first.id to it.first }
@@ -278,10 +298,43 @@ object FluxEngine {
 
     private suspend fun startAndVerify(routes: List<FluxCandidate>, mode: IpMode, here: FluxNet.Here): Boolean {
         if (!wantConnected) return false
-        val cfg = compile(routes, mode, here.cellular)
         withContext(Dispatchers.IO) { com.mlmvpn.scanner.ui.tunnel.TunnelExclusion.releaseForXray(app) }
         if (!wantConnected) return false
-        inTunnel = routes; tunnelNet = here.key
+        // The full config (primary + standbys behind a balancer) first; if this core refuses it,
+        // the primary alone -- a route that raced fine is not thrown away over the balancer.
+        var used = routes
+        var up = launch(compile(routes, mode, here.cellular, safe = false))
+        if (!up && wantConnected && routes.size > 1 && MyVpnService.connectionPhaseFlow.value != MyVpnService.Phase.FAILED) {
+            FluxLog.w("tunnel config did not start; retrying with the primary route alone")
+            used = routes.take(1)
+            up = launch(compile(used, mode, here.cellular, safe = true))
+        }
+        if (!up) {
+            FluxLog.w("tunnel did not come up (service phase ${MyVpnService.connectionPhaseFlow.value})")
+            if (MyVpnService.connectionPhaseFlow.value == MyVpnService.Phase.FAILED) _ui.value = FluxUiState.Failed(FailureKind.VPN_REFUSED)
+            return false
+        }
+        FluxLog.i("tunnel core up with ${used.size} route(s); checking a real request through it")
+        inTunnel = used; tunnelNet = here.key
+        // ...and FLUX says "connected" only once a real request went through it.
+        val rtt = canary(attempts = 3)
+        if (rtt == null) { FluxLog.w("tunnel up but no request went through it (3 tries)"); return false }
+        FluxLog.i("CONNECTED: ${rtt} ms through the tunnel | primary ${used.first()} -> ${used.first().dialAddress}")
+        val primary = used.first()
+        store.update { FluxLearner.liveSuccess(it, here.key, primary.id, System.currentTimeMillis(), rtt) }
+        val country = store.current.egress[primary.egressKey]?.countryCode
+        _ui.value = FluxUiState.Connected(country, primary.family, rtt)
+        _diag.value = _diag.value.copy(inTunnel = used.map { it.toString() }, why = why(primary, here.key, rtt))
+        return true
+    }
+
+    /**
+     * Hands [cfg] to MyVpnService and waits for its answer: true once the core is up, false as
+     * soon as the service gives up (the core refused the config, the VPN was refused) -- not
+     * after a blind timeout.
+     */
+    private suspend fun launch(cfg: String): Boolean {
+        FluxLog.i("tunnel: starting config (${cfg.length} chars, ${JSONObject(cfg).optString("remarks")})")
         val wasUp = MyVpnService.connectionPhaseFlow.value == MyVpnService.Phase.CONNECTED
         app.startService(Intent(app, MyVpnService::class.java).apply {
             putExtra("NODE_URI", cfg)
@@ -289,32 +342,25 @@ object FluxEngine {
             putExtra("PROXY_MODE", false)
             putExtra("LOCAL_PORT", LocalPort.getString(app))
         })
-        // Replacing a running tunnel: wait for the old one to go down first, or the check below
-        // would be answered by the tunnel that is being replaced.
+        // Replacing a running tunnel: wait for the old one to go down first, or the check after
+        // this would be answered by the tunnel that is being replaced.
         if (wasUp) withTimeoutOrNull(5_000) { MyVpnService.connectionPhaseFlow.first { it != MyVpnService.Phase.CONNECTED } }
-        // The service brings the core up; CONNECTED there only means "started".
-        val up = withTimeoutOrNull(15_000) {
-            MyVpnService.connectionPhaseFlow.first { it == MyVpnService.Phase.CONNECTED && MyVpnService.connectedNodeIdFlow.value == NODE_ID }
+        var sawConnecting = false
+        val phase = withTimeoutOrNull(15_000) {
+            MyVpnService.connectionPhaseFlow.first { p ->
+                if (p == MyVpnService.Phase.CONNECTING) sawConnecting = true
+                (p == MyVpnService.Phase.CONNECTED && MyVpnService.connectedNodeIdFlow.value == NODE_ID) ||
+                    (sawConnecting && (p == MyVpnService.Phase.IDLE || p == MyVpnService.Phase.FAILED))
+            }
         }
-        if (up == null) {
-            if (MyVpnService.connectionPhaseFlow.value == MyVpnService.Phase.FAILED) _ui.value = FluxUiState.Failed(FailureKind.VPN_REFUSED)
-            return false
-        }
-        // ...and FLUX says "connected" only once a real request went through it.
-        val rtt = canary(attempts = 3)
-        if (rtt == null) { Log.i(TAG, "tunnel up but no request went through"); return false }
-        val primary = routes.first()
-        store.update { FluxLearner.liveSuccess(it, here.key, primary.id, System.currentTimeMillis(), rtt) }
-        val country = store.current.egress[primary.egressKey]?.countryCode
-        _ui.value = FluxUiState.Connected(country, primary.family, rtt)
-        _diag.value = _diag.value.copy(inTunnel = routes.map { it.toString() }, why = why(primary, here.key, rtt))
-        return true
+        FluxLog.i("tunnel: service answered ${phase ?: "nothing within 15 s"}")
+        return phase == MyVpnService.Phase.CONNECTED
     }
 
-    private fun compile(routes: List<FluxCandidate>, mode: IpMode, mobile: Boolean): String {
+    private fun compile(routes: List<FluxCandidate>, mode: IpMode, mobile: Boolean, safe: Boolean = false): String {
         val primaryUdp = routes.first().node.carriesUdp
         val sink = if (!primaryUdp) com.mlmvpn.scanner.utils.XrayJsonGenerator.quicRefusalOutbound() else null
-        val cfg = FluxConfigCompiler.tunnel(routes, mode, LocalPort.get(app), sink, mobile)
+        val cfg = FluxConfigCompiler.tunnel(routes, mode, LocalPort.get(app), sink, mobile, safe)
         return if (sink == null) cfg else JSONObject(cfg).also { com.mlmvpn.scanner.utils.XrayJsonGenerator.addQuicRefusalPolicyTo(it) }.toString()
     }
 
@@ -343,6 +389,7 @@ object FluxEngine {
                     if (line.contains(" 204") || line.contains(" 200")) (System.nanoTime() - start) / 1_000_000 else null
                 }
             }.getOrNull()
+            FluxLog.i("canary ${i + 1}/$attempts via 127.0.0.1:$port: ${ms?.let { "OK ${it}ms" } ?: "FAIL"}")
             if (ms != null) return@withContext ms
             if (i < attempts - 1) delay(1_000)
         }
@@ -372,6 +419,7 @@ object FluxEngine {
             if (!isOurs()) return
             if (!screenOn()) continue
             val rtt = canary(attempts = 1)
+            FluxLog.i("health: ${rtt?.let { "OK ${it}ms" } ?: "FAIL"} (next check in ${if (rtt != null) minOf(interval * 2, 5 * 60_000L) / 1000 else 20}s)")
             val primary = inTunnel.firstOrNull() ?: return
             if (rtt != null) {
                 failures = 0
@@ -385,7 +433,7 @@ object FluxEngine {
             interval = 20_000L
             store.update { FluxLearner.liveFailure(it, tunnelNet, primary.id, System.currentTimeMillis(), FailReason.HTTP_TIMEOUT) }
             if (failures >= 2 && FluxNet.online(app)) {
-                Log.i(TAG, "route stopped working; finding another")
+                FluxLog.w("health: route stopped working (2 checks); finding another")
                 _diag.value = _diag.value.copy(failovers = _diag.value.failovers + 1)
                 // The failed primary sits out, so the plan picks a standby or races anew.
                 sitOut(tunnelNet, primary.id)
@@ -410,6 +458,7 @@ object FluxEngine {
                 async(Dispatchers.IO) { httpGet(port, src.url, 8 * 1024)?.let { EgressVerifier.parse(src.id, it) } }
             }.awaitAll().filterNotNull()
         }
+        FluxLog.i("background: exit seen by ${obs.size}/3 echo services: " + obs.joinToString { "${it.source}=${it.countryCode}" })
         if (obs.isNotEmpty()) {
             val id = EgressVerifier.combine(obs, System.currentTimeMillis())
             store.update { FluxMemory.recordEgress(it, primary.egressKey, id) }
@@ -417,7 +466,7 @@ object FluxEngine {
             if (st is FluxUiState.Connected && id.countryCode != null) _ui.value = st.copy(countryCode = id.countryCode)
             // Chosen a country, but the exit turns out to be elsewhere: the route is wrong for it.
             if (p.country != null && id.countryCode != null && !id.countryCode.equals(p.country, true) && id.confidence >= 1.0) {
-                Log.i(TAG, "exit is not in the chosen country; re-planning")
+                FluxLog.w("exit is ${id.countryCode}, not ${p.country}; re-planning")
                 store.update { FluxMemory.setBest(it, here.key, p.country, p.ipMode, FluxMemory.best(it, here.key, p.country, p.ipMode).drop(1)) }
                 connectJob?.cancel(); connectJob = scope.launch { runCatching { connect() } }
                 return
@@ -429,6 +478,7 @@ object FluxEngine {
         if (here.wifi || FluxMemory.spentToday(store.current, now) + bytes <= MOBILE_BUDGET_BYTES) {
             val kbps = throughput(port, bytes)
             if (here.cellular) store.update { FluxMemory.spend(it, now, bytes.toLong()) }
+            FluxLog.i("background: throughput ${kbps?.let { "%.1f Mbps".format(it / 1000) } ?: "not measured"} ($bytes bytes)")
             if (kbps != null) store.update { FluxMemory.recordThroughput(it, here.key, primary.id, kbps) }
         }
         // The verdict, if it is getting old, measured now while nobody waits on it.
@@ -495,6 +545,7 @@ object FluxEngine {
             delay(6_000)
             val here = FluxNet.current(app)
             if (here.key == tunnelNet) return@launch
+            FluxLog.i("network changed: $tunnelNet -> ${here.key}; checking the tunnel")
             val rtt = canary(attempts = 2)
             if (rtt != null) {
                 // The routes carried over: remember them as good here too.
@@ -567,6 +618,13 @@ object FluxEngine {
     }
 
     private fun screenOn(): Boolean = runCatching { (app.getSystemService(Context.POWER_SERVICE) as PowerManager).isInteractive }.getOrDefault(true)
+
+    private fun fail(state: FluxUiState.Failed, why: String) {
+        FluxLog.w("==== FAILED ${state.reason}${state.suggestion?.let { " (try: $it)" } ?: ""}: $why")
+        _ui.value = state
+    }
+
+    private const val ROUNDS = 3
 
     /** FLUX's own probes on mobile data: at most this much a day. */
     private const val MOBILE_BUDGET_BYTES = 3_000_000L

@@ -2,7 +2,12 @@
 
 ## Current milestone
 
-Ships in **1.2.39** (versionCode 71).
+Shipped in **1.2.39** (versionCode 71). **1.2.40** (72) fixes the first device test:
+- single-route tunnel without `leastLoad`;
+- `allowInsecure` is gone from this core;
+- probe-core fallback;
+- fresh candidates per round;
+- detailed `FLUX` logcat.
 
 
 - **Done:** F0–F9 implemented, plus the fragment part of F10.

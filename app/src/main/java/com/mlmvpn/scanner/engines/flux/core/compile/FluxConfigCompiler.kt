@@ -47,10 +47,17 @@ object FluxConfigCompiler {
      *   once (the app's QuicRefuser), or null to drop QUIC silently. Used only when the primary
      *   cannot carry UDP.
      * @param mobile a slower observatory on mobile data.
+     * @param safe the primary alone, with no balancer and no observatory: the fallback when the
+     *   full config does not start on this core.
      */
-    fun tunnel(routes: List<FluxCandidate>, mode: IpMode, localPort: Int, quicSink: JSONObject? = null, mobile: Boolean = false): String {
+    fun tunnel(routes: List<FluxCandidate>, mode: IpMode, localPort: Int, quicSink: JSONObject? = null, mobile: Boolean = false, safe: Boolean = false): String {
         require(routes.isNotEmpty()) { "no route" }
-        val used = routes.distinctBy { it.id }.take(MAX_ROUTES)
+        val used = routes.distinctBy { it.id }.take(if (safe) 1 else MAX_ROUTES)
+        // One route needs no balancer. A leastLoad balancer without the burst observatory is a
+        // config the core refuses outright ("not all dependencies are resolved"), so the two only
+        // ever appear together, and only with standbys to choose between.
+        val balanced = used.size > 1
+        fun toRoutes(r: JSONObject) = if (balanced) r.put("balancerTag", BALANCER) else r.put("outboundTag", "${TAG_PREFIX}0")
         val v6 = mode != IpMode.V4
         val json = JSONObject()
         json.put("remarks", if (v6) REMARKS else REMARKS_V4)
@@ -91,15 +98,19 @@ object FluxConfigCompiler {
 
         val rules = JSONArray()
         rules.put(rule().put("port", "53").put("outboundTag", "dns-out"))
-        rules.put(rule().put("inboundTag", JSONArray().put(DNS_TAG)).put("balancerTag", BALANCER))
+        rules.put(toRoutes(rule().put("inboundTag", JSONArray().put(DNS_TAG))))
         rules.put(rule().put("ip", JSONArray(BLOCK_PAGE)).put("outboundTag", "blocked"))
         rules.put(rule().put("ip", JSONArray(LAN_V4 + LAN_V6)).put("outboundTag", "direct"))
         if (!primaryUdp) {
             rules.put(rule().put("network", "udp").put("protocol", JSONArray().put("quic")).put("outboundTag", quicTag))
             rules.put(rule().put("network", "udp").put("port", "443").put("outboundTag", quicTag))
         }
-        rules.put(rule().put("network", "tcp,udp").put("balancerTag", BALANCER))
+        rules.put(toRoutes(rule().put("network", "tcp,udp")))
 
+        if (!balanced) {
+            json.put("routing", JSONObject().put("domainStrategy", "AsIs").put("rules", rules))
+            return json.toString()
+        }
         val costs = JSONArray()
         // The primary is preferred whenever it is alive; standbys cost more and take over only
         // when the observatory sees the primary fail.
@@ -118,7 +129,7 @@ object FluxConfigCompiler {
                     .put("baselines", JSONArray().put("1s"))
                     .put("costs", costs))))))
 
-        if (used.size > 1) {
+        run {
             json.put("burstObservatory", JSONObject()
                 .put("subjectSelector", JSONArray(used.indices.map { "$TAG_PREFIX$it" }))
                 .put("pingConfig", JSONObject()

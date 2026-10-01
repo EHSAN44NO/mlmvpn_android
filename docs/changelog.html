@@ -112,7 +112,27 @@ a{color:var(--accent);}
 <div class="timeline">
 
   <div class="ver latest">
-    <div class="ver-head"><h2>1.2.39</h2><span class="ver-date">2026-10-01</span><span class="badge-latest">جدیدترین</span></div>
+    <div class="ver-head"><h2>1.2.40</h2><span class="ver-date">2026-10-01</span><span class="badge-latest">جدیدترین</span></div>
+    <p class="ver-sub">FLUX واقعاً وصل می‌شود، با لاگ دقیق</p>
+
+    <div class="group">
+      <span class="group-label fixed">رفع‌شده</span>
+      <ul class="items">
+        <li>«مسیر سالمی پیدا نشد» در حالی که مسیر پیدا شده بود
+          <span class="detail">با یک مسیر برنده، تنظیمات تونل را هستهٔ Xray نمی‌پذیرفت. حالا مسیر مستقیم استفاده می‌شود و اگر لازم باشد فوراً فقط با مسیر اصلی دوباره امتحان می‌شود.</span>
+        </li>
+        <li>یک نود خراب دیگر کل تست را از کار نمی‌اندازد
+          <span class="detail">نودهای با گواهی خودامضا رد می‌شوند و نودهایی که هسته نمی‌پذیرد جدا کنار گذاشته می‌شوند. اگر دوری چیزی پیدا نکند، تا دو دور دیگر نودهای تازه امتحان می‌شوند.</span>
+        </li>
+        <li>لاگ دقیق با تگ FLUX
+          <span class="detail">تمام مراحل در logcat، بدون هیچ رمز یا UUID.</span>
+        </li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="ver">
+    <div class="ver-head"><h2>1.2.39</h2><span class="ver-date">2026-10-01</span></div>
     <p class="ver-sub">موتور جدید FLUX: کشور، نسخهٔ IP، اتصال</p>
 
     <div class="group">

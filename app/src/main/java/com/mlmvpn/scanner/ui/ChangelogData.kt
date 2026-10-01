@@ -35,6 +35,21 @@ fun changelogVersions(isFa: Boolean): List<ChangelogVersion> =
         if (isFa) {
             listOf(
                 ChangelogVersion(
+                    "نسخه 1.2.40",
+                    listOf(
+                        ChangelogItem(
+                            "FLUX حالا واقعاً وصل می‌شود",
+                            "اگر فقط یک مسیر سالم پیدا می‌شد، تونل اجرا نمی‌شد و پیام «مسیر سالمی پیدا نشد» نشان داده می‌شد. این مشکل رفع شد. یک نود خراب هم دیگر کل تست را از کار نمی‌اندازد. اگر دوری چیزی پیدا نکند، FLUX تا دو دور دیگر نودهای تازه را امتحان می‌کند.",
+                            Icons.Default.Bolt
+                        ),
+                        ChangelogItem(
+                            "لاگ دقیق برای عیب‌یابی",
+                            "تمام مراحل FLUX با تگ FLUX در logcat ثبت می‌شود: منابع، وضعیت کلادفلر، نتیجهٔ هر نود و علت شکست، و اجرای تونل. هیچ رمز یا UUID در لاگ نوشته نمی‌شود.",
+                            Icons.Default.BugReport
+                        ),
+                    )
+                ),
+                ChangelogVersion(
                     "نسخه 1.2.39",
                     listOf(
                         ChangelogItem(
@@ -1692,6 +1707,21 @@ fun changelogVersions(isFa: Boolean): List<ChangelogVersion> =
             )
         } else {
             listOf(
+                ChangelogVersion(
+                    "Version 1.2.40",
+                    listOf(
+                        ChangelogItem(
+                            "FLUX now really connects",
+                            "When only one healthy route was found, the tunnel did not start and FLUX said no route was found. That is fixed. One broken node no longer takes a whole race down, and a round that finds nothing moves on to fresh nodes, up to three rounds.",
+                            Icons.Default.Bolt
+                        ),
+                        ChangelogItem(
+                            "Detailed logs for troubleshooting",
+                            "Every FLUX step is logged under the FLUX tag in logcat: sources, the Cloudflare check, each node's result and why it failed, and the tunnel start. No password or UUID is ever written.",
+                            Icons.Default.BugReport
+                        ),
+                    )
+                ),
                 ChangelogVersion(
                     "Version 1.2.39",
                     listOf(

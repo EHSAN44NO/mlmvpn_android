@@ -4,6 +4,25 @@ All notable changes to the MLM VPN Android app are documented here. Dates are in
 
 فارسی این فایل در ادامه (پایین همین صفحه) آمده است.
 
+## [1.2.40] — 2026-10-01
+
+### Fixed
+- **FLUX: "no working route" although the race had found one.** With a single winning route, the tunnel config carried a `leastLoad` balancer without the burst observatory it depends on, and the core refused to start ("not all dependencies are resolved"). A single route now goes out directly. With standbys, the balancer and the observatory always come together. If the core still refuses the full config, FLUX retries at once with the primary route alone.
+- **FLUX: one bad node no longer sinks a whole race.** This core has removed `allowInsecure`, so one self-signed Hysteria2 node made the probe core refuse to start, and every candidate in that round was lost. Self-signed links are now rejected like the others. If the probe core still refuses a batch, the candidates that do build are found and raced.
+- **FLUX: no 15-second wait on a failed start.** FLUX moves on as soon as the VPN service gives up.
+
+### Changed
+- **FLUX: up to three rounds per connect, each on fresh candidates.** A round that finds nothing, or whose winner fails inside the tunnel, moves on to nodes not tried yet instead of measuring the same ones again.
+- **FLUX: detailed logcat under the `FLUX` tag** (`adb logcat -s FLUX`), with no credentials. It covers:
+  - each source and what it yielded;
+  - the network verdict, per Cloudflare edge;
+  - every candidate's stage-1 and stage-2 result with its reason;
+  - the race ranking;
+  - the tunnel start and the service's answer;
+  - every canary and health check;
+  - network changes;
+  - the final failure reason.
+
 ## [1.2.39] — 2026-10-01
 
 ### Added
@@ -672,6 +691,17 @@ Optimized specifically for degraded/censored network conditions (server creation
 ## فارسی
 
 نسخه‌بندی این فایل مطابق `versionName` در [`app/build.gradle`](app/build.gradle) است. برای جزئیات کامل‌تر و به‌روزتر هر نسخه، داخل خود اپ به «درباره ما → لیست تغییرات» مراجعه کنید.
+
+### [1.2.40] — 2026-10-01
+
+**رفع‌شده:**
+- **FLUX: «مسیر سالمی پیدا نشد» در حالی که مسیر پیدا شده بود.** وقتی فقط یک مسیر برنده بود، تنظیمات تونل بالانسری داشت که هستهٔ Xray بدون observatory اجرایش نمی‌کرد. حالا یک مسیر مستقیم استفاده می‌شود. اگر هسته باز هم تنظیمات کامل را نپذیرد، FLUX فوراً فقط با مسیر اصلی دوباره امتحان می‌کند.
+- **FLUX: یک نود خراب دیگر کل تست را از کار نمی‌اندازد.** این نسخه از Xray گزینهٔ `allowInsecure` را حذف کرده است. یک نود Hysteria2 با گواهی خودامضا باعث می‌شد هستهٔ تست اصلاً بالا نیاید و همهٔ نودهای آن دور از دست بروند. نودهای خودامضا حالا رد می‌شوند و نودهای خراب جدا کنار گذاشته می‌شوند.
+- **FLUX: دیگر بعد از شکست اجرای تونل ۱۵ ثانیه منتظر نمی‌ماند.**
+
+**تغییرکرده:**
+- **FLUX: تا سه دور تست، هر بار روی نودهای تازه.**
+- **FLUX: لاگ دقیق در logcat با تگ `FLUX`، بدون هیچ رمز یا UUID.** شامل منابع، وضعیت کلادفلر، نتیجه و علت هر نود، رتبه‌بندی، اجرای تونل و بررسی‌های سلامت.
 
 ### [1.2.39] — 2026-10-01
 

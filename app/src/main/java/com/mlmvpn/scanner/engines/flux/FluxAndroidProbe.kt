@@ -58,7 +58,13 @@ class FluxAndroidProbe(
     private val connectMs = if (mobile) 2_000 else 1_500
     private val tlsMs = if (mobile) 2_500 else 2_000
 
-    override suspend fun reach(c: FluxCandidate): FluxProbe.Reach = withContext(Dispatchers.IO) {
+    override suspend fun reach(c: FluxCandidate): FluxProbe.Reach {
+        val r = reachImpl(c)
+        FluxLog.i("reach ${if (r.ok) "OK  " else "FAIL"} ${r.ms?.let { "${it}ms" } ?: "-"} ${r.reason?.name ?: ""} | $c -> ${c.dialAddress}:${c.node.port} sni=${c.node.sni.ifEmpty { "-" }}")
+        return r
+    }
+
+    private suspend fun reachImpl(c: FluxCandidate): FluxProbe.Reach = withContext(Dispatchers.IO) {
         // QUIC cannot be checked with a TCP socket and a UDP poke proves little; stage 2 decides.
         if (c.node.proto == Proto.HY2) return@withContext FluxProbe.Reach(true, null)
         val start = System.nanoTime()
@@ -108,26 +114,53 @@ class FluxAndroidProbe(
     override suspend fun prepare(cs: List<FluxCandidate>): Boolean = lock.withLock {
         withContext(Dispatchers.IO) {
             stopCore()
-            val map = LinkedHashMap<FluxCandidate, Int>()
-            cs.forEach { map[it] = freePort() }
-            val cfg = FluxConfigCompiler.probe(map)
-            val c = VlessXrayInjector(0)
-            val ok = runCatching { c.start(context, cfg, 0) }.getOrDefault(false)
-            if (!ok) { Log.w(TAG, "probe core did not start (${cs.size} candidates)"); return@withContext false }
-            core = c
-            ports = map.entries.associate { (cand, port) -> cand.id to port }
-            true
+            if (startCore(cs)) { FluxLog.i("probe: core up with ${cs.size} candidates, ports ${ports.values.joinToString(",")}"); return@withContext true }
+            // One outbound this core cannot build takes the whole config down with it. Find the
+            // ones that do build (a config error fails in milliseconds) and race those.
+            val good = cs.filter { c ->
+                val trial = VlessXrayInjector(0)
+                val ok = runCatching { trial.start(context, FluxConfigCompiler.probe(mapOf(c to freePort())), 0) }.getOrDefault(false)
+                runCatching { trial.stop() }
+                if (!ok) FluxLog.w("probe: candidate does not build on this core, dropped: $c")
+                ok
+            }
+            FluxLog.i("probe: batch core refused; ${good.size}/${cs.size} candidates build on their own")
+            if (good.isEmpty()) { FluxLog.w("probe core did not start (${cs.size} candidates)"); return@withContext false }
+            startCore(good)
         }
     }
 
-    override suspend fun real(c: FluxCandidate): FluxProbe.Real = coroutineScope {
+    /** One core for [cs], each candidate on its own port. False when the core refuses the config. */
+    private suspend fun startCore(cs: List<FluxCandidate>): Boolean {
+        val map = LinkedHashMap<FluxCandidate, Int>()
+        cs.forEach { map[it] = freePort() }
+        val c = VlessXrayInjector(0)
+        val ok = runCatching { c.start(context, FluxConfigCompiler.probe(map), 0) }.getOrDefault(false)
+        if (!ok) { runCatching { c.stop() }; return false }
+        core = c
+        ports = map.entries.associate { (cand, port) -> cand.id to port }
+        return true
+    }
+
+    override suspend fun real(c: FluxCandidate): FluxProbe.Real {
+        val r = realImpl(c)
+        val e = r.egress
+        FluxLog.i("real  ${if (r.ok) "OK  " else "FAIL"} ${r.rttMs?.let { "${it}ms" } ?: "-"} ${r.reason?.name ?: ""} exit=${e?.countryCode ?: "?"}" +
+            "${e?.let { " (conf ${it.confidence}, ${it.ipv4 ?: it.ipv6 ?: "no ip"}, ${it.asn ?: ""})" } ?: ""} port=${ports[c.id]} | $c")
+        return r
+    }
+
+    private suspend fun realImpl(c: FluxCandidate): FluxProbe.Real = coroutineScope {
         val port = ports[c.id] ?: return@coroutineScope FluxProbe.Real(false, reason = FailReason.OTHER)
         val timeout = if (mobile) 6_000 else 5_000
         val probe = async(Dispatchers.IO) { timedGet(port, "www.gstatic.com", 80, "/generate_204", tls = false, timeoutMs = timeout) }
         val trace = if (wantEgress) async(Dispatchers.IO) { echo(port, EgressVerifier.TRACE, timeout) } else null
         val api = if (wantEgress) async(Dispatchers.IO) { echo(port, EgressVerifier.IP_API, timeout) } else null
         val (code, ms) = probe.await() ?: return@coroutineScope FluxProbe.Real(false, reason = FailReason.HTTP_TIMEOUT)
-        if (code != 204 && code != 200) return@coroutineScope FluxProbe.Real(false, reason = FailReason.HTTP_FAILED)
+        if (code != 204 && code != 200) {
+            FluxLog.i("real: unexpected HTTP $code via :$port")
+            return@coroutineScope FluxProbe.Real(false, reason = FailReason.HTTP_FAILED)
+        }
         val obs = listOfNotNull(trace?.await(), api?.await())
         val egress = if (wantEgress) EgressVerifier.combine(obs, System.currentTimeMillis()) else null
         FluxProbe.Real(true, ms, egress = egress?.takeIf { obs.isNotEmpty() })
@@ -152,7 +185,7 @@ class FluxAndroidProbe(
     }
 
     /** One GET through the SOCKS port; the status code and the time to the status line. */
-    private fun timedGet(port: Int, host: String, remotePort: Int, path: String, tls: Boolean, timeoutMs: Int): Pair<Int, Long>? = runCatching {
+    private fun timedGet(port: Int, host: String, remotePort: Int, path: String, tls: Boolean, timeoutMs: Int): Pair<Int, Long>? = runCatching<Pair<Int, Long>?> {
         val start = System.nanoTime()
         open(port, host, remotePort, tls, timeoutMs).use { s ->
             s.getOutputStream().write(request(host, path))
@@ -160,7 +193,7 @@ class FluxAndroidProbe(
             val ms = (System.nanoTime() - start) / 1_000_000
             status.split(' ').getOrNull(1)?.toIntOrNull()?.let { it to ms }
         }
-    }.getOrNull()
+    }.onFailure { FluxLog.i("real: request via :$port to $host failed: ${it.javaClass.simpleName} ${it.message?.take(120) ?: ""}") }.getOrNull()
 
     private fun body(port: Int, host: String, remotePort: Int, path: String, tls: Boolean, timeoutMs: Int): String? = runCatching {
         open(port, host, remotePort, tls, timeoutMs).use { s ->

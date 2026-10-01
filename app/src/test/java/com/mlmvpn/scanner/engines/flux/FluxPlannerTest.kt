@@ -26,7 +26,6 @@ class FluxPlannerTest {
     private val rl = node(reality(ip = "169.40.42.235"))
     private val rl6 = node(reality(ip = "2a01:4f8::1"))
     private val hy = node(hy2())
-    private val hyInsecure = node(hy2(ip = "9.9.9.9", insecure = true))
     private val edges = { f: Family, n: Int -> (1..n).map { if (f == Family.V4) "104.16.0.$it" else "2606:4700::$it" } }
 
     private fun inp(
@@ -58,11 +57,6 @@ class FluxPlannerTest {
     @Test fun `udp blocked - no hysteria2`() {
         val cs = FluxPlanner.candidates(inp(verdict = NetVerdict(udp = Tri.NO)))
         assertTrue(cs.none { it.node.id == hy.id })
-    }
-
-    @Test fun `self-signed nodes only in the second wave`() {
-        assertTrue(FluxPlanner.candidates(inp(nodes = listOf(hyInsecure))).isEmpty())
-        assertEquals(1, FluxPlanner.candidates(inp(nodes = listOf(hyInsecure), wave = 2)).size)
     }
 
     @Test fun `ipv6 mode on a network without ipv6 has nothing to race`() {

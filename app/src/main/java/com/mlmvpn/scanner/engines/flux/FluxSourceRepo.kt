@@ -75,11 +75,13 @@ class FluxSourceRepo(private val app: Context) {
             val h = health(src.id) ?: SourceHealth()
             if (!force && !FluxSources.due(src, health(src.id), now)) continue
             val result = fetch(src, h, null) ?: tunnelHttpPort?.let { fetch(src, h, Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", it))) }
+            FluxLog.i("source ${src.id}: ${when (result) { null -> "FAILED"; Fetched.NotModified -> "not modified"; is Fetched.Body -> "${result.text.length} chars" }}")
             when (result) {
                 null -> saveHealth(src.id, FluxSources.recordFail(h, now))
                 Fetched.NotModified -> saveHealth(src.id, FluxSources.recordNotModified(h, now))
                 is Fetched.Body -> {
                     val batch = FluxSources.parse(src, result.text)
+                    FluxLog.i("source ${src.id}: ${batch.nodes.size} usable, ${batch.duplicates} duplicates, rejected ${batch.rejected}")
                     if (batch.nodes.isEmpty()) {
                         // A list that came back empty or unreadable does not replace a good copy.
                         saveHealth(src.id, FluxSources.recordFail(h, now))
@@ -132,7 +134,7 @@ class FluxSourceRepo(private val app: Context) {
             }
         } finally { c.disconnect() }
     } catch (e: Exception) {
-        Log.i(TAG, "source ${src.id} not fetched${if (proxy != null) " (via tunnel)" else ""}: ${e.javaClass.simpleName}")
+        FluxLog.w("source ${src.id} not fetched${if (proxy != null) " (via tunnel)" else ""}", e)
         null
     }
 

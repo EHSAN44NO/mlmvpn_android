@@ -79,7 +79,12 @@ class FluxConfigTest {
         assertTrue(portRules.all { it.getString("outboundTag") == "dns-out" })
         // The resolver behind FakeDNS is reached through the balancer, never direct.
         val dnsRule = (0 until rules.length()).map { rules.getJSONObject(it) }.single { it.optJSONArray("inboundTag")?.toString()?.contains(FluxConfigCompiler.DNS_TAG) == true }
-        assertEquals(FluxConfigCompiler.BALANCER, dnsRule.getString("balancerTag"))
+        // Through the tunnel: the single route itself (or the balancer when there are standbys).
+        assertEquals("flux-0", dnsRule.getString("outboundTag"))
+        val two = JSONObject(FluxConfigCompiler.tunnel(listOf(cand(cfWs()), cand(reality())), IpMode.V4, 10808))
+        val twoRules = two.getJSONObject("routing").getJSONArray("rules")
+        val twoDns = (0 until twoRules.length()).map { twoRules.getJSONObject(it) }.single { it.optJSONArray("inboundTag")?.toString()?.contains(FluxConfigCompiler.DNS_TAG) == true }
+        assertEquals(FluxConfigCompiler.BALANCER, twoDns.getString("balancerTag"))
         val servers = cfg.getJSONObject("dns").getJSONArray("servers").toString()
         assertTrue(servers.contains("https://"))
         assertFalse(servers.contains("\"address\":\"1.1.1.1\""))
@@ -87,6 +92,46 @@ class FluxConfigTest {
         val direct = (0 until rules.length()).map { rules.getJSONObject(it) }.filter { it.optString("outboundTag") == "direct" }.toString()
         assertFalse(direct.contains("198.18"))
         assertFalse(direct.contains("fc00"))
+    }
+
+    @Test fun `a single route has no balancer and no observatory - the core refuses leastLoad without one`() {
+        val cfg = JSONObject(FluxConfigCompiler.tunnel(listOf(cand(reality())), IpMode.BOTH, 10808))
+        assertFalse(cfg.getJSONObject("routing").has("balancers"))
+        assertFalse(cfg.has("burstObservatory"))
+        assertFalse(cfg.toString().contains("balancerTag"))
+        assertTrue(cfg.getJSONObject("routing").getJSONArray("rules").toString().contains("\"outboundTag\":\"flux-0\""))
+    }
+
+    @Test fun `safe mode keeps only the primary, without a balancer`() {
+        val routes = listOf(cand(reality(ip = "1.0.0.1")), cand(reality(ip = "1.0.0.2")))
+        val cfg = JSONObject(FluxConfigCompiler.tunnel(routes, IpMode.BOTH, 10808, safe = true))
+        assertFalse(cfg.toString().contains("flux-1"))
+        assertFalse(cfg.has("burstObservatory"))
+    }
+
+    @Test fun `every balancer reference resolves and leastLoad always comes with the burst observatory`() {
+        for (n in 1..4) {
+            val routes = (1..n).map { cand(reality(ip = "1.0.0.$it")) }
+            for (mode in IpMode.values()) {
+                val cfg = JSONObject(FluxConfigCompiler.tunnel(routes, mode, 10808))
+                val routing = cfg.getJSONObject("routing")
+                val balancers = routing.optJSONArray("balancers")
+                val tags = (0 until (balancers?.length() ?: 0)).map { balancers!!.getJSONObject(it).getString("tag") }.toSet()
+                val rules = routing.getJSONArray("rules")
+                (0 until rules.length()).map { rules.getJSONObject(it) }.filter { it.has("balancerTag") }
+                    .forEach { assertTrue(it.getString("balancerTag") in tags) }
+                if (cfg.toString().contains("leastLoad")) assertTrue(cfg.has("burstObservatory"))
+                val outTags = (0 until cfg.getJSONArray("outbounds").length()).map { cfg.getJSONArray("outbounds").getJSONObject(it).getString("tag") }.toSet()
+                (0 until rules.length()).map { rules.getJSONObject(it) }.filter { it.has("outboundTag") }
+                    .forEach { assertTrue(it.getString("outboundTag"), it.getString("outboundTag") in outTags) }
+            }
+        }
+    }
+
+    @Test fun `no outbound ever carries allowInsecure (removed from this core)`() {
+        listOf(cand(cfWs()), cand(reality()), cand(hy2()), cand(trojan())).forEach {
+            assertFalse(FluxOutbounds.outbound(it, "t").toString().contains("allowInsecure"))
+        }
     }
 
     @Test fun `primary and standbys behind one balancer with an observatory`() {

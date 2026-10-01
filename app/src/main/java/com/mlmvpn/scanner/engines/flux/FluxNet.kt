@@ -92,11 +92,13 @@ object FluxNet {
      */
     suspend fun measureVerdict(context: Context, here: Here, now: Long): NetVerdict = coroutineScope {
         val v6 = hasV6(context, here.network)
+        FluxLog.i("verdict: measuring (ipv6 on this network: $v6)")
         val timeout = if (here.wifi) 1_500 else 2_000
         suspend fun cf(f: Family): Tri {
             val edges = Cloudflare.sampleEdges(f, 3)
-            val ok = edges.map { ip -> async(Dispatchers.IO) { tcp(here.network, ip, 443, timeout) != null } }.awaitAll()
-            return Tri.of(ok.any { it })
+            val ms = edges.map { ip -> async(Dispatchers.IO) { tcp(here.network, ip, 443, timeout) } }.awaitAll()
+            FluxLog.i("verdict: cloudflare v${f.code} " + edges.zip(ms).joinToString { (ip, t) -> "$ip=${t?.let { "${it}ms" } ?: "x"}" })
+            return Tri.of(ms.any { it != null })
         }
         val c4 = async { cf(Family.V4) }
         val c6 = async { if (v6) cf(Family.V6) else Tri.NO }

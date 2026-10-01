@@ -51,8 +51,8 @@ class FluxLinkParserTest {
         assertFalse(n.insecure)
     }
 
-    @Test fun `self-signed hysteria2 is kept but marked, self-signed vless is refused`() {
-        assertTrue(ok(hy2(insecure = true)).insecure)
+    @Test fun `self-signed links are refused for every protocol (this core has no allowInsecure)`() {
+        assertEquals("insecure-tls", reason(hy2(insecure = true)))
         assertEquals("insecure-tls", reason(cfWs().substringBefore('#') + "&allowInsecure=1"))
     }
 

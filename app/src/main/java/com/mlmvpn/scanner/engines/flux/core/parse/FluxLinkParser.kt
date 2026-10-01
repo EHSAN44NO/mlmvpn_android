@@ -85,11 +85,11 @@ object FluxLinkParser {
         val credential = parts.userInfo
         if (credential.isEmpty()) return Result.Rejected("no-credential")
 
-        // Certificate checks off: anyone on the path could read the traffic. Not for a node FLUX
-        // chose on the user's behalf -- except Hysteria2, whose public nodes are nearly all
-        // self-signed; those are kept but marked, and the racer tries them last.
+        // Certificate checks off: anyone on the path could read the traffic, and this core has
+        // removed `allowInsecure` altogether (a config carrying it does not start -- one such
+        // outbound took a whole probe core down on a device). Refused for every protocol.
         val insecure = q["allowInsecure"] == "1" || q["allowInsecure"] == "true" || q["insecure"] == "1" || q["insecure"] == "true"
-        if (insecure && proto != Proto.HY2) return Result.Rejected("insecure-tls")
+        if (insecure) return Result.Rejected("insecure-tls")
 
         return when (proto) {
             Proto.HY2 -> hy2(parts, credential, insecure, sourceId)

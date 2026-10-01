@@ -92,7 +92,6 @@ object FluxOutbounds {
                 if (n.sni.isNotEmpty()) put("serverName", n.sni)
                 // uTLS fingerprints are TCP-only; QUIC brings its own handshake.
                 if (n.proto != Proto.HY2) put("fingerprint", n.fingerprint.ifEmpty { "chrome" })
-                if (n.insecure) put("allowInsecure", true)
                 val alpn = when {
                     n.proto == Proto.HY2 -> listOf("h3")
                     n.transport == Transport.WS || n.transport == Transport.HTTPUPGRADE -> n.alpn.filter { it != "h2" && it != "h3" }.ifEmpty { listOf("http/1.1") }
